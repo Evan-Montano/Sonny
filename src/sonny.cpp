@@ -11,10 +11,11 @@ void TestingCallbackFunction(std::string s) {
 }
 
 int main() {
-    const std::string url = "https://quotes-gw.webullfintech.com/api/quote/charts/seconds-mini?type=s1&count=800&timestamp=1784574544&restorationType=0&tickerId=913243251";
+    const std::string url = "https://quotes-gw.webullfintech.com/api/quote/charts/seconds-mini";
     
     SimpleCurlWrapper scw;
     CurlRequest request(url);
+
     request.SetCallback(TestingCallbackFunction);
 
     scw.ExecuteHttpRequest(request);

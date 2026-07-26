@@ -12,6 +12,12 @@ void CurlRequest::AddHeader(const std::string &key, const std::string &value) {
     this->HeaderDictionary[key] = value;
 }
 
+void CurlRequest::AddHeader(const std::unordered_map<std::string, std::string> &kvp) {
+    for (const auto &[key, value] : kvp) {
+        this->AddHeader(key, value);
+    }
+}
+
 void CurlRequest::RemoveHeader(const std::string &key) {
     this->HeaderDictionary.erase(key);
 }
@@ -23,6 +29,12 @@ void CurlRequest::ClearHeaders() {
 void CurlRequest::AddParam(const std::string &key, const std::string &value) {
     this->ParameterDictionary[key] = value;
     this->FormattedUri.clear();
+}
+
+void CurlRequest::AddParam(const std::unordered_map<std::string, std::string> &kvp) {
+    for (const auto &[key, value] : kvp) {
+        this->AddParam(key, value);
+    }
 }
 
 void CurlRequest::RemoveParam(const std::string &key) {
@@ -56,7 +68,7 @@ std::string& CurlRequest::GetFormattedUri() {
     return this->FormattedUri;
 }
 
-void CurlRequest::SetCallback(std::function<void(std::string)> cb) {
+void CurlRequest::SetCallback(const std::function<void(std::string)> &cb) {
     this->Callback = std::move(cb);
     this->CallbackSet = true;
 }
@@ -70,6 +82,11 @@ void CurlRequest::InvokeCallback(const std::string &data) {
     if (this->Callback) {
         this->Callback(data);
     }
+}
+
+void CurlRequest::ReassignUri(const std::string &uri) {
+    this->Uri = uri;
+    this->Reset();
 }
 
 const std::unordered_map<std::string, std::string>& CurlRequest::GetHeaders() const {

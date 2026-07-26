@@ -1,7 +1,6 @@
 // simplecurlwrapper.cpp
 // Implementation of the SimpleCurlWrapper class.
 
-#include <iostream>
 #include <stdexcept>
 #include "simplecurlwrapper.hpp"
 
@@ -89,6 +88,7 @@ CurlRequestEnum SimpleCurlWrapper::ExecuteHttpRequest(CurlRequest &request) {
     if (request.ClearSettingsAfterUse) {
         request.Reset();
     }
+    curl_slist_free_all(list);
 
     // 7. Handle errors
     CurlRequestEnum res;

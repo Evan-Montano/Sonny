@@ -19,15 +19,18 @@ public:
 
     // METHODS
     void AddHeader(const std::string &key, const std::string &value);
+    void AddHeader(const std::unordered_map<std::string, std::string> &kvp);
     void RemoveHeader(const std::string &key);
     void ClearHeaders();
     void AddParam(const std::string &key, const std::string &value);
+    void AddParam(const std::unordered_map<std::string, std::string> &kvp);
     void RemoveParam(const std::string &key);
     void ClearParams();
     void Reset();
-    void SetCallback(std::function<void(std::string)> cb);
+    void SetCallback(const std::function<void(std::string)> &cb);
     void RemoveCallback();
     void InvokeCallback(const std::string &data);
+    void ReassignUri(const std::string &uri);
     std::string& GetFormattedUri();
     const std::unordered_map<std::string, std::string>& GetHeaders() const;
 
