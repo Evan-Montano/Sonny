@@ -25,7 +25,7 @@ namespace {
             size_t bytes = size * nmemb;
             
             if (request) {
-                request->InvokeCallback(std::string(ptr, bytes));
+                request->AppendResponse(std::string_view(ptr, bytes));
             }
             return bytes;
         }
@@ -83,6 +83,10 @@ CurlRequestEnum SimpleCurlWrapper::ExecuteHttpRequest(CurlRequest &request) {
 
     // 5. Call easy perform.
     CURLcode result = curl_easy_perform(this->curlHandle);
+
+    if (result == CURLE_OK) {
+        request.FinishResponse();
+    }
 
     // 6. Cleanup request object.
     if (request.ClearSettingsAfterUse) {

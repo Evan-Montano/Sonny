@@ -34,6 +34,16 @@ public:
     std::string& GetFormattedUri();
     const std::unordered_map<std::string, std::string>& GetHeaders() const;
 
+    void AppendResponse(std::string_view chunk) {
+        this->_response += chunk;
+    }
+
+    void FinishResponse() {
+        if (this->CallbackSet && this->Callback) {
+            this->InvokeCallback(this->_response);
+        }
+    }
+
     // MEMBERS
     bool ClearSettingsAfterUse = false;
     bool CallbackSet = false;
@@ -42,6 +52,7 @@ private:
     // MEMBERS
     std::string Uri;
     std::string FormattedUri;
+    std::string _response;
     std::unordered_map<std::string, std::string> HeaderDictionary;
     std::unordered_map<std::string, std::string> ParameterDictionary;
     std::function<void(std::string)> Callback = nullptr;

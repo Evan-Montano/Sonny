@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "curl/curl.h"
+#include <curl/curl.h>
 #include "curlrequest.hpp"
 
 class SimpleCurlWrapper {
