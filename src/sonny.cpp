@@ -6,6 +6,7 @@
 #include "client/simplecurlwrapper.hpp"
 #include "common/jsonutil.hpp"
 #include "common/dtutil.hpp"
+#include "common/secretstore.hpp"
 
 void TestingCallbackFunction(std::string s) {
     JsonUtility json(s);
@@ -35,6 +36,8 @@ int main() {
     std::string ts = dt.ToUnixTimestampStr();
     std::cout << "Unix timestamp for " << dt.ToString() << " is: " << ts << std::endl;
 
+    std::string deviceID = SecretStore::Get("did");
+
     const std::unordered_map<std::string, std::string> urlParams = {
         { "type", "s1" },
         { "count", "10" },
@@ -54,7 +57,7 @@ int main() {
         { "os", "web" },
         { "platform", "web" },
         { "Referer", "https://app.webull.com/" },
-        { "did", "super personal secret ID" },
+        { "did", deviceID },
         { "ph", "UNIX Chrome" },
         { "User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36" },
         { "ver", "6.5.3" },

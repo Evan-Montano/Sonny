@@ -1,0 +1,17 @@
+We are storing linux-OS-level secrets using libsecret/secret.h. For linux, that means that the user must have the installed package:
+libsecret
+
+Store secrets in the terminal like this:
+[executable]    [command]   [label]                          [key command]    [key name]
+secret-tool     store       --label="This is just a label"   key              whateverTheKeyNameIs
+
+Remove secrets like this:
+[executable]    [command]   [key command]   [key name]
+secret-tool     clear       key             whateverTheKeyNameIs
+
+Get info like this:
+[executable]    [command]   [key command]   [key name]
+secret-tool     search      key             whateverTheKeyNameIs
+
+=====================================================================================================
+

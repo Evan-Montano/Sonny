@@ -18,10 +18,18 @@ target_sources(sonny
         src/client/webullclient.cpp
 )
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBSECRET REQUIRED libsecret-1)
+target_include_directories(sonny 
+    PRIVATE
+        ${LIBSECRET_INCLUDE_DIRS}
+)
+
 find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 target_link_libraries(sonny
     PRIVATE
         CURL::libcurl
         nlohmann_json::nlohmann_json
+        ${LIBSECRET_LIBRARIES}
 )
