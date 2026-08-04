@@ -77,4 +77,4 @@ int main() {
 
 // Data array legend:
 // 1785527998   746.56    746.61      746.67      746.47      null    3144    null
-// VOLUME       OPEN      CLOSE       HIGH        LOW         TBD     VOL     TBD
+// TIMESTAMP    OPEN      CLOSE       HIGH        LOW         TBD     VOL     TBD

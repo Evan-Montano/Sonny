@@ -8,22 +8,27 @@
 #include <format>
 
 // AM and PM macros
-#define PM(hour) (hour > 12 ? hour : hour + 12)
-#define AM(hour) (hour)
+inline static constexpr std::uint8_t PM (std::uint8_t hour) {
+    return hour > 12 ? hour : hour + 12;
+}
+
+inline static constexpr std::uint8_t AM (std::uint8_t hour) {
+    return hour;
+}
 
 // Month abbreviation macros
-#define JAN 1
-#define FEB 2
-#define MAR 3
-#define APR 4
-#define MAY 5
-#define JUN 6
-#define JUL 7
-#define AUG 8
-#define SEP 9
-#define OCT 10
-#define NOV 11
-#define DEC 12
+inline static constexpr std::uint8_t JAN = 1;
+inline static constexpr std::uint8_t FEB = 2;
+inline static constexpr std::uint8_t MAR = 3;
+inline static constexpr std::uint8_t APR = 4;
+inline static constexpr std::uint8_t MAY = 5;
+inline static constexpr std::uint8_t JUN = 6;
+inline static constexpr std::uint8_t JUL = 7;
+inline static constexpr std::uint8_t AUG = 8;
+inline static constexpr std::uint8_t SEP = 9;
+inline static constexpr std::uint8_t OCT = 10;
+inline static constexpr std::uint8_t NOV = 11;
+inline static constexpr std::uint8_t DEC = 12;
 
 using UnixTimestamp = std::uint64_t;
 
