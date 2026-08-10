@@ -3,7 +3,8 @@
 
 #pragma once
 
-#include "dtutil.hpp"
+#include "../common/dtutil.hpp"
+#include <vector>
 
 enum class Interval {
     OneSecond,
@@ -35,15 +36,25 @@ struct PriceBar {
     std::uint64_t Volume;
 };
 
-// Represents a single day's worth of chart data for a single stock or index.
-class ChartDay {
-public:
-    // MEMBERS
-    std::string Ticker;    // e.g., "SPY"
-    std::string Name;      // e.g., "SPDR S&P 500 ETF Trust"
-    std::string Exchange;  // e.g., "NASDAQ"
-
-    Interval Interval;     // e.g., Interval::OneMinute
-
+// Represents an entire day's price data for a chart.
+struct ChartDay {
+    DateOnly Date;
+    Interval PriceBarInterval;
     std::vector<PriceBar> PriceBars;
+};
+
+// Class to represent a chart. Includes metadata and price bar info for the selected day(s).
+class Chart {
+public:
+    // CONSTRUCTOR
+    Chart(std::string ticker);
+    
+    // MEMBERS
+    std::string Ticker;
+    std::string TickerID;
+    std::string Name;
+    std::string Exchange;
+    std::vector<ChartDay> Days;
+
+    // METHODS
 };

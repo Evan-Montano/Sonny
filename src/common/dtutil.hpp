@@ -111,3 +111,9 @@ struct DateTime {
         );
     }
 };
+
+struct DateOnly {
+    std::uint16_t Year;
+    std::uint8_t  Month;
+    std::uint8_t  Day;
+};

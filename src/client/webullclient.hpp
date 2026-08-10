@@ -13,3 +13,11 @@ webullclient is going to have the following tasks:
 	b. Execute live trades.
 
 */
+
+#pragma once
+
+
+class WebullClient {
+public:
+	// METHODS
+};
