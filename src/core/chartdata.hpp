@@ -6,55 +6,60 @@
 #include "../common/dtutil.hpp"
 #include <vector>
 
-enum class Interval {
-    OneSecond,
-    ThirtySeconds,
-    OneMinute,
-    TwoMinutes,
-    ThreeMinutes,
-    FiveMinutes,
-    TenMinutes,
-    FifteenMinutes,
-    ThirtyMinutes,
-    OneHour,
-    TwoHours,
-    FourHours,
-    OneDay,
-    OneWeek,
-    OneMonth,
-    OneQuarter,
-    OneYear
-};
+namespace Core {
 
-// Represents a single price bar in a chart.
-struct PriceBar {
-    UnixTimestamp Timestamp;
-    double Open;
-    double Close;
-    double High;
-    double Low;
-    std::uint64_t Volume;
-};
+    enum class Interval {
+        OneSecond,
+        ThirtySeconds,
+        OneMinute,
+        TwoMinutes,
+        ThreeMinutes,
+        FiveMinutes,
+        TenMinutes,
+        FifteenMinutes,
+        ThirtyMinutes,
+        OneHour,
+        TwoHours,
+        FourHours,
+        OneDay,
+        OneWeek,
+        OneMonth,
+        OneQuarter,
+        OneYear
+    };
 
-// Represents an entire day's price data for a chart.
-struct ChartDay {
-    DateOnly Date;
-    Interval PriceBarInterval;
-    std::vector<PriceBar> PriceBars;
-};
+    // Represents a single price bar in a chart.
+    struct PriceBar {
+        Common::UnixTimestamp Timestamp;
+        double Open;
+        double Close;
+        double High;
+        double Low;
+        std::uint64_t Volume;
+    };
 
-// Class to represent a chart. Includes metadata and price bar info for the selected day(s).
-class Chart {
-public:
-    // CONSTRUCTOR
-    Chart(std::string ticker);
-    
-    // MEMBERS
-    std::string Ticker;
-    std::string TickerID;
-    std::string Name;
-    std::string Exchange;
-    std::vector<ChartDay> Days;
+    // Represents an entire day's price data for a chart.
+    struct ChartDay {
+        // Common::DateTimeRange Range;
+        Interval PriceBarInterval;
+        std::vector<PriceBar> PriceBars;
+    };
 
-    // METHODS
-};
+    // Class to represent a chart. Includes metadata and price bar info for the selected day(s).
+    class Chart {
+    public:
+        // CONSTRUCTOR
+        Chart(std::string ticker);
+        
+        // MEMBERS
+        std::string Ticker;
+        std::string TickerID;
+        std::string Name;
+        std::string Exchange;
+        std::vector<ChartDay> Days;
+
+        // METHODS
+        // void GetDays(Common::DateTimeRange &range);
+    };
+
+}

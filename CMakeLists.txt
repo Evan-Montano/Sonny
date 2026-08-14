@@ -16,6 +16,7 @@ target_sources(sonny
         src/client/curlrequest.cpp
         src/client/simplecurlwrapper.cpp
         src/client/webullclient.cpp
+        src/common/dtutil.cpp
 )
 
 find_package(PkgConfig REQUIRED)
