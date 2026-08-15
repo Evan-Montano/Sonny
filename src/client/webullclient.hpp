@@ -16,8 +16,32 @@ webullclient is going to have the following tasks:
 
 #pragma once
 
+#include <string>
+#include "curlrequest.hpp"
 
-class WebullClient {
-public:
-	// METHODS
-};
+namespace Client {
+	struct ChartInfoResponse {
+		std::string TickerID;
+		std::string ExchangeID;
+		std::string ExchangeCode;
+		std::string Type;
+		std::string RegionID;
+		std::string RegionCode;
+		std::string CurrencyID;
+		std::string CurrencyCode;
+		std::string Name;
+		std::string Symbol;
+	};
+
+	class WebullClient {
+	public:
+		// METHODS
+		static ChartInfoResponse GetClosestChartInfo(const std::string &symbol);
+	
+	private:
+		// MEMBERS
+		static ChartInfoResponse ResolveInfoResponse(const std::string &response);
+		static const HeaderMap GetDefaultHeaders();
+	};
+	
+}

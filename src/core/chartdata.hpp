@@ -1,10 +1,11 @@
-// marketdata.hpp
+// chartdata.hpp
 // Header file to hold structs and classes related to market data, including chart data and other relevant information.
 
 #pragma once
 
-#include "../common/dtutil.hpp"
 #include <vector>
+#include "../common/dtutil.hpp"
+#include "../client/webullclient.hpp"
 
 namespace Core {
 
@@ -49,17 +50,36 @@ namespace Core {
     class Chart {
     public:
         // CONSTRUCTOR
-        Chart(std::string ticker);
+        // Initializes the chart class. On init, we are loading in
+        // all identifying information about this chart. We must assume that
+        // the symbol is inputted correctly, otherwise the data may come back wrong
+        // and cause undefined behavior. If symbol is not provided or the api fails
+        // to identify the stock, we throw an exception.
+        Chart(const std::string &symbol);
         
         // MEMBERS
-        std::string Ticker;
+        
+        // basic info
         std::string TickerID;
-        std::string Name;
-        std::string Exchange;
+		std::string ExchangeID;
+		std::string ExchangeCode;
+		std::string Type;
+		std::string RegionID;
+		std::string RegionCode;
+		std::string CurrencyID;
+		std::string CurrencyCode;
+		std::string Name;
+		std::string Symbol;
+
+        // chronological vector of ChartDays
         std::vector<ChartDay> Days;
 
         // METHODS
-        // void GetDays(Common::DateTimeRange &range);
+        void LoadRange(Common::DateTimeRange &range);
+
+    private:
+        // MEMBERS
+        Client::WebullClient WBClient;
     };
 
 }

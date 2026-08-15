@@ -6,18 +6,22 @@
 #include <curl/curl.h>
 #include "curlrequest.hpp"
 
-class SimpleCurlWrapper {
-public:
-    // CONSTRUCTOR
-    SimpleCurlWrapper();
+namespace Client {
 
-    // DESTRUCTOR
-    ~SimpleCurlWrapper();
+    class SimpleCurlWrapper {
+    public:
+        // CONSTRUCTOR
+        SimpleCurlWrapper();
 
-    // METHODS
-    CurlRequestEnum ExecuteHttpRequest(CurlRequest &request);
+        // DESTRUCTOR
+        ~SimpleCurlWrapper();
 
-private:
-    // MEMBERS
-    CURL *curlHandle;
-};
+        // METHODS
+        CurlRequestEnum ExecuteHttpRequest(CurlRequest &request);
+
+    private:
+        // MEMBERS
+        CURL *curlHandle;
+    };
+
+}
