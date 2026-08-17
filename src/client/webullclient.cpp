@@ -5,6 +5,7 @@
 #include "../common/jsonutil.hpp"
 #include "simplecurlwrapper.hpp"
 #include "webullclient.hpp"
+#include <vector>
 
 namespace Client {
 
@@ -36,8 +37,6 @@ namespace Client {
 
     ChartInfoResponse WebullClient::GetClosestChartInfo(const std::string &symbol) {
         ChartInfoResponse result;
-        static const std::string url = "https://quotes-gw.webullfintech.com/api/search/pc/tickers";
-        const std::string deviceID = Common::SecretStore::Get("Did");
         const ParamMap params = {
             { "keyword", symbol },
             { "pageIndex", "1" },
@@ -45,7 +44,7 @@ namespace Client {
             { "brokerId", "8" }
         };
         
-        CurlRequest request(url);
+        CurlRequest request(TICKERS_SEARCH_URI);
         request.AddParam(params);
         request.AddHeader(GetDefaultHeaders());
         request.SetCallback(
@@ -78,47 +77,62 @@ namespace Client {
         }
         return res;
     }
+    
+    PriceBarResponse WebullClient::GetSinglePriceBar(const Common::UnixTimestamp &timestamp, const std::string &tickerId) {
+        PriceBarResponse res{};
+        const ParamMap params = {
+            { "type", "s1" },
+            { "count", "1" },
+            { "timestamp", std::to_string(timestamp) },
+            { "restorationType", "0" },
+            { "tickerId", tickerId }
+        };
 
-// Data returned by GetClosestChartInfo fetch:
-// {
-//   "data": [
-//     {
-//       "assetType": 1,
-//       "currencyCode": "USD",
-//       "currencyId": 247,
-//       "derivativeSupport": 1,
-//       "disExchangeCode": "NYSEARCA",
-//       "disSymbol": "SPY",
-//       "exchangeCode": "PSE",
-//       "exchangeId": 34,
-//       "exchangeTrade": true,
-//       "isAdr": 0,
-//       "isLeveraged": 0,
-//       "isPTP": 0,
-//       "leverageFactor": "0",
-//       "listStatus": 1,
-//       "name": "State Street® SPDR® S&P 500® ETF Trust",
-//       "nightTradeSession": 0,
-//       "oddLotSupport": true,
-//       "overnightTradeFlag": 1,
-//       "regionCode": "US",
-//       "regionId": 6,
-//       "secType": [
-//         1,
-//         34
-//       ],
-//       "secType2": 1,
-//       "securitySubType": 701,
-//       "securityType": 7,
-//       "shariahFlag": 0,
-//       "specialType": 34,
-//       "symbol": "SPY",
-//       "template": "etf",
-//       "tickerId": 913243251,
-//       "tinyName": "State Street® SPDR® S&P 500® ETF Trust",
-//       "type": 3
-//     }
-//   ],
-//   "hasMore": true
-// }
+        CurlRequest request(SECONDS_MINI_URI);
+        request.AddParam(params);
+        request.AddHeader(GetDefaultHeaders());
+
+        request.SetCallback(
+            [&](const std::string &response) {
+                Common::JsonUtility jsonResponse(response);
+                std::string data = jsonResponse.At(0).At("data").At(0).Get<std::string>();
+
+                std::stringstream ss(data);
+                std::string field;
+                std::vector<std::string> fields;
+                while (std::getline(ss, field, ',')) {
+                    fields.push_back(field);
+                }
+
+                res.Timestamp = std::stoi(fields[0]);
+            }
+        );
+
+        SimpleCurlWrapper scw;
+        scw.ExecuteHttpRequest(request);
+
+        return res;
+    }
+// [
+//   {
+//     "tickerId": 913243251,
+//     "timeZone": "America/New_York",
+//     "realPreClose": "776.34",
+//     "hasMore": 1,
+//     "exchangeStatus": false,
+//     "dates": [
+//       {
+//         "type": "T",
+//         "start": "09:30:01",
+//         "end": "16:00:00",
+//         "avgShow": 0
+//       }
+//     ],
+//     "specialExchangeTimes": [],
+//     "data": [
+//       "1786651200,777.79,777.74,777.82,777.74,null,16343,null"
+//     ],
+//     "version": 1781756680044
+//   }
+// ]
 }

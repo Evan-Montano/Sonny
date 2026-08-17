@@ -41,9 +41,9 @@ namespace Core {
 
     // Represents an entire day's price data for a chart.
     struct ChartDay {
-        // Common::DateTimeRange Range;
         Interval PriceBarInterval;
         std::vector<PriceBar> PriceBars;
+        Common::DateTime Date;
     };
 
     // Class to represent a chart. Includes metadata and price bar info for the selected day(s).
@@ -71,15 +71,28 @@ namespace Core {
 		std::string Name;
 		std::string Symbol;
 
-        // chronological vector of ChartDays
-        std::vector<ChartDay> Days;
-
         // METHODS
-        void LoadRange(Common::DateTimeRange &range);
+
+        /**
+        * @brief For the current chart object, this method returns a full day's worth of single-second price bars from open-close. 
+        * 
+        * @param dt DateTime object. The time is ignored and the date only taken into consideration. Using the market open-close.
+        * @return ChartDay 
+        */
+        ChartDay GetDay(const Common::DateTime &dt);
 
     private:
         // MEMBERS
         Client::WebullClient WBClient;
+
+        // METHODS
+
+        /**
+        * @brief Takes in a date time and floors it to the nearest pricebar if out of bounds.
+        * 
+        * @param dt DateTime object
+        */
+        void NormalizeDateTimeToPriceBar(Common::DateTime &dt);
     };
 
 }

@@ -6,7 +6,8 @@
 
 namespace Common {
 
-    DateTime::DateTime(const UnixTimestamp &ts) : Timestamp(ts) {
+    DateTime::DateTime(const UnixTimestamp &ts,
+                       const bool &newYorkTime) : Timestamp(ts), NewYorkTime(newYorkTime) {
         this->CalculateDateTime();
     }
 
@@ -16,14 +17,16 @@ namespace Common {
             const std::uint8_t &day,
             const std::uint8_t &hour,
             const std::uint8_t &minute,
-            const std::uint8_t &second
+            const std::uint8_t &second,
+            const bool &newYorkTime
         )
         : Year(year), 
           Month(month), 
           Day(day), 
           Hour(hour), 
           Minute(minute), 
-          Second(second) {
+          Second(second),
+          NewYorkTime(newYorkTime) {
         this->CalculateTimestamp();
     }
 
@@ -33,7 +36,9 @@ namespace Common {
 
         const sys_seconds tp{seconds{this->Timestamp}};
 
-        const auto* zone = current_zone();
+        const auto *zone = this->NewYorkTime ? 
+            locate_zone("America/New_York") : 
+            current_zone();
 
         const zoned_time localTime{zone, tp};
         const auto localTp = localTime.get_local_time();
@@ -53,22 +58,30 @@ namespace Common {
     void DateTime::CalculateTimestamp() {
         using namespace std::chrono;
 
-        const sys_days dayPoint{
+        const auto *zone = this->NewYorkTime ? 
+            locate_zone("America/New_York") : 
+            current_zone();
+
+        const local_days dayPoint{
             year{this->Year} / month{this->Month} / day{this->Day}
         };
 
-        const sys_seconds tp = 
+        const local_seconds localTp =
             dayPoint +
-            hours{this->Hour} + 
+            hours{this->Hour} +
             minutes{this->Minute} +
             seconds{this->Second};
-        
+
+        const zoned_time localTime{zone, localTp};
+
+        const sys_seconds sysTp = localTime.get_sys_time();
+
         this->Timestamp = static_cast<UnixTimestamp>(
-            duration_cast<seconds>(tp.time_since_epoch()).count()
+            sysTp.time_since_epoch().count()
         );
     }
 
-    UnixTimestamp DateTime::GetTimestamp() const {
+    const UnixTimestamp &DateTime::GetTimestamp() const {
         return this->Timestamp;
     }
 
@@ -78,7 +91,7 @@ namespace Common {
     }
 
 
-    std::uint16_t DateTime::GetYear() const {
+    const std::uint16_t &DateTime::GetYear() const {
         return this->Year;
     }
 
@@ -88,7 +101,7 @@ namespace Common {
     }
 
 
-    std::uint8_t DateTime::GetMonth() const {
+    const std::uint8_t &DateTime::GetMonth() const {
         return this->Month;
     }
 
@@ -98,7 +111,7 @@ namespace Common {
     }
 
 
-    std::uint8_t DateTime::GetDay() const {
+    const std::uint8_t &DateTime::GetDay() const {
         return this->Day;
     }
 
@@ -108,7 +121,7 @@ namespace Common {
     }
 
 
-    std::uint8_t DateTime::GetHour() const {
+    const std::uint8_t &DateTime::GetHour() const {
         return this->Hour;
     }
 
@@ -118,7 +131,7 @@ namespace Common {
     }
 
 
-    std::uint8_t DateTime::GetMinute() const {
+    const std::uint8_t &DateTime::GetMinute() const {
         return this->Minute;
     }
 
@@ -128,7 +141,7 @@ namespace Common {
     }
 
 
-    std::uint8_t DateTime::GetSecond() const {
+    const std::uint8_t &DateTime::GetSecond() const {
         return this->Second;
     }
 
@@ -151,5 +164,21 @@ namespace Common {
             static_cast<int>(this->Minute),
             static_cast<int>(this->Second)
         );
+    }
+
+    bool DateTime::IsWeekday() const
+    {
+        std::chrono::year_month_day date{
+            std::chrono::year{Year},
+            std::chrono::month{Month},
+            std::chrono::day{Day}
+        };
+
+        std::chrono::weekday weekday{
+            std::chrono::sys_days{date}
+        };
+
+        return weekday != std::chrono::Saturday &&
+            weekday != std::chrono::Sunday;
     }
 }

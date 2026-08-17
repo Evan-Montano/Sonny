@@ -48,6 +48,18 @@ namespace Common {
             return res;
         }
 
+        template<typename T>
+        T Get() const {
+            try {
+                return jsonData.get<T>();
+            }
+            catch (const nlohmann::json::type_error& e) {
+                throw std::invalid_argument(
+                    "JSON type error: " + std::string(e.what())
+                );
+            }
+        }
+
         JsonUtility At(std::size_t index) const {
             if (jsonData.is_array() == false) {
                 throw::std::runtime_error("JSON value is not an array.");

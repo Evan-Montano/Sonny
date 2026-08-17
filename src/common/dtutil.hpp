@@ -39,40 +39,44 @@ namespace Common {
     class DateTime {
     public:
         // CONSTRUCTOR
-        DateTime(const UnixTimestamp &ts = 0);
+        DateTime(const UnixTimestamp &ts = 0,
+                 const bool &newYorkTime = false);
         DateTime(
             const std::uint16_t &year = 1970,
             const std::uint8_t &month = 1,
             const std::uint8_t &day = 1,
             const std::uint8_t &hour = 0,
             const std::uint8_t &minute = 0,
-            const std::uint8_t &second = 0
+            const std::uint8_t &second = 0,
+            const bool &newYorkTime = false
         );
 
         // METHODS
-        UnixTimestamp GetTimestamp() const;
+        const UnixTimestamp &GetTimestamp() const;
         void SetTimestamp(const UnixTimestamp &ts);
 
-        std::uint16_t GetYear() const;
+        const std::uint16_t &GetYear() const;
         void SetYear(const std::uint16_t &year);
 
-        std::uint8_t GetMonth() const;
+        const std::uint8_t &GetMonth() const;
         void SetMonth(const std::uint8_t &month);
 
-        std::uint8_t GetDay() const;
+        const std::uint8_t &GetDay() const;
         void SetDay(const std::uint8_t &day);
 
-        std::uint8_t GetHour() const;
+        const std::uint8_t &GetHour() const;
         void SetHour(const std::uint8_t &hour);
 
-        std::uint8_t GetMinute() const;
+        const std::uint8_t &GetMinute() const;
         void SetMinute(const std::uint8_t &minute);
 
-        std::uint8_t GetSecond() const;
+        const std::uint8_t &GetSecond() const;
         void SetSecond(const std::uint8_t &second);
 
         std::string ToString_TS() const;
         std::string ToString_DT() const;
+
+        bool IsWeekday() const;
 
     private:
         // MEMBERS
@@ -83,6 +87,8 @@ namespace Common {
         std::uint8_t Hour;
         std::uint8_t Minute;
         std::uint8_t Second;
+
+        bool NewYorkTime;
 
         // METHODS
         void CalculateDateTime();

@@ -11,13 +11,17 @@ int main() {
     std::cout << 
         data.Name << std::endl <<
         data.Symbol << std::endl <<
-        data.TickerID << std::endl;
+        data.TickerID << std::endl << std::endl;
 
-        // ~/Sonny$ build/sonny 
-        // Testing getting spy info:
-        // State Street® SPDR® S&P 500® ETF Trust
-        // SPY
-        // 913243251
+    // ~/Sonny$ build/sonny 
+    // Testing getting spy info:
+    // State Street® SPDR® S&P 500® ETF Trust
+    // SPY
+    // 913243251
+
+    Common::DateTime fridayLastWeek(2026, Common::AUG, 14);
+    data.GetDay(fridayLastWeek);
+
     return 0;
 }
 
