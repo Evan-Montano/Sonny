@@ -17,8 +17,9 @@ webullclient is going to have the following tasks:
 #pragma once
 
 #include <string>
+#include <vector>
 #include "curlrequest.hpp"
-#include "../common/dtutil.hpp"
+#include "../common/pricebar.hpp"
 
 namespace Client {
 	struct ChartInfoResponse {
@@ -34,15 +35,12 @@ namespace Client {
 		std::string Symbol;
 	};
 
-	struct PriceBarResponse {
-		Common::UnixTimestamp Timestamp;
-	};
-
 	class WebullClient {
 	public:
 		// METHODS
 		static ChartInfoResponse GetClosestChartInfo(const std::string &symbol);
-		static PriceBarResponse GetSinglePriceBar(const Common::UnixTimestamp &timestamp, const std::string &tickerId);
+		static Common::PriceBar GetSinglePriceBar(const std::string &tickerId, const Common::UnixTimestamp &timestamp);
+		static void PopulatePriceBarRange(const std::string &tickerId, std::vector<Common::PriceBar> &bars, const Common::UnixTimestamp &timestamp, const uint16_t &count);
 	
 	private:
 		// MEMBERS
@@ -52,6 +50,8 @@ namespace Client {
 		// STATIC MEMBERS
 		inline static const std::string SECONDS_MINI_URI = "https://quotes-gw.webullfintech.com/api/quote/charts/seconds-mini";
 		inline static const std::string TICKERS_SEARCH_URI = "https://quotes-gw.webullfintech.com/api/search/pc/tickers";
+
+		inline static constexpr uint8_t PRICE_SCALE = 100;
 	};
 	
 }

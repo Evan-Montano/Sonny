@@ -3,8 +3,7 @@
 
 #pragma once
 
-#include <vector>
-#include "../common/dtutil.hpp"
+#include "../common/pricebar.hpp"
 #include "../client/webullclient.hpp"
 
 namespace Core {
@@ -29,20 +28,10 @@ namespace Core {
         OneYear
     };
 
-    // Represents a single price bar in a chart.
-    struct PriceBar {
-        Common::UnixTimestamp Timestamp;
-        double Open;
-        double Close;
-        double High;
-        double Low;
-        std::uint64_t Volume;
-    };
-
     // Represents an entire day's price data for a chart.
     struct ChartDay {
         Interval PriceBarInterval;
-        std::vector<PriceBar> PriceBars;
+        std::vector<Common::PriceBar> PriceBars;
         Common::DateTime Date;
     };
 
@@ -84,6 +73,8 @@ namespace Core {
     private:
         // MEMBERS
         Client::WebullClient WBClient;
+
+        static inline constexpr uint16_t MAX_QUERY_SIZE = 800;
 
         // METHODS
 

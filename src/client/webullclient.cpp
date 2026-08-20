@@ -11,7 +11,7 @@ namespace Client {
 
     const HeaderMap WebullClient::GetDefaultHeaders() {
         HeaderMap res{};
-        const std::string deviceID = Common::SecretStore::Get("Did");
+        const std::string deviceID = Common::SecretStore::Get("did");
         if (deviceID.size() > 0) {
             res = {
                 { "appid", "wb_web_app" },
@@ -78,8 +78,8 @@ namespace Client {
         return res;
     }
     
-    PriceBarResponse WebullClient::GetSinglePriceBar(const Common::UnixTimestamp &timestamp, const std::string &tickerId) {
-        PriceBarResponse res{};
+    Common::PriceBar WebullClient::GetSinglePriceBar(const std::string &tickerId, const Common::UnixTimestamp &timestamp) {
+        Common::PriceBar res{};
         const ParamMap params = {
             { "type", "s1" },
             { "count", "1" },
@@ -105,6 +105,11 @@ namespace Client {
                 }
 
                 res.Timestamp = std::stoi(fields[0]);
+                res.Open = std::stoi(fields[1]) * PRICE_SCALE;
+                res.Close = std::stoi(fields[2]) * PRICE_SCALE;
+                res.High = std::stoi(fields[3]) * PRICE_SCALE;
+                res.Low = std::stoi(fields[4]) * PRICE_SCALE;
+                res.Volume = std::stoi(fields[6]) * PRICE_SCALE;
             }
         );
 
@@ -113,6 +118,59 @@ namespace Client {
 
         return res;
     }
+
+    void WebullClient::PopulatePriceBarRange(
+            const std::string &tickerId, 
+            std::vector<Common::PriceBar> &bars, 
+            const Common::UnixTimestamp &timestamp, 
+            const uint16_t &count) {
+        const ParamMap params = {
+            { "type", "s1" },
+            { "count", std::to_string(count) },
+            { "timestamp", std::to_string(timestamp) },
+            { "restorationType", "0" },
+            { "tickerId", tickerId }
+        };
+
+        CurlRequest request(SECONDS_MINI_URI);
+        request.AddParam(params);
+        request.AddHeader(GetDefaultHeaders());
+
+        request.SetCallback(
+            [&](const std::string &response) {
+                Common::JsonUtility jsonResponse(response);
+                std::vector<std::string> data = jsonResponse.At(0).Get<std::vector<std::string>>("data");
+
+                for (std::string s : data) {
+                    std::stringstream ss(s);
+                    std::string field;
+                    std::vector<std::string> fields;
+                    while (std::getline(ss, field, ',')) {
+                        fields.push_back(field);
+                    }
+
+                    Common::PriceBar res;
+                    res.Timestamp = std::stoi(fields[0]);
+                    res.Open = std::stoi(fields[1]) * PRICE_SCALE;
+                    res.Close = std::stoi(fields[2]) * PRICE_SCALE;
+                    res.High = std::stoi(fields[3]) * PRICE_SCALE;
+                    res.Low = std::stoi(fields[4]) * PRICE_SCALE;
+                    res.Volume = std::stoi(fields[6]) * PRICE_SCALE;
+
+                    bars.push_back(res);
+                }
+            }
+        );
+
+        SimpleCurlWrapper scw;
+        scw.ExecuteHttpRequest(request);
+    }
+}
+
+// Data array legend:
+// 1785527998   746.56    746.61      746.67      746.47      null    3144    null
+// TIMESTAMP    OPEN      CLOSE       HIGH        LOW         TBD     VOL     TBD
+
 // [
 //   {
 //     "tickerId": 913243251,
@@ -135,4 +193,3 @@ namespace Client {
 //     "version": 1781756680044
 //   }
 // ]
-}
