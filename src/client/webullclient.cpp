@@ -12,8 +12,8 @@ namespace Client {
 
     const HeaderMap WebullClient::GetDefaultHeaders() {
         HeaderMap res{};
-        const std::string deviceID = Common::SecretStore::Get("did");
-        if (deviceID.size() > 0) {
+        //const std::string deviceID = Common::SecretStore::Get("did");
+        //if (deviceID.size() > 0) {
             res = {
                 { "appid", "wb_web_app" },
                 { "sec-ch-ua-platform", "\"Linux\"" },
@@ -26,13 +26,13 @@ namespace Client {
                 { "platform", "web" },
                 { "Referer", "https://app.webull.com/" },
                 { "osv", "i9zh" },
-                { "did", deviceID },
+                { "did", "deviceID" },
                 { "ph", "UNIX Chrome" },
                 { "User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36" },
                 { "ver", "6.5.3" },
                 { "app-group", "broker" },
             };
-        }
+        //}
         return res;
     }
 

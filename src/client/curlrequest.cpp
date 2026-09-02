@@ -87,7 +87,7 @@ namespace Client {
 
     void CurlRequest::ReassignUri(const std::string &uri) {
         this->Uri = uri;
-        this->Reset();
+        this->FormattedUri.clear();
     }
 
     const std::unordered_map<std::string, std::string>& CurlRequest::GetHeaders() const {

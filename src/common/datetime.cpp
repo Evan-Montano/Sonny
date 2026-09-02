@@ -166,6 +166,24 @@ namespace Common {
         );
     }
 
+    std::string DateTime::ToString_Date() const {
+		return std::format(
+			"{:04}-{:02}-{:02}",
+			this->Year,
+			static_cast<int>(this->Month),
+			static_cast<int>(this->Day)
+		);
+    }
+
+    std::string DateTime::ToString_Time() const {
+		return std::format(
+			"{:02}:{:02}:{:02}",
+			static_cast<int>(this->Hour),
+			static_cast<int>(this->Minute),
+			static_cast<int>(this->Second)
+		);
+    }
+
     bool DateTime::IsWeekday() const
     {
         std::chrono::year_month_day date{
@@ -180,5 +198,12 @@ namespace Common {
 
         return weekday != std::chrono::Saturday &&
             weekday != std::chrono::Sunday;
+    }
+
+    DateTime DateTime::GetCurrentDateTime(const bool& newYorkTime) {
+		using namespace std::chrono;
+		const auto now = system_clock::now();
+		const auto now_ts = duration_cast<seconds>(now.time_since_epoch()).count();
+		return DateTime(static_cast<UnixTimestamp>(now_ts), newYorkTime);
     }
 }

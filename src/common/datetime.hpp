@@ -75,8 +75,12 @@ namespace Common {
 
         std::string ToString_TS() const;
         std::string ToString_DT() const;
+        std::string ToString_Date() const;
+        std::string ToString_Time() const;
 
         bool IsWeekday() const;
+
+        static DateTime GetCurrentDateTime(const bool& newYorkTime = false);
 
     private:
         // MEMBERS

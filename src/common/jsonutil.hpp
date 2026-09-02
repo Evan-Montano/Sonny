@@ -60,6 +60,21 @@ namespace Common {
             }
         }
 
+        template<typename T>
+        bool Has(const std::string& key) const {
+            if (!jsonData.contains(key)) {
+                return false;
+            }
+
+            try {
+                jsonData.at(key).get<T>();
+                return true;
+            }
+            catch (const nlohmann::json::type_error&) {
+                return false;
+            }
+        }
+
         JsonUtility At(std::size_t index) const {
             if (jsonData.is_array() == false) {
                 throw::std::runtime_error("JSON Error: Value is not an array.");

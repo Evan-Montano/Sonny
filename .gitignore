@@ -3,3 +3,4 @@ data
 storage
 config.json
 *.docx
+.vs

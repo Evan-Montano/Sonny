@@ -47,6 +47,7 @@ namespace Client {
             if (this->CallbackSet && this->Callback) {
                 this->InvokeCallback(this->_response);
             }
+            this->_response.clear();
         }
 
         // MEMBERS
