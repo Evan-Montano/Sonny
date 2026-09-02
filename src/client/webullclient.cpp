@@ -3,6 +3,7 @@
 
 #include "../common/secretstore.hpp"
 #include "../common/jsonutil.hpp"
+#include "../common/conversionutil.hpp"
 #include "simplecurlwrapper.hpp"
 #include "webullclient.hpp"
 #include <vector>
@@ -105,11 +106,14 @@ namespace Client {
                 }
 
                 res.Timestamp = std::stoi(fields[0]);
-                res.Open = std::stoi(fields[1]) * PRICE_SCALE;
-                res.Close = std::stoi(fields[2]) * PRICE_SCALE;
-                res.High = std::stoi(fields[3]) * PRICE_SCALE;
-                res.Low = std::stoi(fields[4]) * PRICE_SCALE;
-                res.Volume = std::stoi(fields[6]) * PRICE_SCALE;
+                {
+                    using namespace Common;
+                    res.Open = Convert::DecStrToInt(fields[1], 2);
+                    res.Close = Convert::DecStrToInt(fields[2], 2);
+                    res.High = Convert::DecStrToInt(fields[3], 2);
+                    res.Low = Convert::DecStrToInt(fields[4], 2);
+                    res.Volume = Convert::DecStrToInt(fields[6], 2);
+                }
             }
         );
 
@@ -151,11 +155,15 @@ namespace Client {
 
                     Common::PriceBar res;
                     res.Timestamp = std::stoi(fields[0]);
-                    res.Open = std::stoi(fields[1]) * PRICE_SCALE;
-                    res.Close = std::stoi(fields[2]) * PRICE_SCALE;
-                    res.High = std::stoi(fields[3]) * PRICE_SCALE;
-                    res.Low = std::stoi(fields[4]) * PRICE_SCALE;
-                    res.Volume = std::stoi(fields[6]) * PRICE_SCALE;
+
+                    {
+                        using namespace Common;
+                        res.Open = Convert::DecStrToInt(fields[1], 2);
+                        res.Close = Convert::DecStrToInt(fields[2], 2);
+                        res.High = Convert::DecStrToInt(fields[3], 2);
+                        res.Low = Convert::DecStrToInt(fields[4], 2);
+                        res.Volume = Convert::DecStrToInt(fields[6], 2);
+                    }
 
                     bars.push_back(res);
                 }

@@ -62,11 +62,11 @@ namespace Common {
 
         JsonUtility At(std::size_t index) const {
             if (jsonData.is_array() == false) {
-                throw::std::runtime_error("JSON value is not an array.");
+                throw::std::runtime_error("JSON Error: Value is not an array.");
             }
 
             if (index >= jsonData.size()) {
-                throw std::out_of_range("Array index out of range.");
+                throw std::out_of_range("JSON Error: Array index out of range.");
             }
 
             return JsonUtility(jsonData.at(index));
@@ -74,7 +74,7 @@ namespace Common {
 
         JsonUtility At(const std::string &key) const {
             if (jsonData.contains(key) == false) {
-                throw std::out_of_range("Key '" + key + "' not found in JSON data.");
+                throw std::out_of_range("JSON Error: Key '" + key + "' not found in JSON data.");
             }
 
             return JsonUtility(jsonData.at(key));

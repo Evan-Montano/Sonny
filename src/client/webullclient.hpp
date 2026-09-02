@@ -50,8 +50,6 @@ namespace Client {
 		// STATIC MEMBERS
 		inline static const std::string SECONDS_MINI_URI = "https://quotes-gw.webullfintech.com/api/quote/charts/seconds-mini";
 		inline static const std::string TICKERS_SEARCH_URI = "https://quotes-gw.webullfintech.com/api/search/pc/tickers";
-
-		inline static constexpr uint8_t PRICE_SCALE = 100;
 	};
 	
 }

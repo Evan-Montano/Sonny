@@ -6,6 +6,7 @@
 #include <vector>
 #include <algorithm>
 #include <iostream>
+// #include <tuple>
 
 namespace Core {
 
@@ -53,11 +54,17 @@ namespace Core {
             // Taking in the dt object and we only care about the date, not the time.
             // Converting to New York time and normalizing the bounds 
 
-            Common::DateTime startDT_NY(dt.GetTimestamp(), true);
+            Common::DateTime startDT_NY(
+                dt.GetYear(),
+                dt.GetMonth(),
+                dt.GetDay(),
+                0,0,0,
+                true
+            );
             
             startDT_NY.SetHour(Common::AM(9));
             startDT_NY.SetMinute(30);
-            startDT_NY.SetSecond(0);
+            startDT_NY.SetSecond(1);
             NormalizeDateTimeToPriceBar(startDT_NY);
 
             // If the normalized date does not equal the inputted date
@@ -84,7 +91,6 @@ namespace Core {
 
                 if (totalSecondPriceBars > 0) {
                     // Begin a batched query of all pricebars for the day
-                    // DISCOVERY: If I ask for 800 bars, it might give me 800. It might give me 812, or 897..
                     // Going to have to query incrementally, checking the last bar's timestamp to see if we went over the line.
                     // then finally trim the list in the end so I don't get data from the previous day.
 
@@ -121,42 +127,59 @@ namespace Core {
                                 region.end()
                             );
 
+                            // TODO: Process to run over res.PriceBars to fill in any missing gaps
+                            // Webull is a frickin' stinker and isn't delivering perfect, contiguous data..
+                            
+                            // So we don't have to iterate over a changing list, first getting query info for
+                            // all the missing sections we need
+                            // Common::UnixTimestamp tsRef = tmpTimestamp;
+                            // std::vector<std::tuple<size_t/*index*/, Common::UnixTimestamp, size_t/*count*/>> missingParts;
+
+                            // for (size_t i = 0; i < region.size()-1; ++i) {
+                            //     if (region[i].Timestamp-1 != --tsRef) {
+                            //         missingParts.push_back({i, region[i].Timestamp-1, (region[i].Timestamp - region[i+1].Timestamp)});
+                            //         tsRef = region[i+1].Timestamp;
+                            //     }
+                            // }
+
                             // Insert into main vector
                             res.PriceBars.insert(res.PriceBars.end(), region.begin(), region.end());
 
                             // The new timestamp to query should be the regionEnd - 1
                             tmpTimestamp = region[region.size()-1].Timestamp-1;
-
-                            Common::PriceBar bar;
-                            bar = region[0];
-                            std::cout <<
-                                std::format(
-                                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                                    Common::DateTime(bar.Timestamp, true).ToString_DT(),
-                                    bar.Timestamp,
-                                    bar.Open,
-                                    bar.Close,
-                                    bar.High,
-                                    bar.Low,
-                                    bar.Volume
-                                );
-                            Common::UnixTimestamp ts_End = bar.Timestamp;
-
-                            bar = region[region.size()-1];
-                            std::cout <<
-                                std::format(
-                                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                                    Common::DateTime(bar.Timestamp, true).ToString_DT(),
-                                    bar.Timestamp,
-                                    bar.Open,
-                                    bar.Close,
-                                    bar.High,
-                                    bar.Low,
-                                    bar.Volume
-                                );
                             
-                            std::cout << "Time difference: " + std::to_string(region[0].Timestamp - region[region.size()-1].Timestamp) << std::endl;
-                            std::cout << "Total in batch: " + std::to_string(region.size()) << std::endl << std::endl;
+                            {// TEMPORARY LOGGING FOR DEBUGGING
+                                Common::PriceBar bar;
+                                bar = region[0];
+                                std::cout <<
+                                    std::format(
+                                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                                        Common::DateTime(bar.Timestamp, true).ToString_DT(),
+                                        bar.Timestamp,
+                                        bar.Open,
+                                        bar.Close,
+                                        bar.High,
+                                        bar.Low,
+                                        bar.Volume
+                                    );
+                                Common::UnixTimestamp ts_End = bar.Timestamp;
+
+                                bar = region[region.size()-1];
+                                std::cout <<
+                                    std::format(
+                                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                                        Common::DateTime(bar.Timestamp, true).ToString_DT(),
+                                        bar.Timestamp,
+                                        bar.Open,
+                                        bar.Close,
+                                        bar.High,
+                                        bar.Low,
+                                        bar.Volume
+                                    );
+                                
+                                std::cout << "Time difference: " + std::to_string(region[0].Timestamp - region[region.size()-1].Timestamp) << std::endl;
+                                std::cout << "Total in batch: " + std::to_string(region.size()) << std::endl << std::endl;
+                            }// END LOGGING
                         }
                         else {
                             break;
@@ -164,10 +187,6 @@ namespace Core {
 
                         region.clear();
                     } while (res.PriceBars[res.PriceBars.size()-1].Timestamp > startDT_NY.GetTimestamp());
-
-                    // TODO: Create a process to run 1-3 times over res.PriceBars to fill in any missing gaps
-                    // Webull is a frickin' stinker and isn't delivering perfect, contiguous data..
-                    
 
                     // reverse the returning vector so now the price bars should be in chronological order
                     std::reverse(res.PriceBars.begin(), res.PriceBars.end());

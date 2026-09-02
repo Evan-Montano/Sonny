@@ -15,3 +15,5 @@ secret-tool     search      key             whateverTheKeyNameIs
 
 =====================================================================================================
 
+To build the "./build" directory:
+cmake -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++

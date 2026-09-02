@@ -8,6 +8,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
+set(CMAKE_BUILD_TYPE Debug)
+set(CMAKE_CXX_FLAGS_DEBUG "-g -O0") # disabled optimization to make debugging more predictable
+
 add_executable(sonny)
 
 target_sources(sonny
@@ -16,7 +19,7 @@ target_sources(sonny
         src/client/curlrequest.cpp
         src/client/simplecurlwrapper.cpp
         src/client/webullclient.cpp
-        src/common/dtutil.cpp
+        src/common/datetime.cpp
         src/core/chartdata.cpp
 )
 
