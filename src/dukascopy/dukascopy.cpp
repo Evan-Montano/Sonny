@@ -9,6 +9,7 @@
 #include <format>
 #include <array>
 #include <cstdint>
+#include <algorithm>
 
 namespace Dukascopy {
 
@@ -19,11 +20,22 @@ namespace Dukascopy {
 		float Multiplier;
 		float Ask;
 		float Bid;
-		std::vector<int16_t> Times;
+		
+		// These are deltas.
+		std::vector<int32_t> Times;
 		std::vector<int16_t> Asks;
 		std::vector<int16_t> Bids;
-		std::vector<int16_t> AskVolumes;
-		std::vector<int16_t> BidVolumes;
+
+		// Actual volume values.
+		std::vector<int32_t> AskVolumes;
+		std::vector<int32_t> BidVolumes;
+	};
+
+	struct MLRecord {
+		std::uint32_t SecondsSinceOpen;
+		float MidDelta;
+		float SpreadDelta;
+		std::uint32_t Volume;
 	};
 
 	bool ExportFullDay(const Common::DateTime& dt) {
@@ -64,7 +76,7 @@ namespace Dukascopy {
 			hourRequest.SetCallback(
 				[&](const std::string& response) {
 					Common::JsonUtility hourJson(response);
-					Logger::Debug(hourJson.ToString(), true);
+					Logger::Debug(hourJson.ToString());
 
 					tickResponses.push_back(
 						{
@@ -72,11 +84,11 @@ namespace Dukascopy {
 							hourJson.Get<float>("multiplier"),
 							hourJson.Get<float>("ask"),
 							hourJson.Get<float>("bid"),
-							hourJson.Get<std::vector<int16_t>>("times"),
+							hourJson.Get<std::vector<int32_t>>("times"),
 							hourJson.Get<std::vector<int16_t>>("asks"),
 							hourJson.Get<std::vector<int16_t>>("bids"),
-							hourJson.Get<std::vector<int16_t>>("askVolumes"),
-							hourJson.Get<std::vector<int16_t>>("bidVolumes")
+							hourJson.Get<std::vector<int32_t>>("askVolumes"),
+							hourJson.Get<std::vector<int32_t>>("bidVolumes")
 						}
 					);
 				}
@@ -88,10 +100,58 @@ namespace Dukascopy {
 				curl.ExecuteHttpRequest(hourRequest);
 			}
 
-			// TODO: Consolidate into a single vector of MLRecord(s)
+			// TODOing..: Consolidate into a single vector of MLRecord(s)
 			// Throw them all into a record file.
 			// Once that works, then we can set up corpus runs.
+			Common::UnixTimestamp timestamp = tickResponses[0].Timestamp;
 
+			for (const TickResponse& response : tickResponses) {
+				float multiplier = response.Multiplier;
+
+				// Dukascopy's price deltas are expressed in units of the multiplier.
+				// Convert the initial bid into those same integer units so that all
+				// reconstruction remains exact and we avoid floating-point drift.
+				std::int64_t runningBid = static_cast<std::int64_t>(std::round(response.Bid / multiplier));
+				int32_t runningTime = (response.Timestamp + response.Times[0]) % 1000;
+				int32_t runningVolume = response.BidVolumes[0];
+
+				std::vector<std::int64_t> currentRow;
+				currentRow.push_back(runningBid);
+
+				for (int i = 1; i < response.Bids.size(); ++i) {
+					runningTime += response.Times[i];
+
+					if (runningTime >= 1000) {
+						// Finish previous candle.
+						std::int64_t O = currentRow.front();
+						std::int64_t H = *std::max_element(currentRow.begin(), currentRow.end());
+						std::int64_t L = *std::min_element(currentRow.begin(), currentRow.end());
+						std::int64_t C = currentRow.back();
+
+						Logger::Info(std::format(
+							"{}\t{}\t{}\t{}\t{}\t{}",
+							Common::DateTime(++timestamp, true).ToString_Time(),
+							O * multiplier,
+							H * multiplier,
+							L * multiplier,
+							C * multiplier,
+							runningVolume
+						));
+
+						currentRow.clear();
+						runningVolume = 0;
+						runningTime -= 1000;
+					}
+
+					// Bids are already expressed in multiplier units, so this is
+					// exact integer arithmetic.
+					runningBid += response.Bids[i];
+
+					runningVolume += response.BidVolumes[i];
+					currentRow.push_back(runningBid);
+				}
+			}
+			
 			res = true;
 		}
 
@@ -105,14 +165,13 @@ https://jetta.dukascopy.com/v1/instruments/SPY.US-USD
 https://jetta.dukascopy.com/v1/ticks/SPY.US-USD/2026/8/24/{13-19}
 
 struct MLRecord {
-	uint32_t seconds_since_open;
 	float    mid_delta;
 	float    spread_delta;
 	uint32_t volume;
 };
 
 
-Process creates a file {yyyymmdd.bin} saved under ~/src/storage/records
+Process creates a file {yyyy-mm-dd.bin} saved under ~/src/storage/records
 
 In each record:
 float mid_delta     float spread_delta     uint32_t volume

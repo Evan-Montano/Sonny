@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <mutex>
+#include <condition_variable>
 #include <string>
 #include <thread>
 #include <queue>
