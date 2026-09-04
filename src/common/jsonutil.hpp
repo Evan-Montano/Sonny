@@ -61,13 +61,13 @@ namespace Common {
         }
 
         template<typename T>
-        bool Has(const std::string& key) const {
+        bool TryGet(const std::string& key, T& out) const {
             if (!jsonData.contains(key)) {
                 return false;
             }
 
             try {
-                jsonData.at(key).get<T>();
+                out = jsonData.at(key).get<T>();
                 return true;
             }
             catch (const nlohmann::json::type_error&) {

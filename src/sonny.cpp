@@ -6,10 +6,7 @@
 
 int main(int argc, char* argv[]) {
     Logger::Start();
-
-	Dukascopy::ExportFullDay(Common::DateTime(2026, 8, 24));
-
-
+    Dukascopy::BeginCorpusExport();
     Logger::Stop();
     return 0;
 }

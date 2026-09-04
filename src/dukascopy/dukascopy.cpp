@@ -3,8 +3,10 @@
 
 #include "dukascopy.hpp"
 #include "../common/jsonutil.hpp"
+#include "../common/datetime.hpp"
 #include "../client/simplecurlwrapper.hpp"
 #include "../common/logger.hpp"
+
 #include <vector>
 #include <format>
 #include <array>
@@ -31,78 +33,65 @@ namespace Dukascopy {
 		std::vector<int32_t> BidVolumes;
 	};
 
-	struct MLRecord {
-		std::uint32_t SecondsSinceOpen;
-		float MidDelta;
-		float SpreadDelta;
-		std::uint32_t Volume;
-	};
+	//struct MLRecord {
+	//	std::uint32_t SecondsSinceOpen;
+	//	float MidDelta;
+	//	float SpreadDelta;
+	//	std::uint32_t Volume;
+	//};
 
-	bool ExportFullDay(const Common::DateTime& dt) {
-		std::string ticksUrlBase = 
-			"https://jetta.dukascopy.com/v1/ticks/SPY.US-USD/" + 
+	void ExportFullDay(const Common::DateTime& dt) {
+		std::string ticksUrlBase = "https://jetta.dukascopy.com/v1/ticks/SPY.US-USD/" + 
 			std::to_string(dt.GetYear()) + "/" +
 			std::to_string(dt.GetMonth()) + "/" +
 			std::to_string(dt.GetDay()) + "/";
-		bool res = false;
-		Client::SimpleCurlWrapper curl;
-		Common::JsonUtility spyData(std::string("{}"));
-
-		{//Get basic data to ensure that the endpoint is working
-			Client::CurlRequest infoRequest(infoUrl);
-			infoRequest.SetCallback(
-				[&](const std::string& response) {
-					if (response.size() > 0) {
-						Logger::Info("Response received.", true);
-						spyData = Common::JsonUtility(response);
-					}
-					else {
-						Logger::Error("Unable to access info URI. Terminating process.", true);
-					}
-				}
-			);
-
-			Logger::Info("Getting SPY data..", true);
-			curl.ExecuteHttpRequest(infoRequest);
-		}//end
-		
 		std::vector<TickResponse> tickResponses;
-
-		if (spyData.Has<std::string>("description")) {
-			Logger::Info(std::format("Description: {}", spyData.Get<std::string>("description")), true);
-			Client::CurlRequest hourRequest("");
+		Client::SimpleCurlWrapper curl;
+		Client::CurlRequest hourRequest("");
 			
-			// Setup the callback and store the response in a vector of structs representing the data.
-			hourRequest.SetCallback(
-				[&](const std::string& response) {
-					Common::JsonUtility hourJson(response);
-					Logger::Debug(hourJson.ToString());
+		// Setup the callback and store the response in a vector of structs representing the data.
+		hourRequest.SetCallback(
+			[&](const std::string& response) {
+				Common::JsonUtility hourJson(response);
+				TickResponse res{};
+				
+				//if (hourJson.Has<Common::UnixTimestamp>("timestamp")
+				//	&& hourJson.Has<float>("multiplier")
+				//	&& hourJson.Has<float>("ask")
+				//	&& hourJson.Has<float>("bid")
+				//	&& hourJson.Has<std::vector<int32_t>>("times")
+				//	&& hourJson.Has<std::vector<int16_t>>("asks")
+				//	&& hourJson.Has<std::vector<int16_t>>("bids")
+				//	&& hourJson.Has<std::vector<int32_t>>("askVolumes")
+				//	&& hourJson.Has<std::vector<int32_t>>("bidVolumes")) {
+				//	tickResponses.push_back(
+				//		{
+				//			hourJson.Get<Common::UnixTimestamp>("timestamp"),
+				//			hourJson.Get<float>("multiplier"),
+				//			hourJson.Get<float>("ask"),
+				//			hourJson.Get<float>("bid"),
+				//			hourJson.Get<std::vector<int32_t>>("times"),
+				//			hourJson.Get<std::vector<int16_t>>("asks"),
+				//			hourJson.Get<std::vector<int16_t>>("bids"),
+				//			hourJson.Get<std::vector<int32_t>>("askVolumes"),
+				//			hourJson.Get<std::vector<int32_t>>("bidVolumes")
+				//		}
+				//	);
+				//}
 
-					tickResponses.push_back(
-						{
-							hourJson.Get<Common::UnixTimestamp>("timestamp"),
-							hourJson.Get<float>("multiplier"),
-							hourJson.Get<float>("ask"),
-							hourJson.Get<float>("bid"),
-							hourJson.Get<std::vector<int32_t>>("times"),
-							hourJson.Get<std::vector<int16_t>>("asks"),
-							hourJson.Get<std::vector<int16_t>>("bids"),
-							hourJson.Get<std::vector<int32_t>>("askVolumes"),
-							hourJson.Get<std::vector<int32_t>>("bidVolumes")
-						}
-					);
-				}
-			);
-
-			// Iterate through each hour of the trading day (13 - 19)
-			for (size_t hour = 13; hour < 20; ++hour) {
-				hourRequest.ReassignUri(std::format("{}{}", ticksUrlBase, std::to_string(hour)));
-				curl.ExecuteHttpRequest(hourRequest);
 			}
+		);
 
-			// TODOing..: Consolidate into a single vector of MLRecord(s)
-			// Throw them all into a record file.
-			// Once that works, then we can set up corpus runs.
+		// Iterate through each hour of the trading day (13 - 19)
+		for (size_t hour = 13; hour < 20; ++hour) {
+			hourRequest.ReassignUri(std::format("{}{}", ticksUrlBase, std::to_string(hour)));
+			curl.ExecuteHttpRequest(hourRequest);
+		}
+
+		// TODOing..: Consolidate into a single vector of MLRecord(s)
+		// Throw them all into a record file.
+		// Once that works, then we can set up corpus runs.
+		if (tickResponses.size() > 0) {
 			Common::UnixTimestamp timestamp = tickResponses[0].Timestamp;
 
 			for (const TickResponse& response : tickResponses) {
@@ -128,15 +117,15 @@ namespace Dukascopy {
 						std::int64_t L = *std::min_element(currentRow.begin(), currentRow.end());
 						std::int64_t C = currentRow.back();
 
-						Logger::Info(std::format(
-							"{}\t{}\t{}\t{}\t{}\t{}",
-							Common::DateTime(++timestamp, true).ToString_Time(),
-							O * multiplier,
-							H * multiplier,
-							L * multiplier,
-							C * multiplier,
-							runningVolume
-						));
+						//Logger::Info(std::format(
+						//	"{}\t{}\t{}\t{}\t{}\t{}",
+						//	Common::DateTime(++timestamp, true).ToString_Time(),
+						//	O * multiplier,
+						//	H * multiplier,
+						//	L * multiplier,
+						//	C * multiplier,
+						//	runningVolume
+						//));
 
 						currentRow.clear();
 						runningVolume = 0;
@@ -151,30 +140,55 @@ namespace Dukascopy {
 					currentRow.push_back(runningBid);
 				}
 			}
-			
-			res = true;
-		}
 
-		return res;
+			Logger::Info(std::format("Day processed: {}", dt.ToString_Date()));
+		}
+		else {
+			Logger::Warning(std::format("Day skipped: {}", dt.ToString_Date()));
+		}
+	}
+
+	void BeginCorpusExport() {
+		Logger::Info("========================================", true);
+		Logger::Info("      Beginning full corpus export", true);
+		Logger::Info("========================================", true);
+		
+		Common::JsonUtility spyData(std::string("{}"));
+
+		{	
+			//Get basic data to ensure that the endpoint is working
+			Client::SimpleCurlWrapper curl;
+			Client::CurlRequest infoRequest(infoUrl);
+			infoRequest.SetCallback(
+				[&](const std::string& response) {
+					if (response.size() > 0) {
+						spyData = Common::JsonUtility(response);
+					}
+					else {
+						Logger::Error("Unable to access info URI. Terminating process.", true);
+					}
+				}
+			);
+
+			curl.ExecuteHttpRequest(infoRequest);
+		}//end
+
+		if (spyData.Has<std::string>("description")) {
+			Logger::Info(std::format("Description: {}", spyData.Get<std::string>("description")), true);
+			Common::DateTime day(2026, Common::AUG, 30);
+			if (day.IsWeekday()) {
+				ExportFullDay(day);
+			}
+			else {
+				Logger::Warning(std::format("Weekend skipped: {}", day.ToString_Date()));
+			}
+		}
 	}
 }
 
 /*
-Order to call the api
-https://jetta.dukascopy.com/v1/instruments/SPY.US-USD
-https://jetta.dukascopy.com/v1/ticks/SPY.US-USD/2026/8/24/{13-19}
-
-struct MLRecord {
-	float    mid_delta;
-	float    spread_delta;
-	uint32_t volume;
-};
-
-
 Process creates a file {yyyy-mm-dd.bin} saved under ~/src/storage/records
-
 In each record:
 float mid_delta     float spread_delta     uint32_t volume
 [...]
-
 */
