@@ -13,7 +13,7 @@
 #include <queue>
 #include <fstream>
 
-class Logger {
+class Logger{
 public:
     enum class Level {
         Debug,

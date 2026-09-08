@@ -1,8 +1,10 @@
 // simplecurlwrapper.cpp
 // Implementation of the SimpleCurlWrapper class.
 
-#include <stdexcept>
 #include "simplecurlwrapper.hpp"
+
+#include <stdexcept>
+#include <format>
 
 namespace Client {
 
@@ -17,7 +19,7 @@ namespace Client {
                 }
             }
 
-            // DESTRUSTOR
+            // DESTRUCTOR
             ~CurlGlobal() {
                 curl_global_cleanup();
             }
@@ -70,9 +72,9 @@ namespace Client {
         curl_easy_setopt(this->curlHandle, CURLOPT_CA_CACHE_TIMEOUT, 604800L);
 
         // Set headers
-        struct curl_slist *list = NULL;
+        struct curl_slist *list = nullptr;
         for (const auto& [key, value] : request.GetHeaders()) {
-            std::string headerStr = key + ": " + value;
+            std::string headerStr = std::format("{}: {}", key, value);
             list = curl_slist_append(list, headerStr.data());
         }
         curl_easy_setopt(this->curlHandle, CURLOPT_HTTPHEADER, list);
@@ -84,7 +86,7 @@ namespace Client {
         }
 
         // 5. Call easy perform.
-        CURLcode result = curl_easy_perform(this->curlHandle);
+        const CURLcode result = curl_easy_perform(this->curlHandle);
 
         if (result == CURLE_OK) {
             request.FinishResponse();

@@ -9,29 +9,46 @@
 
 #include <vector>
 #include <format>
-#include <array>
 #include <cstdint>
 #include <algorithm>
+#include <cmath>
 
 namespace Dukascopy {
 
 	static inline const std::string infoUrl = "https://jetta.dukascopy.com/v1/instruments/SPY.US-USD";
 
-	struct TickResponse {
-		Common::UnixTimestamp Timestamp;
-		float Multiplier;
-		float Ask;
-		float Bid;
+	namespace {
+		struct TickResponse {
+			Common::UnixTimestamp Timestamp;
+			float Multiplier;
+			float Ask;
+			float Bid;
 		
-		// These are deltas.
-		std::vector<int32_t> Times;
-		std::vector<int16_t> Asks;
-		std::vector<int16_t> Bids;
+			// Deltas.
+			std::vector<int32_t> Times;
+			std::vector<int16_t> Asks;
+			std::vector<int16_t> Bids;
 
-		// Actual volume values.
-		std::vector<int32_t> AskVolumes;
-		std::vector<int32_t> BidVolumes;
-	};
+			// Actual volume values.
+			std::vector<int32_t> AskVolumes;
+			std::vector<int32_t> BidVolumes;
+		};
+
+		struct OHLCV_BidAsk {
+			Common::UnixTimestamp Timestamp;
+			std::int64_t OpenBid;
+			std::int64_t HighBid;
+			std::int64_t LowBid;
+			std::int64_t CloseBid;
+			std::int64_t OpenAsk;
+			std::int64_t HighAsk;
+			std::int64_t LowAsk;
+			std::int64_t CloseAsk;
+			std::uint32_t BidVolume;
+			std::uint32_t AskVolume;
+			float multiplier;
+		};
+	}
 
 	//struct MLRecord {
 	//	std::uint32_t SecondsSinceOpen;
@@ -40,7 +57,78 @@ namespace Dukascopy {
 	//	std::uint32_t Volume;
 	//};
 
-	void ExportFullDay(const Common::DateTime& dt) {
+	static std::vector<OHLCV_BidAsk>  ExtractOneSecondCandlesticks(const std::vector<TickResponse> &tickResponses, const Common::DateTime &dt) {
+		std::vector<OHLCV_BidAsk> res{};
+		if (tickResponses.empty() == false) {
+			Common::UnixTimestamp timestamp = tickResponses[0].Timestamp;
+
+			for (const TickResponse& response : tickResponses) {
+				const float multiplier = response.Multiplier;
+
+				// Dukascopy's price deltas are expressed in units of the multiplier.
+				// Converting the initial bid into those same integer units so that all
+				// reconstruction remains exact and we avoid floating-point drift.
+				std::int64_t runningBid = static_cast<std::int64_t>(std::round(response.Bid / multiplier));
+				std::int64_t runningAsk = static_cast<std::int64_t>(std::round(response.Ask / multiplier));
+
+				int32_t runningTime = (response.Timestamp + response.Times[0]) % 1000;
+				uint32_t runningBidVolume = response.BidVolumes[0];
+				uint32_t runningAskVolume = response.AskVolumes[0];
+
+				std::vector<std::int64_t> currentBidRow;
+				std::vector<std::int64_t> currentAskRow;
+				currentBidRow.push_back(runningBid);
+				currentAskRow.push_back(runningAsk);
+
+				// Bids and asks vectors should be the same size, so we're looping over both at the same time
+				for (size_t i = 1; i < response.Bids.size(); ++i) {
+					runningTime += response.Times[i];
+
+					if (runningTime >= 1000) {
+						res.push_back(OHLCV_BidAsk {
+							.Timestamp = ++timestamp,
+							.OpenBid = currentBidRow.front(),
+							.HighBid = *std::ranges::max_element(currentBidRow),
+							.LowBid = *std::ranges::min_element(currentBidRow),
+							.CloseBid = currentBidRow.back(),
+							.OpenAsk = currentAskRow.front(),
+							.HighAsk = *std::ranges::max_element(currentAskRow),
+							.LowAsk = *std::ranges::min_element(currentAskRow),
+							.CloseAsk = currentAskRow.back(),
+							.BidVolume = runningBidVolume,
+							.AskVolume = runningAskVolume,
+							.multiplier = multiplier
+						});
+
+						currentBidRow.clear();
+						currentAskRow.clear();
+						runningBidVolume = 0;
+						runningAskVolume = 0;
+						runningTime -= 1000;
+					}
+
+					// Bids and asks are already expressed in multiplier units, so this is
+					// exact integer arithmetic.
+					runningBid += response.Bids[i];
+					runningAsk += response.Asks[i];
+					runningBidVolume += response.BidVolumes[i];
+					runningAskVolume += response.AskVolumes[i];
+
+					currentBidRow.push_back(runningBid);
+					currentAskRow.push_back(runningAsk);
+				}
+			}
+
+			Logger::Info(std::format("Day processed: {}", dt.ToString_Date()));
+		}
+		else {
+			Logger::Warning(std::format("Day skipped: {}", dt.ToString_Date()));
+		}
+
+		return res;
+	}
+
+	static void ExportFullDay(const Common::DateTime& dt) {
 		std::string ticksUrlBase = "https://jetta.dukascopy.com/v1/ticks/SPY.US-USD/" + 
 			std::to_string(dt.GetYear()) + "/" +
 			std::to_string(dt.GetMonth()) + "/" +
@@ -52,33 +140,29 @@ namespace Dukascopy {
 		// Setup the callback and store the response in a vector of structs representing the data.
 		hourRequest.SetCallback(
 			[&](const std::string& response) {
-				Common::JsonUtility hourJson(response);
+				const Common::JsonUtility hourJson(response);
 				TickResponse res{};
-				
-				//if (hourJson.Has<Common::UnixTimestamp>("timestamp")
-				//	&& hourJson.Has<float>("multiplier")
-				//	&& hourJson.Has<float>("ask")
-				//	&& hourJson.Has<float>("bid")
-				//	&& hourJson.Has<std::vector<int32_t>>("times")
-				//	&& hourJson.Has<std::vector<int16_t>>("asks")
-				//	&& hourJson.Has<std::vector<int16_t>>("bids")
-				//	&& hourJson.Has<std::vector<int32_t>>("askVolumes")
-				//	&& hourJson.Has<std::vector<int32_t>>("bidVolumes")) {
-				//	tickResponses.push_back(
-				//		{
-				//			hourJson.Get<Common::UnixTimestamp>("timestamp"),
-				//			hourJson.Get<float>("multiplier"),
-				//			hourJson.Get<float>("ask"),
-				//			hourJson.Get<float>("bid"),
-				//			hourJson.Get<std::vector<int32_t>>("times"),
-				//			hourJson.Get<std::vector<int16_t>>("asks"),
-				//			hourJson.Get<std::vector<int16_t>>("bids"),
-				//			hourJson.Get<std::vector<int32_t>>("askVolumes"),
-				//			hourJson.Get<std::vector<int32_t>>("bidVolumes")
-				//		}
-				//	);
-				//}
+				hourJson.TryGet<Common::UnixTimestamp>("timestamp", res.Timestamp);
+				hourJson.TryGet<float>("multiplier", res.Multiplier);
+				hourJson.TryGet<float>("bid", res.Bid);
+				hourJson.TryGet<float>("ask", res.Ask);
+				hourJson.TryGet<std::vector<int32_t>>("times", res.Times);
+				hourJson.TryGet<std::vector<int16_t>>("asks", res.Asks);
+				hourJson.TryGet<std::vector<int16_t>>("bids", res.Bids);
+				hourJson.TryGet<std::vector<int32_t>>("askVolumes", res.AskVolumes);
+				hourJson.TryGet<std::vector<int32_t>>("bidVolumes", res.BidVolumes);
 
+				if (res.Timestamp > 0 &&
+					res.Multiplier > 0 &&
+					res.Bid > 0 &&
+					res.Ask > 0 &&
+					res.Times.empty() == false &&
+					res.Asks.empty() == false &&
+					res.Bids.empty() == false &&
+					res.AskVolumes.empty() == false &&
+					res.BidVolumes.empty() == false) {
+					tickResponses.push_back(res);
+				}
 			}
 		);
 
@@ -88,64 +172,11 @@ namespace Dukascopy {
 			curl.ExecuteHttpRequest(hourRequest);
 		}
 
-		// TODOing..: Consolidate into a single vector of MLRecord(s)
-		// Throw them all into a record file.
-		// Once that works, then we can set up corpus runs.
-		if (tickResponses.size() > 0) {
-			Common::UnixTimestamp timestamp = tickResponses[0].Timestamp;
+		std::vector<OHLCV_BidAsk> candleSticks = ExtractOneSecondCandlesticks(tickResponses, dt);
 
-			for (const TickResponse& response : tickResponses) {
-				float multiplier = response.Multiplier;
-
-				// Dukascopy's price deltas are expressed in units of the multiplier.
-				// Convert the initial bid into those same integer units so that all
-				// reconstruction remains exact and we avoid floating-point drift.
-				std::int64_t runningBid = static_cast<std::int64_t>(std::round(response.Bid / multiplier));
-				int32_t runningTime = (response.Timestamp + response.Times[0]) % 1000;
-				int32_t runningVolume = response.BidVolumes[0];
-
-				std::vector<std::int64_t> currentRow;
-				currentRow.push_back(runningBid);
-
-				for (int i = 1; i < response.Bids.size(); ++i) {
-					runningTime += response.Times[i];
-
-					if (runningTime >= 1000) {
-						// Finish previous candle.
-						std::int64_t O = currentRow.front();
-						std::int64_t H = *std::max_element(currentRow.begin(), currentRow.end());
-						std::int64_t L = *std::min_element(currentRow.begin(), currentRow.end());
-						std::int64_t C = currentRow.back();
-
-						//Logger::Info(std::format(
-						//	"{}\t{}\t{}\t{}\t{}\t{}",
-						//	Common::DateTime(++timestamp, true).ToString_Time(),
-						//	O * multiplier,
-						//	H * multiplier,
-						//	L * multiplier,
-						//	C * multiplier,
-						//	runningVolume
-						//));
-
-						currentRow.clear();
-						runningVolume = 0;
-						runningTime -= 1000;
-					}
-
-					// Bids are already expressed in multiplier units, so this is
-					// exact integer arithmetic.
-					runningBid += response.Bids[i];
-
-					runningVolume += response.BidVolumes[i];
-					currentRow.push_back(runningBid);
-				}
-			}
-
-			Logger::Info(std::format("Day processed: {}", dt.ToString_Date()));
-		}
-		else {
-			Logger::Warning(std::format("Day skipped: {}", dt.ToString_Date()));
-		}
+		// TODO: Create two different record files:
+		// 1. Corpus OHLCV
+		// 2. Delta Record
 	}
 
 	void BeginCorpusExport() {
@@ -161,7 +192,7 @@ namespace Dukascopy {
 			Client::CurlRequest infoRequest(infoUrl);
 			infoRequest.SetCallback(
 				[&](const std::string& response) {
-					if (response.size() > 0) {
+					if (response.empty() == false) {
 						spyData = Common::JsonUtility(response);
 					}
 					else {
@@ -173,15 +204,13 @@ namespace Dukascopy {
 			curl.ExecuteHttpRequest(infoRequest);
 		}//end
 
-		if (spyData.Has<std::string>("description")) {
-			Logger::Info(std::format("Description: {}", spyData.Get<std::string>("description")), true);
-			Common::DateTime day(2026, Common::AUG, 30);
-			if (day.IsWeekday()) {
+		Logger::Info(std::format("Description: {}", spyData.Get<std::string>("description")), true);
+
+		if (const Common::DateTime day(2026, Common::AUG, 24); day.IsWeekday()) {
 				ExportFullDay(day);
-			}
-			else {
-				Logger::Warning(std::format("Weekend skipped: {}", day.ToString_Date()));
-			}
+		}
+		else {
+			Logger::Warning(std::format("Weekend skipped: {}", day.ToString_Date()));
 		}
 	}
 }
