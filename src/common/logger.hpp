@@ -41,6 +41,11 @@ public:
     static void Error(const std::string& message, const bool& logToConsole = false);
 
 private:
+    // DESTRUCTOR
+    ~Logger() {
+        Stop();
+    }
+
     // MEMBERS
     static inline std::filesystem::path log_dir = "storage/logs";
 

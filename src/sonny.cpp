@@ -6,7 +6,8 @@
 
 int main(int argc, char* argv[]) {
     Logger::Start();
-    Dukascopy::BeginCorpusExport();
+    Dukascopy::CorpusExporter exporter;
+    exporter.BeginCorpusExport();
     Logger::Stop();
     return 0;
 }

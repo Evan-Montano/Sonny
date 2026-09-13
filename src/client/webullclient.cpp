@@ -1,7 +1,6 @@
 // webullclient.cpp
 // Implementation of the WebullClient class for interacting with the Webull API.
 
-#include "../common/secretstore.hpp"
 #include "../common/jsonutil.hpp"
 #include "../common/conversionutil.hpp"
 #include "simplecurlwrapper.hpp"
@@ -62,8 +61,8 @@ namespace Client {
     }
     
     ChartInfoResponse WebullClient::ResolveInfoResponse(const std::string &response) {
-        ChartInfoResponse res;
-        if (response.size() > 0) {
+        ChartInfoResponse res{};
+        if (response.empty() == false) {
             Common::JsonUtility data(response);
             data = data.At("data").At(0);
 
@@ -95,8 +94,8 @@ namespace Client {
 
         request.SetCallback(
             [&](const std::string &response) {
-                Common::JsonUtility jsonResponse(response);
-                std::string data = jsonResponse.At(0).At("data").At(0).Get<std::string>();
+                const Common::JsonUtility jsonResponse(response);
+                const auto data = jsonResponse.At(0).At("data").At(0).Get<std::string>();
 
                 std::stringstream ss(data);
                 std::string field;
@@ -142,10 +141,9 @@ namespace Client {
 
         request.SetCallback(
             [&](const std::string &response) {
-                Common::JsonUtility jsonResponse(response);
-                std::vector<std::string> data = jsonResponse.At(0).Get<std::vector<std::string>>("data");
+                const Common::JsonUtility jsonResponse(response);
 
-                for (std::string s : data) {
+                for (const auto data = jsonResponse.At(0).Get<std::vector<std::string>>("data"); const std::string& s : data) {
                     std::stringstream ss(s);
                     std::string field;
                     std::vector<std::string> fields;
@@ -153,7 +151,7 @@ namespace Client {
                         fields.push_back(field);
                     }
 
-                    Common::PriceBar res;
+                    Common::PriceBar res{};
                     res.Timestamp = std::stoi(fields[0]);
 
                     {

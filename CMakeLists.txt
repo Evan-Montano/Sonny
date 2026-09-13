@@ -32,16 +32,6 @@ target_sources(sonny
         src/dukascopy/dukascopy.cpp
 )
 
-if(UNIX)
-    # Linux-specific secrets manager
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(LIBSECRET REQUIRED libsecret-1)
-    target_include_directories(sonny 
-        PRIVATE
-            ${LIBSECRET_INCLUDE_DIRS}
-    )
-endif()
-
 find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 

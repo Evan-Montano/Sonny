@@ -12,7 +12,7 @@ namespace fs = std::filesystem;
 void Logger::Start() {
     if (running == false) {
         running = true;
-        if (!fs::exists(log_dir) && !fs::create_directories(log_dir)) {
+        if (fs::exists(log_dir) == false && fs::create_directories(log_dir) == false) {
             throw std::runtime_error(
                 "Failed to create log directory: " + log_dir.string()
             );
@@ -113,12 +113,12 @@ void Logger::Error(const std::string& message, const bool& logToConsole) {
     Log(Level::Error, message, logToConsole);
 }
 
-void Logger::Log(Level level, const std::string& message, const bool& logToConsole) {
+void Logger::Log(const Level level, const std::string& message, const bool& logToConsole) {
     {
-        LogStruct log {
-            level,
-            message,
-            logToConsole
+        const LogStruct log {
+            .Level = level,
+            .Message = message,
+            .LogToConsole = logToConsole
         };
 
         std::lock_guard lock(Mutex);
