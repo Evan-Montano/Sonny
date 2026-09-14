@@ -53,18 +53,19 @@ namespace Dukascopy {
             true
         );
 
-        if (const Common::DateTime day(2026, Common::AUG, 24);
-            day.IsWeekday()) {
+        Common::DateTime exportDate(2026, Common::AUG, 30); // Sunday, August 30th, 2026
 
-            ExportFullDay(day);
-        }
-        else {
-            Logger::Warning(
-                std::format(
+        for (const Common::DateTime endDate(2026, Common::SEP, 5); exportDate <= endDate; exportDate.NextDay()) {
+            if (exportDate.IsWeekday()) {
+                ExportFullDay(exportDate);
+            }
+            else {
+                Logger::Warning(std::format(
                     "Weekend skipped: {}",
-                    day.ToString_Date()
-                )
-            );
+                    exportDate.ToString_Date()),
+                    true
+                );
+            }
         }
     }
 
@@ -272,7 +273,8 @@ namespace Dukascopy {
                 "Day processed: {} ({} candles)",
                 dt.ToString_Date(),
                 result.size()
-            )
+            ),
+            true
         );
 
         return result;

@@ -10,11 +10,11 @@
 namespace Common {
     
     // AM and PM macros
-    inline static constexpr std::uint8_t PM (std::uint8_t hour) {
+    inline static constexpr std::uint8_t PM (const std::uint8_t &hour) {
         return hour > 12 ? hour : hour + 12;
     }
 
-    inline static constexpr std::uint8_t AM (std::uint8_t hour) {
+    inline static constexpr std::uint8_t AM (const std::uint8_t &hour) {
         return hour;
     }
 
@@ -39,9 +39,10 @@ namespace Common {
     class DateTime {
     public:
         // CONSTRUCTOR
-        DateTime(const UnixTimestamp &ts = 0,
-                 const bool &newYorkTime = false);
-        DateTime(
+        explicit DateTime(const UnixTimestamp &ts = 0,
+                          const bool &newYorkTime = false);
+
+        explicit DateTime(
             const std::uint16_t &year = 1970,
             const std::uint8_t &month = 1,
             const std::uint8_t &day = 1,
@@ -52,35 +53,43 @@ namespace Common {
         );
 
         // METHODS
-        const UnixTimestamp &GetTimestamp() const;
+        [[nodiscard]] const UnixTimestamp &GetTimestamp() const;
         void SetTimestamp(const UnixTimestamp &ts);
 
-        const std::uint16_t &GetYear() const;
+        [[nodiscard]] const std::uint16_t &GetYear() const;
         void SetYear(const std::uint16_t &year);
 
-        const std::uint8_t &GetMonth() const;
+        [[nodiscard]] const std::uint8_t &GetMonth() const;
         void SetMonth(const std::uint8_t &month);
 
-        const std::uint8_t &GetDay() const;
+        [[nodiscard]] const std::uint8_t &GetDay() const;
         void SetDay(const std::uint8_t &day);
 
-        const std::uint8_t &GetHour() const;
+        [[nodiscard]] const std::uint8_t &GetHour() const;
         void SetHour(const std::uint8_t &hour);
 
-        const std::uint8_t &GetMinute() const;
+        [[nodiscard]] const std::uint8_t &GetMinute() const;
         void SetMinute(const std::uint8_t &minute);
 
-        const std::uint8_t &GetSecond() const;
+        [[nodiscard]] const std::uint8_t &GetSecond() const;
         void SetSecond(const std::uint8_t &second);
 
-        std::string ToString_TS() const;
-        std::string ToString_DT() const;
-        std::string ToString_Date() const;
-        std::string ToString_Time() const;
+        [[nodiscard]] std::string ToString_TS() const;
+        [[nodiscard]] std::string ToString_DT() const;
+        [[nodiscard]] std::string ToString_Date() const;
+        [[nodiscard]] std::string ToString_Time() const;
 
-        bool IsWeekday() const;
+        [[nodiscard]] bool IsWeekday() const;
 
         static DateTime GetCurrentDateTime(const bool& newYorkTime = false);
+
+        // OPERATORS
+        void NextDay();
+        [[nodiscard]] bool Equal(const DateTime &dt, const bool &dayOnly = false) const;
+        [[nodiscard]] bool operator<(const DateTime &dt) const;
+        [[nodiscard]] bool operator>(const DateTime &dt) const;
+        [[nodiscard]] bool operator<=(const DateTime &dt) const;
+        [[nodiscard]] bool operator>=(const DateTime &dt) const;
 
     private:
         // MEMBERS

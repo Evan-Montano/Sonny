@@ -206,4 +206,50 @@ namespace Common {
 		const auto now_ts = duration_cast<seconds>(now.time_since_epoch()).count();
 		return DateTime(static_cast<UnixTimestamp>(now_ts), newYorkTime);
     }
+
+    void DateTime::NextDay() {
+        using namespace std::chrono;
+        year_month_day day(
+            year(this->Year),
+            month(this->Month),
+            std::chrono::day{this->Day}
+        );
+        day = sys_days{day} + days{1};
+
+        SetYear(static_cast<int>(day.year()));
+        SetMonth(static_cast<unsigned>(day.month()));
+        SetDay(static_cast<unsigned>(day.day()));
+    }
+
+    bool DateTime::Equal(const DateTime &dt, const bool &dayOnly) const {
+        bool res = false;
+
+        if (dayOnly) {
+            res = dt.GetYear() == this->Year
+            && dt.GetMonth() == this->Month
+            && dt.GetDay() == this->Day;
+        }
+        else {
+            res = dt.GetTimestamp() == this->Timestamp;
+        }
+
+        return res;
+    }
+
+    bool DateTime::operator<(const DateTime &dt) const {
+        return this->Timestamp < dt.Timestamp;
+    }
+
+    bool DateTime::operator>(const DateTime &dt) const {
+        return this->Timestamp > dt.Timestamp;
+    }
+
+    bool DateTime::operator<=(const DateTime &dt) const {
+        return this->Timestamp <= dt.Timestamp;
+    }
+
+    bool DateTime::operator>=(const DateTime &dt) const {
+        return this->Timestamp >= dt.Timestamp;
+    }
+
 }

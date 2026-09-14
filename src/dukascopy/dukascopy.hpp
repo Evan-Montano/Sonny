@@ -18,7 +18,7 @@ namespace Dukascopy {
         CorpusExporter() = default;
 
         // METHODS
-        void BeginCorpusExport();
+        static void BeginCorpusExport();
 
     private:
         // MEMBERS
@@ -65,7 +65,7 @@ namespace Dukascopy {
         };
 
         // METHODS
-        void ExportFullDay(const Common::DateTime& dt);
+        static void ExportFullDay(const Common::DateTime& dt);
 
         [[nodiscard]]
         static std::string BuildTicksUrl(const Common::DateTime& dt);
