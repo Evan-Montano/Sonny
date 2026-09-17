@@ -53,9 +53,9 @@ namespace Dukascopy {
             true
         );
 
-        Common::DateTime exportDate(2026, Common::AUG, 30); // Sunday, August 30th, 2026
+        Common::DateTime exportDate(2026, Common::SEP, 7); // Sunday, August 30th, 2026
 
-        for (const Common::DateTime endDate(2026, Common::SEP, 5); exportDate <= endDate; exportDate.NextDay()) {
+        for (const Common::DateTime endDate(2026, Common::SEP, 7); exportDate <= endDate; exportDate.NextDay()) {
             if (exportDate.IsWeekday()) {
                 ExportFullDay(exportDate);
             }
@@ -161,8 +161,10 @@ namespace Dukascopy {
             );
         }
 
-        SaveDayCorpusToDisk(candleSticks, dt);
-        SaveDayRecordsToDisk(candleSticks, dt);
+        if (candleSticks.empty() == false) {
+            SaveDayCorpusToDisk(candleSticks, dt);
+            SaveDayRecordsToDisk(candleSticks, dt);
+        }
     }
 
     std::string CorpusExporter::BuildTicksUrl(
@@ -288,8 +290,8 @@ namespace Dukascopy {
 
         const fs::path basePath = "storage/corpus/";
 
-        if (!fs::exists(basePath) &&
-            !fs::create_directories(basePath)) {
+        if (fs::exists(basePath) == false &&
+            fs::create_directories(basePath) == false) {
 
             Logger::Error("Could not create corpus directory");
             throw std::runtime_error(
@@ -305,16 +307,12 @@ namespace Dukascopy {
             std::ios::trunc
         );
 
-        if (!corpusFileStream.is_open()) {
+        if (corpusFileStream.is_open() == false) {
             Logger::Error("Could not open corpus file");
 
             throw std::runtime_error(
                 "Could not open corpus file"
             );
-        }
-
-        if (candleSticks.empty()) {
-            return;
         }
 
         // The multiplier is metadata for the entire file,
@@ -346,8 +344,8 @@ namespace Dukascopy {
 
         const fs::path basePath = "storage/records/";
 
-        if (!fs::exists(basePath) &&
-            !fs::create_directories(basePath)) {
+        if (fs::exists(basePath) == false &&
+            fs::create_directories(basePath) == false) {
 
             Logger::Error("Could not create records directory");
 
@@ -364,7 +362,7 @@ namespace Dukascopy {
             std::ios::binary | std::ios::trunc
         );
 
-        if (!recFileStream.is_open()) {
+        if (recFileStream.is_open() == false) {
             Logger::Error(
                 std::format(
                     "Could not open record file: {}",
@@ -375,10 +373,6 @@ namespace Dukascopy {
             throw std::runtime_error(
                 "Could not open record file"
             );
-        }
-
-        if (candleSticks.empty()) {
-            return;
         }
 
         struct MLRecord {
