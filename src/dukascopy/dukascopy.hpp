@@ -76,12 +76,12 @@ namespace Dukascopy {
             const Common::DateTime& dt
         );
 
-        static void SaveDayCorpusToDisk(
+        static bool SaveDayCorpusToDisk(
             const std::vector<OHLCV_BidAsk>& candleSticks,
             const Common::DateTime& dt
         );
 
-        static void SaveDayRecordsToDisk(
+        static bool SaveDayRecordsToDisk(
             const std::vector<OHLCV_BidAsk>& candleSticks,
             const Common::DateTime& dt
         );

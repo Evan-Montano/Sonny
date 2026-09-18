@@ -4,3 +4,4 @@ storage
 config.json
 *.docx
 .vs
+vcpkg_installed

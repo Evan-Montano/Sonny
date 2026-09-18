@@ -27,6 +27,12 @@ namespace Dukascopy {
         {
             Client::SimpleCurlWrapper curl;
             Client::CurlRequest infoRequest(infoUrl);
+            infoRequest.AddHeader(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/153.0.0.0 Safari/537.36"
+            );
 
             infoRequest.SetCallback(
                 [&](const std::string& response) {
@@ -45,27 +51,35 @@ namespace Dukascopy {
             curl.ExecuteHttpRequest(infoRequest);
         }
 
-        Logger::Info(
-            std::format(
-                "Description: {}",
-                spyData.Get<std::string>("description")
-            ),
-            true
-        );
+        std::string description{};
+        spyData.TryGet<std::string>("description", description);
 
-        Common::DateTime exportDate(2026, Common::SEP, 7); // Sunday, August 30th, 2026
+        if (description.empty() == false) {
+            Logger::Info(
+                std::format(
+                    "Description: {}",
+                    description
+                ),
+                true
+            );
 
-        for (const Common::DateTime endDate(2026, Common::SEP, 7); exportDate <= endDate; exportDate.NextDay()) {
-            if (exportDate.IsWeekday()) {
-                ExportFullDay(exportDate);
+            Common::DateTime exportDate(2026, Common::AUG, 3);
+
+            for (const Common::DateTime endDate(2026, Common::AUG, 31); exportDate <= endDate; exportDate.NextDay()) {
+                if (exportDate.IsWeekday()) {
+                    ExportFullDay(exportDate);
+                }
+                else {
+                    Logger::Warning(std::format(
+                        "Weekend skipped: {}",
+                        exportDate.ToString_Date()),
+                        true
+                    );
+                }
             }
-            else {
-                Logger::Warning(std::format(
-                    "Weekend skipped: {}",
-                    exportDate.ToString_Date()),
-                    true
-                );
-            }
+        }
+        else {
+            Logger::Error("Description empty. Terminating process.");
         }
     }
 
@@ -79,6 +93,12 @@ namespace Dukascopy {
 
             Client::SimpleCurlWrapper curl;
             Client::CurlRequest hourRequest("");
+            hourRequest.AddHeader(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/153.0.0.0 Safari/537.36"
+            );
 
             hourRequest.SetCallback(
                 [&](const std::string& response) {
@@ -162,8 +182,25 @@ namespace Dukascopy {
         }
 
         if (candleSticks.empty() == false) {
-            SaveDayCorpusToDisk(candleSticks, dt);
-            SaveDayRecordsToDisk(candleSticks, dt);
+            if (SaveDayCorpusToDisk(candleSticks, dt)
+                && SaveDayRecordsToDisk(candleSticks, dt)) {
+                Logger::Info(
+                    std::format(
+                        "Day processed: {} ({} candles)",
+                        dt.ToString_Date(),
+                        candleSticks.size()
+                    ),
+                    true
+                );
+            }
+        }
+        else {
+            Logger::Warning(
+                std::format(
+                    "Day skipped: {}",
+                    dt.ToString_Date()
+                )
+            );
         }
     }
 
@@ -183,106 +220,87 @@ namespace Dukascopy {
     {
         std::vector<OHLCV_BidAsk> result;
 
-        if (tickResponses.empty()) {
-            Logger::Warning(
-                std::format(
-                    "Day skipped: {}",
-                    dt.ToString_Date()
-                )
-            );
+        if (tickResponses.empty() == false) {
+            Common::UnixTimestamp timestamp = tickResponses.front().Timestamp;
 
-            return result;
-        }
+            for (const TickResponse& response : tickResponses) {
+                const float multiplier = response.Multiplier;
 
-        Common::UnixTimestamp timestamp =
-            tickResponses.front().Timestamp;
-
-        for (const TickResponse& response : tickResponses) {
-            const float multiplier = response.Multiplier;
-
-            auto runningBid =
-                static_cast<std::int64_t>(
-                    std::round(response.Bid / multiplier)
-                );
-
-            auto runningAsk =
-                static_cast<std::int64_t>(
-                    std::round(response.Ask / multiplier)
-                );
-
-            std::int32_t runningTime =
-                (response.Timestamp + response.Times[0]) % 1000;
-
-            std::uint32_t runningBidVolume =
-                response.BidVolumes[0];
-
-            std::uint32_t runningAskVolume =
-                response.AskVolumes[0];
-
-            std::vector<std::int64_t> currentBidRow;
-            std::vector<std::int64_t> currentAskRow;
-
-            currentBidRow.push_back(runningBid);
-            currentAskRow.push_back(runningAsk);
-
-            for (std::size_t i = 1; i < response.Bids.size(); ++i) {
-                runningTime += response.Times[i];
-
-                if (runningTime >= 1000) {
-                    result.push_back(
-                        OHLCV_BidAsk{
-                            .Timestamp = ++timestamp,
-
-                            .OpenBid = currentBidRow.front(),
-                            .HighBid = *std::ranges::max_element(currentBidRow),
-                            .LowBid = *std::ranges::min_element(currentBidRow),
-                            .CloseBid = currentBidRow.back(),
-
-                            .OpenAsk = currentAskRow.front(),
-                            .HighAsk = *std::ranges::max_element(currentAskRow),
-                            .LowAsk = *std::ranges::min_element(currentAskRow),
-                            .CloseAsk = currentAskRow.back(),
-
-                            .BidVolume = runningBidVolume,
-                            .AskVolume = runningAskVolume,
-
-                            .Multiplier = multiplier
-                        }
+                auto runningBid =
+                    static_cast<std::int64_t>(
+                        std::round(response.Bid / multiplier)
                     );
 
-                    currentBidRow.clear();
-                    currentAskRow.clear();
+                auto runningAsk =
+                    static_cast<std::int64_t>(
+                        std::round(response.Ask / multiplier)
+                    );
 
-                    runningBidVolume = 0;
-                    runningAskVolume = 0;
+                std::int32_t runningTime = 
+                    (response.Timestamp + response.Times[0]) % 1000;
 
-                    runningTime -= 1000;
-                }
+                std::uint32_t runningBidVolume =
+                    response.BidVolumes[0];
 
-                runningBid += response.Bids[i];
-                runningAsk += response.Asks[i];
+                std::uint32_t runningAskVolume =
+                    response.AskVolumes[0];
 
-                runningBidVolume += response.BidVolumes[i];
-                runningAskVolume += response.AskVolumes[i];
+                std::vector<std::int64_t> currentBidRow;
+                std::vector<std::int64_t> currentAskRow;
 
                 currentBidRow.push_back(runningBid);
                 currentAskRow.push_back(runningAsk);
+
+                for (std::size_t i = 1; i < response.Bids.size(); ++i) {
+                    runningTime += response.Times[i];
+
+                    if (runningTime >= 1000) {
+                        result.push_back(
+                            OHLCV_BidAsk{
+                                .Timestamp = ++timestamp,
+
+                                .OpenBid = currentBidRow.front(),
+                                .HighBid = *std::ranges::max_element(currentBidRow),
+                                .LowBid = *std::ranges::min_element(currentBidRow),
+                                .CloseBid = currentBidRow.back(),
+
+                                .OpenAsk = currentAskRow.front(),
+                                .HighAsk = *std::ranges::max_element(currentAskRow),
+                                .LowAsk = *std::ranges::min_element(currentAskRow),
+                                .CloseAsk = currentAskRow.back(),
+
+                                .BidVolume = runningBidVolume,
+                                .AskVolume = runningAskVolume,
+
+                                .Multiplier = multiplier
+                            }
+                        );
+
+                        currentBidRow.clear();
+                        currentAskRow.clear();
+
+                        runningBidVolume = 0;
+                        runningAskVolume = 0;
+
+                        runningTime -= 1000;
+                    }
+
+                    runningBid += response.Bids[i];
+                    runningAsk += response.Asks[i];
+
+                    runningBidVolume += response.BidVolumes[i];
+                    runningAskVolume += response.AskVolumes[i];
+
+                    currentBidRow.push_back(runningBid);
+                    currentAskRow.push_back(runningAsk);
+                }
             }
         }
-
-        Logger::Info(
-            std::format(
-                "Day processed: {} ({} candles)",
-                dt.ToString_Date(),
-                result.size()
-            ),
-            true
-        );
 
         return result;
     }
 
-    void CorpusExporter::SaveDayCorpusToDisk(
+    bool CorpusExporter::SaveDayCorpusToDisk(
         const std::vector<OHLCV_BidAsk>& candleSticks,
         const Common::DateTime& dt)
     {
@@ -334,9 +352,11 @@ namespace Dukascopy {
                 << bidAsk.CloseAsk
                 << '\n';
         }
+        corpusFileStream.close();
+        return true;
     }
 
-    void CorpusExporter::SaveDayRecordsToDisk(
+    bool CorpusExporter::SaveDayRecordsToDisk(
         const std::vector<OHLCV_BidAsk>& candleSticks,
         const Common::DateTime& dt)
     {
@@ -453,6 +473,8 @@ namespace Dukascopy {
             previousMid = mid;
             previousSpread = spread;
         }
+        recFileStream.close();
+        return true;
     }
 
 }
