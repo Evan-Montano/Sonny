@@ -7,6 +7,7 @@
 #include "../common/jsonutil.hpp"
 #include "../common/logger.hpp"
 #include "../client/simplecurlwrapper.hpp"
+#include "../common/datetime.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -14,197 +15,54 @@
 #include <format>
 #include <fstream>
 #include <stdexcept>
+#include <cstdint>
+#include <string>
+#include <vector>
 
 namespace Dukascopy {
 
-    void CorpusExporter::BeginCorpusExport() {
-        Logger::Info("========================================", true);
-        Logger::Info("      Beginning full corpus export", true);
-        Logger::Info("========================================", true);
+    inline static const std::string infoUrl =
+        "https://jetta.dukascopy.com/v1/instruments/SPY.US-USD";
 
-        Common::JsonUtility spyData(std::string("{}"));
+    inline static const std::string ticksUrlBase =
+        "https://jetta.dukascopy.com/v1/ticks/SPY.US-USD/";
 
-        {
-            Client::SimpleCurlWrapper curl;
-            Client::CurlRequest infoRequest(infoUrl);
-            infoRequest.AddHeader(
-                "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/153.0.0.0 Safari/537.36"
-            );
+    struct ApiTickResponse {
+        Common::UnixTimestamp Timestamp;
+        float Multiplier;
+        float Ask;
+        float Bid;
 
-            infoRequest.SetCallback(
-                [&](const std::string& response) {
-                    if (response.empty() == false) {
-                        spyData = Common::JsonUtility(response);
-                    }
-                    else {
-                        Logger::Error(
-                            "Unable to access info URI. Terminating process.",
-                            true
-                        );
-                    }
-                }
-            );
+        // Deltas.
+        std::vector<std::int32_t> Times;
+        std::vector<std::int16_t> Asks;
+        std::vector<std::int16_t> Bids;
 
-            curl.ExecuteHttpRequest(infoRequest);
-        }
+        // Actual volume values.
+        std::vector<std::int32_t> AskVolumes;
+        std::vector<std::int32_t> BidVolumes;
+    };
 
-        std::string description{};
-        spyData.TryGet<std::string>("description", description);
+    struct OHLCV_BidAsk {
+        Common::UnixTimestamp Timestamp;
 
-        if (description.empty() == false) {
-            Logger::Info(
-                std::format(
-                    "Description: {}",
-                    description
-                ),
-                true
-            );
+        std::int64_t OpenBid;
+        std::int64_t HighBid;
+        std::int64_t LowBid;
+        std::int64_t CloseBid;
 
-            Common::DateTime exportDate(2026, Common::AUG, 3);
+        std::int64_t OpenAsk;
+        std::int64_t HighAsk;
+        std::int64_t LowAsk;
+        std::int64_t CloseAsk;
 
-            for (const Common::DateTime endDate(2026, Common::AUG, 31); exportDate <= endDate; exportDate.NextDay()) {
-                if (exportDate.IsWeekday()) {
-                    ExportFullDay(exportDate);
-                }
-                else {
-                    Logger::Warning(std::format(
-                        "Weekend skipped: {}",
-                        exportDate.ToString_Date()),
-                        true
-                    );
-                }
-            }
-        }
-        else {
-            Logger::Error("Description empty. Terminating process.");
-        }
-    }
+        std::uint32_t BidVolume;
+        std::uint32_t AskVolume;
 
-    void CorpusExporter::ExportFullDay(const Common::DateTime& dt) {
-        std::vector<OHLCV_BidAsk> candleSticks;
+        float Multiplier;
+    };
 
-        {
-            const std::string ticksUrl = BuildTicksUrl(dt);
-
-            std::vector<TickResponse> tickResponses;
-
-            Client::SimpleCurlWrapper curl;
-            Client::CurlRequest hourRequest("");
-            hourRequest.AddHeader(
-                "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/153.0.0.0 Safari/537.36"
-            );
-
-            hourRequest.SetCallback(
-                [&](const std::string& response) {
-                    const Common::JsonUtility hourJson(response);
-
-                    TickResponse res{};
-
-                    hourJson.TryGet<Common::UnixTimestamp>(
-                        "timestamp",
-                        res.Timestamp
-                    );
-
-                    hourJson.TryGet<float>(
-                        "multiplier",
-                        res.Multiplier
-                    );
-
-                    hourJson.TryGet<float>(
-                        "bid",
-                        res.Bid
-                    );
-
-                    hourJson.TryGet<float>(
-                        "ask",
-                        res.Ask
-                    );
-
-                    hourJson.TryGet<std::vector<std::int32_t>>(
-                        "times",
-                        res.Times
-                    );
-
-                    hourJson.TryGet<std::vector<std::int16_t>>(
-                        "asks",
-                        res.Asks
-                    );
-
-                    hourJson.TryGet<std::vector<std::int16_t>>(
-                        "bids",
-                        res.Bids
-                    );
-
-                    hourJson.TryGet<std::vector<std::int32_t>>(
-                        "askVolumes",
-                        res.AskVolumes
-                    );
-
-                    hourJson.TryGet<std::vector<std::int32_t>>(
-                        "bidVolumes",
-                        res.BidVolumes
-                    );
-
-                    if (res.Timestamp > 0 &&
-                        res.Multiplier > 0 &&
-                        res.Bid > 0 &&
-                        res.Ask > 0 &&
-                        res.Times.empty() == false &&
-                        res.Asks.empty() == false &&
-                        res.Bids.empty() == false &&
-                        res.AskVolumes.empty() == false &&
-                        res.BidVolumes.empty() == false) {
-
-                        tickResponses.push_back(std::move(res));
-                    }
-                }
-            );
-
-            // Dukascopy hours for the regular US trading session.
-            for (std::size_t hour = 13; hour < 20; ++hour) {
-                hourRequest.ReassignUri(
-                    ticksUrl + std::to_string(hour)
-                );
-
-                curl.ExecuteHttpRequest(hourRequest);
-            }
-
-            candleSticks = ExtractOneSecondCandlesticks(
-                tickResponses,
-                dt
-            );
-        }
-
-        if (candleSticks.empty() == false) {
-            if (SaveDayCorpusToDisk(candleSticks, dt)
-                && SaveDayRecordsToDisk(candleSticks, dt)) {
-                Logger::Info(
-                    std::format(
-                        "Day processed: {} ({} candles)",
-                        dt.ToString_Date(),
-                        candleSticks.size()
-                    ),
-                    true
-                );
-            }
-        }
-        else {
-            Logger::Warning(
-                std::format(
-                    "Day skipped: {}",
-                    dt.ToString_Date()
-                )
-            );
-        }
-    }
-
-    std::string CorpusExporter::BuildTicksUrl(
+    std::string BuildTicksUrl(
         const Common::DateTime& dt)
     {
         return ticksUrlBase +
@@ -213,9 +71,9 @@ namespace Dukascopy {
             std::to_string(dt.GetDay()) + "/";
     }
 
-    std::vector<CorpusExporter::OHLCV_BidAsk>
-    CorpusExporter::ExtractOneSecondCandlesticks(
-        const std::vector<TickResponse>& tickResponses,
+    std::vector<OHLCV_BidAsk>
+    ExtractOneSecondCandlesticks(
+        const std::vector<ApiTickResponse>& tickResponses,
         const Common::DateTime& dt)
     {
         std::vector<OHLCV_BidAsk> result;
@@ -223,7 +81,7 @@ namespace Dukascopy {
         if (tickResponses.empty() == false) {
             Common::UnixTimestamp timestamp = tickResponses.front().Timestamp;
 
-            for (const TickResponse& response : tickResponses) {
+            for (const ApiTickResponse& response : tickResponses) {
                 const float multiplier = response.Multiplier;
 
                 auto runningBid =
@@ -300,7 +158,7 @@ namespace Dukascopy {
         return result;
     }
 
-    bool CorpusExporter::SaveDayCorpusToDisk(
+    bool SaveDayCorpusToDisk(
         const std::vector<OHLCV_BidAsk>& candleSticks,
         const Common::DateTime& dt)
     {
@@ -356,7 +214,7 @@ namespace Dukascopy {
         return true;
     }
 
-    bool CorpusExporter::SaveDayRecordsToDisk(
+    bool SaveDayRecordsToDisk(
         const std::vector<OHLCV_BidAsk>& candleSticks,
         const Common::DateTime& dt)
     {
@@ -475,6 +333,193 @@ namespace Dukascopy {
         }
         recFileStream.close();
         return true;
+    }
+
+    void ExportFullDay(const Common::DateTime& dt) {
+        std::vector<OHLCV_BidAsk> candleSticks;
+
+        {
+            const std::string ticksUrl = BuildTicksUrl(dt);
+
+            std::vector<ApiTickResponse> tickResponses;
+
+            Client::SimpleCurlWrapper curl;
+            Client::CurlRequest hourRequest("");
+            hourRequest.AddHeader(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/153.0.0.0 Safari/537.36"
+            );
+
+            hourRequest.SetCallback(
+                [&](const std::string& response) {
+                    const Common::JsonUtility hourJson(response);
+
+                    ApiTickResponse res{};
+
+                    hourJson.TryGet<Common::UnixTimestamp>(
+                        "timestamp",
+                        res.Timestamp
+                    );
+
+                    hourJson.TryGet<float>(
+                        "multiplier",
+                        res.Multiplier
+                    );
+
+                    hourJson.TryGet<float>(
+                        "bid",
+                        res.Bid
+                    );
+
+                    hourJson.TryGet<float>(
+                        "ask",
+                        res.Ask
+                    );
+
+                    hourJson.TryGet<std::vector<std::int32_t>>(
+                        "times",
+                        res.Times
+                    );
+
+                    hourJson.TryGet<std::vector<std::int16_t>>(
+                        "asks",
+                        res.Asks
+                    );
+
+                    hourJson.TryGet<std::vector<std::int16_t>>(
+                        "bids",
+                        res.Bids
+                    );
+
+                    hourJson.TryGet<std::vector<std::int32_t>>(
+                        "askVolumes",
+                        res.AskVolumes
+                    );
+
+                    hourJson.TryGet<std::vector<std::int32_t>>(
+                        "bidVolumes",
+                        res.BidVolumes
+                    );
+
+                    if (res.Timestamp > 0 &&
+                        res.Multiplier > 0 &&
+                        res.Bid > 0 &&
+                        res.Ask > 0 &&
+                        res.Times.empty() == false &&
+                        res.Asks.empty() == false &&
+                        res.Bids.empty() == false &&
+                        res.AskVolumes.empty() == false &&
+                        res.BidVolumes.empty() == false) {
+
+                        tickResponses.push_back(std::move(res));
+                    }
+                }
+            );
+
+            // Dukascopy hours for the regular US trading session.
+            for (std::size_t hour = 13; hour < 20; ++hour) {
+                hourRequest.ReassignUri(
+                    ticksUrl + std::to_string(hour)
+                );
+
+                curl.ExecuteHttpRequest(hourRequest);
+            }
+
+            candleSticks = ExtractOneSecondCandlesticks(
+                tickResponses,
+                dt
+            );
+        }
+
+        if (candleSticks.empty() == false) {
+            if (SaveDayCorpusToDisk(candleSticks, dt)
+                && SaveDayRecordsToDisk(candleSticks, dt)) {
+                Logger::Info(
+                    std::format(
+                        "Day processed: {} ({} candles)",
+                        dt.ToString_Date(),
+                        candleSticks.size()
+                    ),
+                    true
+                );
+            }
+        }
+        else {
+            Logger::Warning(
+                std::format(
+                    "Day skipped: {}",
+                    dt.ToString_Date()
+                )
+            );
+        }
+    }
+
+    void BeginCorpusExport() {
+        Logger::Info("========================================", true);
+        Logger::Info("      Beginning full corpus export", true);
+        Logger::Info("========================================", true);
+
+        Common::JsonUtility spyData(std::string("{}"));
+
+        {
+            Client::SimpleCurlWrapper curl;
+            Client::CurlRequest infoRequest(infoUrl);
+            infoRequest.AddHeader(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/153.0.0.0 Safari/537.36"
+            );
+
+            infoRequest.SetCallback(
+                [&](const std::string& response) {
+                    if (response.empty() == false) {
+                        spyData = Common::JsonUtility(response);
+                    }
+                    else {
+                        Logger::Error(
+                            "Unable to access info URI. Terminating process.",
+                            true
+                        );
+                    }
+                }
+            );
+
+            curl.ExecuteHttpRequest(infoRequest);
+        }
+
+        std::string description{};
+        spyData.TryGet<std::string>("description", description);
+
+        if (description.empty() == false) {
+            Logger::Info(
+                std::format(
+                    "Description: {}",
+                    description
+                ),
+                true
+            );
+
+            Common::DateTime exportDate(2026, Common::AUG, 3);
+
+            for (const Common::DateTime endDate(2026, Common::AUG, 31); exportDate <= endDate; exportDate.NextDay()) {
+                if (exportDate.IsWeekday()) {
+                    ExportFullDay(exportDate);
+                }
+                else {
+                    Logger::Warning(std::format(
+                        "Weekend skipped: {}",
+                        exportDate.ToString_Date()),
+                        true
+                    );
+                }
+            }
+        }
+        else {
+            Logger::Error("Description empty. Terminating process.");
+        }
     }
 
 }

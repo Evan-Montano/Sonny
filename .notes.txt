@@ -1,6 +1,16 @@
 =====================================================================================================
+HOW TO BUILD
 
-To build the "./build" directory:
-cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+Install dependencies:
+
+
+Build FAISS:
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local/faiss" -DFAISS_ENABLE_GPU=OFF -DFAISS_ENABLE_PYTHON=OFF -DBUILD_TESTING=OFF
+
+cmake --build build --target faiss
+cmake --install build
+
+Building Sonny:
+cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_PREFIX_PATH="$HOME/.local/faiss"
 
 =====================================================================================================
