@@ -42,6 +42,7 @@ target_sources(sonny
         src/dukascopy/dukascopy.cpp
         src/core/storage.cpp
         src/core/faiss.cpp
+        src/core/setup.cpp
 )
 
 find_package(CURL REQUIRED)
