@@ -5,3 +5,5 @@ config.json
 *.docx
 .vs
 vcpkg_installed
+.cache
+faiss

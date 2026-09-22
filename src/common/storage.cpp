@@ -4,6 +4,8 @@
 #include "storage.hpp"
 #include "logger.hpp"
 
+#include <format>
+
 namespace Common {
     namespace Storage {
 
@@ -21,7 +23,7 @@ namespace Common {
                     std::filesystem::remove(path);
             }
             catch (const std::filesystem::filesystem_error &error) {
-                Logger::Error(std::format("Error while deleting file at path {}: {}", path, error.what()), true);
+                Logger::Error(std::format("Error while deleting file at path {}: {}", path.string(), error.what()), true);
             } 
         }
 
@@ -30,7 +32,7 @@ namespace Common {
                 std::filesystem::remove_all(path);
             }
             catch (const std::filesystem::filesystem_error &error) {
-                Logger::Error(std::format("Error while deleting directory at path {}: {}", path, error.what()), true);
+                Logger::Error(std::format("Error while deleting directory at path {}: {}", path.string(), error.what()), true);
             } 
         }
 

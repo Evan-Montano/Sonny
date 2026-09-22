@@ -2,6 +2,8 @@
 
 TODOing the project description since we are still in progress, but putting the build instructions here because I'm certainly going to forget something.
 
+Yes, I had AI help me format the readme because it can make the markdown syntax prettier than I can.
+
 ## Linux Build Instructions
 
 I'm providing examples for **Fedora**, my favorite, and **Ubuntu / WSL Ubuntu**.
