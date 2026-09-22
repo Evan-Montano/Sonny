@@ -12,6 +12,9 @@
 #include <thread>
 #include <queue>
 #include <fstream>
+#include <deque>
+#include <vector>
+#include <functional>
 
 class Logger{
 public:
@@ -40,6 +43,8 @@ public:
     static void Warning(const std::string& message, const bool& logToConsole = false);
     static void Error(const std::string& message, const bool& logToConsole = false);
 
+    static std::vector<std::string> GetConsoleMessages();
+
 private:
     // DESTRUCTOR
     ~Logger() {
@@ -47,16 +52,20 @@ private:
     }
 
     // MEMBERS
+    static inline constexpr std::size_t MAX_CONSOLE_MESSAGES = 9;
     static inline std::filesystem::path log_dir = "storage/logs";
 
     static inline std::mutex Mutex;
     static inline std::condition_variable Cv;
     static inline std::queue<LogStruct> MessageQueue;
+    static inline std::deque<std::string> ConsoleMessages;
     static inline std::thread WorkerThread;
     static inline std::ofstream LogFile;
     static inline bool running = false;
 
     // METHODS
+    static void SetConsoleRefreshCallback(std::function<void()> callback);
+    static inline std::function<void()> ConsoleRefreshCallback;
     static void Log(Level level, const std::string& message, const bool& logToConsole = false);
     static void Observer();
 };

@@ -90,6 +90,7 @@ namespace Common {
         [[nodiscard]] bool operator>(const DateTime &dt) const;
         [[nodiscard]] bool operator<=(const DateTime &dt) const;
         [[nodiscard]] bool operator>=(const DateTime &dt) const;
+        [[nodiscard]] long operator-(const DateTime &dt) const;
 
     private:
         // MEMBERS

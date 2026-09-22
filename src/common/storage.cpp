@@ -9,7 +9,7 @@
 namespace Common {
     namespace Storage {
 
-        bool FileExists(const std::filesystem::path &path) {
+        bool FileExists(const std::filesystem::path& path) {
             return std::filesystem::exists(path);
         }
 

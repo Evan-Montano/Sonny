@@ -9,12 +9,14 @@
 #include "../common/storage.hpp"
 #include "../client/simplecurlwrapper.hpp"
 #include "../core/setup.hpp"
+#include "../ui/ui.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <ftxui/dom/elements.hpp>
 #include <stdexcept>
 #include <cstdint>
 #include <string>
@@ -430,8 +432,7 @@ namespace Dukascopy {
                         "Day processed: {} ({} candles)",
                         dt.ToString_Date(),
                         candleSticks.size()
-                    ),
-                    true
+                    ), true
                 );
             }
         }
@@ -440,9 +441,27 @@ namespace Dukascopy {
                 std::format(
                     "Day skipped: {}",
                     dt.ToString_Date()
-                )
+                ), true
             );
         }
+    }
+
+    std::string UpdateStatusBar(const long& daysElapsed) {
+
+        const static long totalDays = Core::Setup::END_DATE - Core::Setup::BEGIN_DATE;
+        constexpr std::size_t BAR_WIDTH = 50;
+        const double progress = std::clamp(
+            static_cast<double>(daysElapsed) / totalDays,
+            0.0,
+            1.0
+        );
+
+        const std::size_t filled = static_cast<std::size_t>(progress * BAR_WIDTH);
+
+        return "[" +
+            std::string(filled, '=') +
+            std::string(BAR_WIDTH - filled, ' ') +
+            "]";
     }
 
     void BeginCorpusExport(bool replaceExisting) {
@@ -453,6 +472,17 @@ namespace Dukascopy {
             Logger::Info(headerMessage, true);
             Logger::Info("========================================", true);
         }
+
+        std::string status = "";
+        auto view = UI::Get().PushView([&] {
+            return ftxui::vbox({
+                ftxui::text("Downloading Historical Records") | ftxui::bold,
+                ftxui::separator(),
+                ftxui::text(status)
+            });
+        });
+
+        UI::Get().Refresh();
 
         Common::JsonUtility spyData(std::string("{}"));
 
@@ -473,7 +503,7 @@ namespace Dukascopy {
                     }
                     else {
                         Logger::Error(
-                            "Unable to access info URI. Terminating process.",
+                            "Unable to access info URI. Terminating process.", 
                             true
                         );
                     }
@@ -491,18 +521,17 @@ namespace Dukascopy {
                 std::format(
                     "Description: {}",
                     description
-                ),
-                true
+                ), true
             );
 
             using namespace Common::Storage;
             Common::DateTime exportDate = Core::Setup::BEGIN_DATE;
 
-            for (; exportDate <= Core::Setup::END_DATE; exportDate.NextDay()) {
+            for (long daysElapsed = 0; exportDate <= Core::Setup::END_DATE; exportDate.NextDay()) {
                 const std::filesystem::path corpusPath = 
-                    CORPUS_BASE_PATH / (exportDate.ToString_DT() + ".corpus");
+                    CORPUS_BASE_PATH / (exportDate.ToString_Date() + ".corpus");
                 const std::filesystem::path recordsPath = 
-                    RECORDS_BASE_PATH / (exportDate.ToString_DT() + ".rec");
+                    RECORDS_BASE_PATH / (exportDate.ToString_Date() + ".rec");
 
                 if (replaceExisting) {
                     // Ensure that the record file does not exist, or is empty,
@@ -544,10 +573,14 @@ namespace Dukascopy {
                         }
                     }
                 }
+
+                ++daysElapsed;
+                status = UpdateStatusBar(daysElapsed);
+                UI::Get().Refresh();
             }
         }
         else {
-            Logger::Error("Description empty. Terminating process.");
+            Logger::Error("Description empty. Terminating process.", true);
         }
     }
 

@@ -3,6 +3,7 @@
 
 #include "logger.hpp"
 #include "datetime.hpp"
+#include "../ui/ui.hpp"
 
 #include <stdexcept>
 #include <iostream>
@@ -10,6 +11,10 @@
 namespace fs = std::filesystem;
 
 void Logger::Start() {
+    Logger::SetConsoleRefreshCallback([] {
+        UI::Get().Refresh();
+    });
+
     if (running == false) {
         running = true;
         if (fs::exists(log_dir) == false && fs::create_directories(log_dir) == false) {
@@ -83,16 +88,25 @@ void Logger::Observer() {
         
         std::string time = Common::DateTime::GetCurrentDateTime().ToString_Time();
 
-        LogFile << "[" << time << "] "
-            << "[" << level_string << "] "
-            << log.Message
-            << '\n';
-            
+        const std::string formatted = 
+            "[" + time + "] "
+            "[" + level_string + "] "
+            + log.Message;
+        
+        LogFile << formatted << '\n';
+
         if (log.LogToConsole) {
-            std::cout << "[" << time << "] "
-                << "[" << level_string << "] "
-                << log.Message
-                << std::endl;
+            std::lock_guard lock(Mutex);
+
+            ConsoleMessages.push_back(formatted);
+
+            if (ConsoleMessages.size() > MAX_CONSOLE_MESSAGES) {
+                ConsoleMessages.pop_front();
+            }
+
+            if (ConsoleRefreshCallback) {
+                ConsoleRefreshCallback();
+            }
         }
     }
 }
@@ -126,4 +140,16 @@ void Logger::Log(const Level level, const std::string& message, const bool& logT
     }
 
     Cv.notify_one();
+}
+
+std::vector<std::string> Logger::GetConsoleMessages() {
+    std::lock_guard lock(Mutex);
+    return {
+        ConsoleMessages.begin(),
+        ConsoleMessages.end()
+    };
+}
+
+void Logger::SetConsoleRefreshCallback(std::function<void()> callback) {
+    ConsoleRefreshCallback = std::move(callback);
 }

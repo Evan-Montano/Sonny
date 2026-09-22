@@ -3,21 +3,29 @@
 
 #pragma once
 
+#include "../common/logger.hpp"
 #include "../core/setup.hpp"
 
 #include <ftxui/ftxui.hpp>
+#include <thread>
 
 using namespace ftxui;
 
 class UI {
 private:
     // MEMBERS
-    App screen = ScreenInteractive::TerminalOutput();
+    App screen = ScreenInteractive::Fullscreen();
 
-    // Menu state
+    /**
+     * @brief Menu state
+     * 
+     */
     int current_menu = 0;
 
-    // Selected item in each menu.
+    /**
+     * @brief Selected item in each menu.
+     * 
+     */
     int main_selected = 0;
     int setup_selected = 0;
 
@@ -51,10 +59,26 @@ private:
     UI &operator=(UI&&) = delete;
 
     // METHODS
+
+    /**
+     * @brief Once an operation thread is finished, this restores the previous menu.
+     * 
+     */
     void RestorePreviousMenu() {
         this->temporary_renderer = nullptr;
         this->current_menu = this->temporary_previous_menu;
         this->screen.PostEvent(Event::Custom);
+    }
+
+    /**
+     * @brief Used to start a separate working thread for all operations.
+     * 
+     * @param callback 
+     */
+    void DispatchOperation(std::function<void()> callback) {
+        std::thread([cb = std::move(callback)] {
+            cb();
+        }).detach();
     }
 
 public:
@@ -132,22 +156,22 @@ public:
             switch (this->setup_selected) {
                 case 0:
                     // Total setup process
-                    Core::Setup::ExecuteTotalSetupProcess();
+                    DispatchOperation(&Core::Setup::ExecuteTotalSetupProcess);
                     break;
 
                 case 1:
                     // Download all record files
-                    Core::Setup::ExecuteDownloadAllRecordFiles();
+                    DispatchOperation(&Core::Setup::ExecuteDownloadAllRecordFiles);
                     break;
 
                 case 2:
                     // Download missing records, keep existing
-                    Core::Setup::ExecuteDownloadAllMissingRecordFiles();
+                    DispatchOperation(&Core::Setup::ExecuteDownloadAllMissingRecordFiles);
                     break;
 
                 case 3:
                     // Create vector files
-                    Core::Setup::ExecuteCreateVectorFiles();
+                    DispatchOperation(&Core::Setup::ExecuteCreateVectorFiles);
                     break;
 
                 case 4:
@@ -186,21 +210,55 @@ public:
             &this->current_menu
         );
 
+        // Console window
+        auto console_view = Renderer([&] {
+            const auto messages = Logger::GetConsoleMessages();
+
+            Elements lines;
+
+            for (const auto& message : messages) {
+                lines.push_back(text(message));
+            }
+
+            if (lines.empty()) {
+                lines.push_back(text("Console is empty."));
+            }
+
+            return window(
+                text("Console") | bold,
+                vbox(std::move(lines))
+            );
+        });
+
         // UI
         auto renderer = Renderer(menus, [&] {
+            Element main_view;
+
             if (this->current_menu == 2) {
-                return temporary_view->Render();
+                main_view = temporary_view->Render();
+            }
+            else {
+                main_view = vbox({
+                    text(this->current_menu == 0 ? "Menu" : "Setup")
+                        | bold
+                        | center,
+
+                    separator(),
+
+                    menus->Render()
+                });
             }
 
             return vbox({
-                text(this->current_menu == 0 ? "Menu" : "Setup")
-                    | bold
-                    | center,
+                main_view | flex,
 
-                separator(),
+                // Space between the UI and console.
+                text("") | size(HEIGHT, EQUAL, 1),
 
-                menus->Render()
-            });
+                // Console: exactly 12 terminal rows tall.
+                console_view->Render()
+                    | size(HEIGHT, EQUAL, 12)
+            }) | flex;
         });
 
         // Global keyboard handling
@@ -238,35 +296,3 @@ public:
     }
 
 };
-
-// Sample usage
-// void ExecuteDownloadAllRecordFiles() {
-
-//     std::string status = "Starting download...";
-
-//     auto view = UI::Get().PushView([&] {
-//         return ftxui::vbox({
-//             ftxui::text("Download Historical Records") | ftxui::bold,
-//             ftxui::separator(),
-//             ftxui::text(status)
-//         });
-//     });
-
-//     UI::Get().Refresh();
-
-//     status = "Connecting to Dukascopy...";
-//     UI::Get().Refresh();
-
-//     // Actual download work...
-    
-//     status = "Downloading records...";
-//     UI::Get().Refresh();
-
-//     // More work...
-
-//     status = "Download complete.";
-//     UI::Get().Refresh();
-
-//     // `view` goes out of scope when this function returns.
-//     // The Setup menu automatically comes back.
-// }

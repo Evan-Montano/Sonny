@@ -252,4 +252,23 @@ namespace Common {
         return this->Timestamp >= dt.Timestamp;
     }
 
+    long DateTime::operator-(const DateTime &dt) const {
+        using namespace std::chrono;
+
+        year_month_day date1(
+            year(this->Year),
+            month(this->Month),
+            std::chrono::day{this->Day}
+        );
+
+        year_month_day date2(
+            year(dt.GetYear()),
+            month(dt.GetMonth()),
+            std::chrono::day{dt.GetDay()}
+        );
+
+        auto duration = sys_days{date1} - sys_days{date2};
+        return duration.count();
+    }
+
 }
