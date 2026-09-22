@@ -2,7 +2,6 @@
 // Implementation for namespace holding references to setup processes.
 
 #include "setup.hpp"
-#include "storage.hpp"
 #include "../dukascopy/dukascopy.hpp"
 
 namespace Core {
@@ -13,11 +12,11 @@ namespace Core {
         }
 
         void ExecuteDownloadAllRecordFiles() {
-            Dukascopy::BeginCorpusExport();
+            Dukascopy::BeginCorpusExport(true);
         }
 
         void ExecuteDownloadAllMissingRecordFiles() {
-
+            Dukascopy::BeginCorpusExport();
         }
 
         void ExecuteCreateVectorFiles() {

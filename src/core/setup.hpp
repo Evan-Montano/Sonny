@@ -3,8 +3,23 @@
 
 #pragma once
 
+#include "../common/datetime.hpp"
+
 namespace Core {
     namespace Setup {
+
+        /**
+         * @brief Begin date for export data.
+         * 
+         */
+        const Common::DateTime BEGIN_DATE(2026, Common::AUG, 3);
+
+        /**
+         * @brief End date for export data.
+         * 
+         */
+        const Common::DateTime END_DATE(2026, Common::AUG, 31);
+
 
         /**
          * @brief Process including all setup steps: Corpus download, create vector files.

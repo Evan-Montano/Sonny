@@ -9,5 +9,5 @@ namespace Dukascopy {
      * @brief Entry to corpus export procedure.
      * 
      */
-    void BeginCorpusExport();
+    void BeginCorpusExport(bool replaceExisting = false);
 }

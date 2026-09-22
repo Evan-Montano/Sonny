@@ -6,8 +6,9 @@
 
 #include "../common/jsonutil.hpp"
 #include "../common/logger.hpp"
+#include "../common/storage.hpp"
 #include "../client/simplecurlwrapper.hpp"
-#include "../common/datetime.hpp"
+#include "../core/setup.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -162,12 +163,10 @@ namespace Dukascopy {
         const std::vector<OHLCV_BidAsk>& candleSticks,
         const Common::DateTime& dt)
     {
-        namespace fs = std::filesystem;
+        using namespace Common::Storage;
 
-        const fs::path basePath = "storage/corpus/";
-
-        if (fs::exists(basePath) == false &&
-            fs::create_directories(basePath) == false) {
+        if (FileExists(CORPUS_BASE_PATH) == false &&
+            CreateDirectory(CORPUS_BASE_PATH) == false) {
 
             Logger::Error("Could not create corpus directory");
             throw std::runtime_error(
@@ -175,14 +174,10 @@ namespace Dukascopy {
             );
         }
 
-        const fs::path corpusFile =
-            basePath / (dt.ToString_Date() + ".corpus");
+        const std::string corpusFile = (dt.ToString_Date() + ".corpus");
 
-        std::ofstream corpusFileStream(
-            corpusFile,
-            std::ios::trunc
-        );
-
+        std::ofstream corpusFileStream = OpenFile_App(CORPUS_BASE_PATH, corpusFile);
+        
         if (corpusFileStream.is_open() == false) {
             Logger::Error("Could not open corpus file");
 
@@ -218,12 +213,10 @@ namespace Dukascopy {
         const std::vector<OHLCV_BidAsk>& candleSticks,
         const Common::DateTime& dt)
     {
-        namespace fs = std::filesystem;
+        using namespace Common::Storage;
 
-        const fs::path basePath = "storage/records/";
-
-        if (fs::exists(basePath) == false &&
-            fs::create_directories(basePath) == false) {
+        if (FileExists(Common::Storage::RECORDS_BASE_PATH) == false &&
+            CreateDirectory(Common::Storage::RECORDS_BASE_PATH) == false) {
 
             Logger::Error("Could not create records directory");
 
@@ -232,19 +225,15 @@ namespace Dukascopy {
             );
         }
 
-        const fs::path recFile =
-            basePath / (dt.ToString_Date() + ".rec");
-
-        std::ofstream recFileStream(
-            recFile,
-            std::ios::binary | std::ios::trunc
-        );
+        std::string recFile = (dt.ToString_Date() + ".rec");
+        std::ofstream recFileStream = 
+            OpenFile_App(Common::Storage::RECORDS_BASE_PATH, recFile, true);
 
         if (recFileStream.is_open() == false) {
             Logger::Error(
                 std::format(
                     "Could not open record file: {}",
-                    recFile.string()
+                    recFile
                 )
             );
 
@@ -456,10 +445,14 @@ namespace Dukascopy {
         }
     }
 
-    void BeginCorpusExport() {
-        Logger::Info("========================================", true);
-        Logger::Info("      Beginning full corpus export", true);
-        Logger::Info("========================================", true);
+    void BeginCorpusExport(bool replaceExisting) {
+        {
+            std::string headerMessage = replaceExisting ? 
+            "      Beginning full corpus export" : "     Beginning missing records export";
+            Logger::Info("========================================", true);
+            Logger::Info(headerMessage, true);
+            Logger::Info("========================================", true);
+        }
 
         Common::JsonUtility spyData(std::string("{}"));
 
@@ -502,18 +495,54 @@ namespace Dukascopy {
                 true
             );
 
-            Common::DateTime exportDate(2026, Common::AUG, 3);
+            using namespace Common::Storage;
+            Common::DateTime exportDate = Core::Setup::BEGIN_DATE;
 
-            for (const Common::DateTime endDate(2026, Common::AUG, 31); exportDate <= endDate; exportDate.NextDay()) {
-                if (exportDate.IsWeekday()) {
-                    ExportFullDay(exportDate);
+            for (; exportDate <= Core::Setup::END_DATE; exportDate.NextDay()) {
+                const std::filesystem::path corpusPath = 
+                    CORPUS_BASE_PATH / (exportDate.ToString_DT() + ".corpus");
+                const std::filesystem::path recordsPath = 
+                    RECORDS_BASE_PATH / (exportDate.ToString_DT() + ".rec");
+
+                if (replaceExisting) {
+                    // Ensure that the record file does not exist, or is empty,
+                    // then run the export for that day.
+
+                    if (FileExists(corpusPath)) {
+                        DeleteFile(corpusPath);
+                    }
+                    if (FileExists(recordsPath)) {
+                        DeleteFile(recordsPath);
+                    }
+
+                    if (exportDate.IsWeekday()) {
+                        ExportFullDay(exportDate);
+                    }
+                    else {
+                        Logger::Warning(std::format(
+                            "Weekend skipped: {}",
+                            exportDate.ToString_Date()),
+                            true
+                        );
+                    }
                 }
                 else {
-                    Logger::Warning(std::format(
-                        "Weekend skipped: {}",
-                        exportDate.ToString_Date()),
-                        true
-                    );
+                    // Check first if the record file exists and skip it if so.
+                    // If one exists but not the other, delete and run export.
+                    if (FileExists(corpusPath) == false || FileExists(recordsPath) == false) {
+                        DeleteFile(corpusPath);
+                        DeleteFile(recordsPath);
+                        if (exportDate.IsWeekday()) {
+                            ExportFullDay(exportDate);
+                        }
+                        else {
+                            Logger::Warning(std::format(
+                                "Weekend skipped: {}",
+                                exportDate.ToString_Date()),
+                                true
+                            );
+                        }
+                    }
                 }
             }
         }
