@@ -6,6 +6,7 @@
 #include "../common/logger.hpp"
 #include "../core/setup.hpp"
 
+#include <ftxui/dom/direction.hpp>
 #include <ftxui/ftxui.hpp>
 #include <thread>
 
@@ -238,22 +239,21 @@ public:
                 main_view = temporary_view->Render();
             }
             else {
-                main_view = vbox({
-                    text(this->current_menu == 0 ? "Menu" : "Setup")
-                        | bold
-                        | center,
-
-                    separator(),
-
-                    menus->Render()
-                });
+                main_view = window(
+                    text(this->current_menu == 0 ? "Menu" : "Setup") | bold,
+                    vbox({
+                        menus->Render()
+                    })
+                );
             }
 
             return vbox({
+                text("Sonny") | bold | center,
+
                 main_view | flex,
 
                 // Space between the UI and console.
-                text("") | size(HEIGHT, EQUAL, 1),
+                // text("") | size(HEIGHT, EQUAL, 1),
 
                 // Console: exactly 12 terminal rows tall.
                 console_view->Render()

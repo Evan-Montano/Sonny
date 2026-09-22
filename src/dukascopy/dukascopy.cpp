@@ -475,11 +475,12 @@ namespace Dukascopy {
 
         std::string status = "";
         auto view = UI::Get().PushView([&] {
-            return ftxui::vbox({
+            return ftxui::window(
                 ftxui::text("Downloading Historical Records") | ftxui::bold,
-                ftxui::separator(),
-                ftxui::text(status)
-            });
+                ftxui::vbox({
+                    ftxui::text(status)
+                })
+            );
         });
 
         UI::Get().Refresh();
