@@ -172,7 +172,7 @@ public:
 
                 case 3:
                     // Create vector files
-                    DispatchOperation(&Core::Setup::ExecuteCreateVectorFiles);
+                    DispatchOperation(&Core::Setup::ExecuteCreateFaissIndexes);
                     break;
 
                 case 4:

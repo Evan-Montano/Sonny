@@ -109,9 +109,7 @@ FAISS must be built before Sonny.
 ```bash
 cd ~/Sonny/faiss
 
-cmake -S . -B build -G Ninja \
-    -DCMAKE_C_COMPILER=clang \
-    -DCMAKE_CXX_COMPILER=clang++ \
+cmake -S . -B build
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$HOME/.local/faiss" \
     -DFAISS_ENABLE_GPU=OFF \

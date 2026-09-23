@@ -36,12 +36,12 @@ target_sources(sonny
         src/common/datetime.cpp
         src/common/logger.cpp
         src/common/storage.cpp
-        src/core/chartdata.cpp
         src/client/curlrequest.cpp
         src/client/simplecurlwrapper.cpp
         src/client/webullclient.cpp
         src/dukascopy/dukascopy.cpp
-        src/core/faiss.cpp
+        src/core/engine.cpp
+        src/core/chartdata.cpp
         src/core/setup.cpp
 )
 
