@@ -9,6 +9,7 @@
 #include "../common/storage.hpp"
 #include "../client/simplecurlwrapper.hpp"
 #include "../core/setup.hpp"
+#include "../core/structures.hpp"
 #include "../ui/ui.hpp"
 
 #include <algorithm>
@@ -18,7 +19,6 @@
 #include <fstream>
 #include <ftxui/dom/elements.hpp>
 #include <stdexcept>
-#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -244,13 +244,7 @@ namespace Dukascopy {
             );
         }
 
-        struct MLRecord {
-            float mid_delta;
-            float spread_delta;
-            std::uint32_t volume;
-        };
-
-        static_assert(sizeof(MLRecord) == 12);
+        static_assert(sizeof(Core::MLRecord) == 12);
 
         const float multiplier =
             candleSticks.front().Multiplier;
@@ -292,7 +286,7 @@ namespace Dukascopy {
             const float mid = getMid(candle);
             const float spread = getSpread(candle);
 
-            const MLRecord record{
+            const Core::MLRecord record{
                 .mid_delta =
                     i == 0
                         ? firstDeltaSentinel

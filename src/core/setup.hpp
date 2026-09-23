@@ -43,6 +43,6 @@ namespace Core {
          * @brief Process to create faiss vector files from records.
          * 
          */
-        void ExecuteCreateVectorFiles();
+        void ExecuteCreateFaissIndexes();
     }
 }

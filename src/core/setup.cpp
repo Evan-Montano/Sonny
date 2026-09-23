@@ -23,7 +23,7 @@ namespace Core {
         void ExecuteTotalSetupProcess() {
             DeleteAllStorageDirectories();
             ExecuteDownloadAllRecordFiles();
-            ExecuteCreateVectorFiles();
+            ExecuteCreateFaissIndexes();
         }
 
         void ExecuteDownloadAllRecordFiles() {
@@ -34,8 +34,8 @@ namespace Core {
             Dukascopy::BeginCorpusExport();
         }
 
-        void ExecuteCreateVectorFiles() {
-
+        void ExecuteCreateFaissIndexes() {
+            
         }
 
     }

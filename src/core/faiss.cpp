@@ -1,5 +1,5 @@
 // faiss.cpp
-// TODO
+// Implementation of faiss class.
 
 namespace Core {
     
