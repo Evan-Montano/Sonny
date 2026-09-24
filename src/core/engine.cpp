@@ -4,8 +4,8 @@
 #include "engine.hpp"
 
 namespace Core {
-    
-    void HalfHourIndex::AddVectorsToIndex(const std::vector<Core::MLRecord> &normalizedMLVectors) {
+
+    void HalfHourIndex::AddVectorsToIndex(const std::span<Core::MLRecord> &normalizedMLSpan) {
 
     }
 

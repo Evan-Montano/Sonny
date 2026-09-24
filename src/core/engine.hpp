@@ -6,6 +6,7 @@
 #include "structures.hpp"
 
 #include <faiss/IndexFlat.h>
+#include <span>
 
 namespace Core {
 
@@ -31,6 +32,12 @@ namespace Core {
          */
         faiss::IndexFlatL2 _index;
 
+        /**
+         * @brief Boolean to track if the caller made any changes to the structure during the object's lifetime.
+         * 
+         */
+        bool Updated = false;
+
     public:
         // CONSTRUCTOR
 
@@ -53,18 +60,23 @@ namespace Core {
         }
 
         // DESTRUCTOR
-        ~HalfHourIndex() = default;
+        ~HalfHourIndex() {
+            // TODO: Put the in-memory index structure back on disk only if changed.
+            if (this->Updated) {
+                
+            }
+        }
 
         // METHODS
 
         /**
-         * @brief Takes in a vector of MLRecord structs and adds them to the faiss index.
-         * We are assuming that the caller has already identified which vectors belong in this
+         * @brief Takes in a span of MLRecord structs and adds them to the faiss index.
+         * We are assuming that the caller has already identified which records belong in this
          * particular time block and are passing them in accordingly.
          * We are also placing them in as-is, so if the data must be normalized, that must occur before this call.
-         * @param mlVectors 
+         * @param normalizedMLSpan 
          */
-        void AddVectorsToIndex(const std::vector<Core::MLRecord> &normalizedMLVectors);
+        void AddVectorsToIndex(const std::span<Core::MLRecord> &normalizedMLSpan);
     };
 
 }

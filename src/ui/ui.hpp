@@ -41,7 +41,7 @@ private:
         "Run All Setup Processes (Clears Everything)",
         "Download Historical Records (Clears Existing)",
         "Download Missing Records (Keeps Existing)",
-        "Create Vector Files (Clears Existing)",
+        "Update Indexes",
         "Back"
     };
 
@@ -172,7 +172,7 @@ public:
 
                 case 3:
                     // Create vector files
-                    DispatchOperation(&Core::Setup::ExecuteCreateFaissIndexes);
+                    DispatchOperation(&Core::Setup::ExecuteUpdateIndexes);
                     break;
 
                 case 4:

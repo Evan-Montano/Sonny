@@ -297,7 +297,7 @@ namespace Dukascopy {
                         ? firstDeltaSentinel
                         : spread - previousSpread,
 
-                .volume = candle.BidVolume
+                .volume = static_cast<float>(candle.BidVolume)
             };
 
             recFileStream.write(

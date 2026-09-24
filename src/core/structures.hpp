@@ -1,8 +1,6 @@
 // structures.hpp
 // Header file to help with containing miscellaneous structure definitions.
 
-#include <cstdint>
-
 namespace Core {
 
     /**
@@ -12,7 +10,7 @@ namespace Core {
     struct MLRecord {
         float mid_delta;
         float spread_delta;
-        std::uint32_t volume;
+        float volume;
     };
 
 }

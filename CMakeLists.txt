@@ -40,6 +40,7 @@ target_sources(sonny
         src/client/simplecurlwrapper.cpp
         src/client/webullclient.cpp
         src/dukascopy/dukascopy.cpp
+        src/core/transformer.cpp
         src/core/engine.cpp
         src/core/chartdata.cpp
         src/core/setup.cpp
