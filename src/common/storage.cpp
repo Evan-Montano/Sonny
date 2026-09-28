@@ -40,6 +40,7 @@ namespace Common {
             return std::filesystem::create_directories(path);
         }
 
+        // Will probably delete, this isn't useful, so don't use it.
         std::ofstream OpenFile_App(const std::filesystem::path &basePath, const std::string &fileName, const bool &binaryMode) {
             const std::filesystem::path outFile = 
                 basePath / fileName;

@@ -5,7 +5,12 @@
 
 #include "structures.hpp"
 
+#include <array>
+#include <cstddef>
 #include <faiss/IndexFlat.h>
+#include <faiss/index_io.h>
+
+#include <filesystem>
 #include <span>
 
 namespace Core {
@@ -27,16 +32,83 @@ namespace Core {
         static constexpr int DIMENSION = 90;
 
         /**
+         * @brief Static variable to easily identify num of seconds per half-hour.
+         * 
+         */
+        static constexpr std::size_t SECONDS_PER_HALF_HOUR = 1800;
+
+        /**
+         * @brief Describes the total number of minutes in a full trading day.
+         * 
+         */
+        static constexpr std::size_t MARKET_OPEN_MINUTES = 9 * 60 + 30;
+
+        /**
+         * @brief Total number of half-hours in a full trading day.
+         * 
+         */
+        static constexpr std::size_t TOTAL_HALF_HOURS = 13;
+
+        /**
          * @brief Underlying faiss index.
          * 
          */
         faiss::IndexFlatL2 _index;
 
         /**
+         * @brief Stored path of the index file.
+         * 
+         */
+        std::filesystem::path _indexPath;
+
+        /**
+         * @brief Stored path of the metadata file.
+         * 
+         */
+        std::filesystem::path _metadataPath;
+
+        /**
          * @brief Boolean to track if the caller made any changes to the structure during the object's lifetime.
          * 
          */
         bool Updated = false;
+
+        /**
+         * @brief Struct to represent the binary-encoded metadata.
+         * 
+         */
+        struct WindowLocation {
+            std::array<char, 10> tradingDay;
+            uint32_t recordIndex;
+        };
+
+        static_assert(sizeof(WindowLocation) == 16);
+
+        // METHODS
+
+        /**
+         * @brief Returns the appropriate index file name based on the number of minutes passed since market start.
+         * 
+         * @param numOfMinutes 
+         * @return std::string 
+         */
+        static std::string GetHalfHourName(std::size_t numOfMinutes);
+
+        /**
+         * @brief Gets the file path of the appropraite index file based on the number of minutes passed since market start.
+         * 
+         * @param numOfMinutes 
+         * @return std::filesystem::path 
+         */
+        static std::filesystem::path GetIndexPath(std::size_t numOfMinutes);
+
+        /**
+         * @brief Gets the file path of the appropraite metadata file based on the number of minutes passed since market start.
+         * 
+         * @param numOfMinutes 
+         * @return std::filesystem::path 
+         */
+        static std::filesystem::path GetMetadataPath(std::size_t numOfMinutes);
 
     public:
         // CONSTRUCTOR
@@ -45,8 +117,9 @@ namespace Core {
          * @brief Construct a new Half Hour Index object.
          * Calling an empty constructor will initialize an empty faiss index.
          */
-        HalfHourIndex() {
-            this->_index = faiss::IndexFlatL2(DIMENSION);
+        HalfHourIndex()
+            : _index(DIMENSION) {
+
         }
 
         /**
@@ -55,28 +128,27 @@ namespace Core {
          * index structure on disk in "~/storage/indexes/" and load it in.
          * @param numOfMinutes Number of minutes that have passed since the market open.
          */
-        HalfHourIndex(const std::size_t &numOfMinutes) {
-            // TODO
-        }
+        HalfHourIndex(const std::size_t &numOfMinutes);
 
         // DESTRUCTOR
-        ~HalfHourIndex() {
-            // TODO: Put the in-memory index structure back on disk only if changed.
-            if (this->Updated) {
-                
-            }
-        }
+        ~HalfHourIndex();
 
         // METHODS
 
         /**
-         * @brief Takes in a span of MLRecord structs and adds them to the faiss index.
+         * @brief Takes in a span of MLRecord structs and adds them to the faiss index and calls method(s) to track metadata.
          * We are assuming that the caller has already identified which records belong in this
          * particular time block and are passing them in accordingly.
          * We are also placing them in as-is, so if the data must be normalized, that must occur before this call.
          * @param normalizedMLSpan 
+         * @param recFilePath 
+         * @param recordOffset 
          */
-        void AddVectorsToIndex(const std::span<Core::MLRecord> &normalizedMLSpan);
+        void AddVectorsToIndex(
+            const std::span<Core::MLRecord> &normalizedMLSpan,
+            const std::filesystem::path &recFilePath,
+            const std::size_t recordOffset
+        );
     };
 
 }

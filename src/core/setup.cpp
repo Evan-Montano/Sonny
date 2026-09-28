@@ -91,17 +91,20 @@ namespace Core {
                         // allRecords now contains MLRecords, where each item represents 1s
                         // Process in 30 minute segments (1800 items)
                         constexpr std::size_t RECORDS_PER_HALF_HOUR = 1800;
+                        
+                        // Extra padding so we can index the end of the segment, peeks into the next half-hour
+                        constexpr std::size_t SEARCH_WINDOW_LENGTH = 30;
 
                         for (std::size_t i = 0; i < allRecords.size(); i += RECORDS_PER_HALF_HOUR) {
                             const std::size_t end = std::min(
-                                i + RECORDS_PER_HALF_HOUR,
+                                i + RECORDS_PER_HALF_HOUR + (SEARCH_WINDOW_LENGTH - 1),
                                 allRecords.size()
                             );
 
                             std::span<MLRecord> segment(allRecords.begin() + i, allRecords.begin() + end);
                             // The constructor is in charge of loading in the right index files based on the num of minutes since market start
                             HalfHourIndex indexSegment(i);
-                            indexSegment.AddVectorsToIndex(segment);
+                            indexSegment.AddVectorsToIndex(segment, recFilePath, i);
                         }
                     }
                 }

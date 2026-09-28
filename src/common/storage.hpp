@@ -22,6 +22,18 @@ namespace Common {
         const std::filesystem::path RECORDS_BASE_PATH = "storage/records/";
 
         /**
+         * @brief Base path for the indexes files directory.
+         * 
+         */
+        const std::filesystem::path INDEXES_BASE_PATH = "storage/indexes/";
+
+        /**
+         * @brief Base path for the indexes files directory.
+         * 
+         */
+        const std::filesystem::path METADATA_BASE_PATH = "storage/metadata/";
+
+        /**
          * @brief Returns if a file at the specified path exists.
          * 
          * @param path 
