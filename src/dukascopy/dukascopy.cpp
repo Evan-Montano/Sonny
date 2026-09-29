@@ -467,13 +467,32 @@ namespace Dukascopy {
             Logger::Info("========================================", true);
         }
 
-        std::string status = "";
+        constexpr std::size_t TOTAL_DAYS = 365;
+
+        std::string status{};
+        std::string currentDate{};
+        std::size_t daysElapsed = 0;
+
         auto view = UI::Get().PushView([&] {
+            const float progress =
+                static_cast<float>(daysElapsed) /
+                static_cast<float>(TOTAL_DAYS);
+
             return ftxui::window(
                 ftxui::text("Downloading Historical Records") | ftxui::bold,
                 ftxui::vbox({
-                    ftxui::text(status)
-                })
+                    ftxui::text(status),
+                    ftxui::separator(),
+                    ftxui::hbox({
+                        ftxui::text("Current date: "),
+                        ftxui::text(currentDate) | ftxui::bold,
+                    }),
+                    ftxui::gauge(progress),
+                    ftxui::hbox({
+                        ftxui::text(std::format("{} / {} days", daysElapsed, TOTAL_DAYS))
+                    })
+                }) |
+                ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, 50)
             );
         });
 
@@ -570,6 +589,7 @@ namespace Dukascopy {
                 }
 
                 ++daysElapsed;
+                currentDate = exportDate.ToString_Date();
                 status = UpdateStatusBar(daysElapsed);
                 UI::Get().Refresh();
             }
