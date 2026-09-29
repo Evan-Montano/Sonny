@@ -78,11 +78,17 @@ namespace Core {
          * 
          */
         struct WindowLocation {
-            std::array<char, 10> tradingDay;
             uint32_t recordIndex;
+            std::array<char, 8> tradingDay; // "yyyymmdd" and will have to translate -> yyyy-mm-dd.rec
         };
 
-        static_assert(sizeof(WindowLocation) == 16);
+        static_assert(sizeof(WindowLocation) == 12);
+
+        /**
+         * @brief Vector of window metadata. The index represents the faiss ID.
+         * 
+         */
+        std::vector<WindowLocation> _windowLocations{};
 
         // METHODS
 
@@ -109,6 +115,34 @@ namespace Core {
          * @return std::filesystem::path 
          */
         static std::filesystem::path GetMetadataPath(std::size_t numOfMinutes);
+
+        /**
+         * @brief Gets the file path of the "yyyy-mm-dd.rec" file based on the shortened "yyyymmdd" array.
+         * 
+         * @param yyyymmdd 
+         * @return std::filesystem::path 
+         */
+        static std::filesystem::path GetRecordFilePathFromWindowLocation(const std::array<char,8> &yyyymmdd);
+
+        /**
+         * @brief Translates the "storage/records/yyyy-mm-dd.rec" path to yyyymmdd array for storing
+         * 
+         * @param recFile 
+         * @return std::array<char,8> 
+         */
+        static std::array<char,8> ToShortLocationArray(const std::filesystem::path &recordFilePath);
+
+        /**
+         * @brief Loads the .meta file from disk into the WindowLocation vector.
+         * 
+         */
+        void LoadMetadata();
+        
+        /**
+         * @brief Saves metadata vector to .meta file on disk, deletes existing.
+         * 
+         */
+        void SaveMetadataToDisk();
 
     public:
         // CONSTRUCTOR
