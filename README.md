@@ -109,12 +109,7 @@ FAISS must be built before Sonny.
 ```bash
 cd ~/Sonny/faiss
 
-cmake -S . -B build
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX="$HOME/.local/faiss" \
-    -DFAISS_ENABLE_GPU=OFF \
-    -DFAISS_ENABLE_PYTHON=OFF \
-    -DBUILD_TESTING=OFF
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local/faiss" -DFAISS_ENABLE_GPU=OFF -DFAISS_ENABLE_PYTHON=OFF -DBUILD_TESTING=OFF
 
 cmake --build build --target faiss
 cmake --install build
@@ -139,10 +134,7 @@ cd ~/Sonny
 Configure Sonny:
 
 ```bash
-cmake -S . -B build -G Ninja \
-    -DCMAKE_C_COMPILER=clang \
-    -DCMAKE_CXX_COMPILER=clang++ \
-    -DCMAKE_PREFIX_PATH="$HOME/.local/faiss"
+cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_PREFIX_PATH="$HOME/.local/faiss"
 ```
 
 Build:

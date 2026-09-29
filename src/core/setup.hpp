@@ -20,6 +20,14 @@ namespace Core {
          */
         const Common::DateTime END_DATE(2026, Common::AUG, 31);
 
+        /**
+        * @brief Total number of calendar days in the configured setup range.
+        *
+        * The +1 accounts for the inclusive BEGIN_DATE and END_DATE
+        * used by the setup loops.
+        */
+        const long TOTAL_DAYS = END_DATE - BEGIN_DATE + 1;
+
 
         /**
          * @brief Process including all setup steps: Corpus download, create vector files.

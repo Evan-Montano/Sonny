@@ -440,24 +440,6 @@ namespace Dukascopy {
         }
     }
 
-    std::string UpdateStatusBar(const long& daysElapsed) {
-
-        const static long totalDays = Core::Setup::END_DATE - Core::Setup::BEGIN_DATE;
-        constexpr std::size_t BAR_WIDTH = 50;
-        const double progress = std::clamp(
-            static_cast<double>(daysElapsed) / totalDays,
-            0.0,
-            1.0
-        );
-
-        const std::size_t filled = static_cast<std::size_t>(progress * BAR_WIDTH);
-
-        return "[" +
-            std::string(filled, '=') +
-            std::string(BAR_WIDTH - filled, ' ') +
-            "]";
-    }
-
     void BeginCorpusExport(bool replaceExisting) {
         {
             std::string headerMessage = replaceExisting ? 
@@ -467,16 +449,16 @@ namespace Dukascopy {
             Logger::Info("========================================", true);
         }
 
-        constexpr std::size_t TOTAL_DAYS = 365;
-
         std::string status{};
         std::string currentDate{};
         std::size_t daysElapsed = 0;
 
         auto view = UI::Get().PushView([&] {
             const float progress =
-                static_cast<float>(daysElapsed) /
-                static_cast<float>(TOTAL_DAYS);
+                Core::Setup::TOTAL_DAYS == 0
+                ? 0.0f
+                : static_cast<float>(daysElapsed) /
+                static_cast<float>(Core::Setup::TOTAL_DAYS);
 
             return ftxui::window(
                 ftxui::text("Downloading Historical Records") | ftxui::bold,
@@ -488,11 +470,15 @@ namespace Dukascopy {
                         ftxui::text(currentDate) | ftxui::bold,
                     }),
                     ftxui::gauge(progress),
-                    ftxui::hbox({
-                        ftxui::text(std::format("{} / {} days", daysElapsed, TOTAL_DAYS))
-                    })
+                    ftxui::text(
+                        std::format(
+                            "{} / {} days",
+                            daysElapsed,
+                            Core::Setup::TOTAL_DAYS
+                        )
+                    )
                 }) |
-                ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, 50)
+                ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, 55)
             );
         });
 
@@ -541,7 +527,12 @@ namespace Dukascopy {
             using namespace Common::Storage;
             Common::DateTime exportDate = Core::Setup::BEGIN_DATE;
 
-            for (long daysElapsed = 0; exportDate <= Core::Setup::END_DATE; exportDate.NextDay()) {
+            for (; exportDate <= Core::Setup::END_DATE; exportDate.NextDay()) {
+
+                currentDate = exportDate.ToString_Date();
+                status = std::format("Processing {}", currentDate);
+                UI::Get().Refresh();
+
                 const std::filesystem::path corpusPath = 
                     CORPUS_BASE_PATH / (exportDate.ToString_Date() + ".corpus");
                 const std::filesystem::path recordsPath = 
@@ -589,8 +580,6 @@ namespace Dukascopy {
                 }
 
                 ++daysElapsed;
-                currentDate = exportDate.ToString_Date();
-                status = UpdateStatusBar(daysElapsed);
                 UI::Get().Refresh();
             }
         }

@@ -66,14 +66,14 @@ namespace Core {
             std::string currentSegment{};
 
             std::size_t completedDays = 0;
-            std::size_t totalTradingDays = END_DATE - BEGIN_DATE;
+            const long totalDays = TOTAL_DAYS;
 
             auto view = UI::Get().PushView([&] {
                 const float dayProgress =
-                    totalTradingDays == 0
+                    totalDays == 0
                     ? 0.0f
                     : static_cast<float>(completedDays) /
-                    static_cast<float>(totalTradingDays);
+                    static_cast<float>(totalDays);
 
                 return ftxui::window(
                     ftxui::text("Creating FAISS Indexes") | ftxui::bold,
@@ -90,12 +90,12 @@ namespace Core {
                         }),
                         ftxui::gauge(dayProgress),
                         ftxui::text(
-                            std::format(
-                                "{} / {} trading days",
-                                completedDays,
-                                totalTradingDays
-                            )
+                        std::format(
+                            "{} / {} days",
+                            completedDays,
+                            totalDays
                         )
+                    )
                     }) |
                     ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, 55)
                 );
@@ -162,12 +162,12 @@ namespace Core {
                             HalfHourIndex indexSegment(i);
                             indexSegment.AddVectorsToIndex(segment, recFilePath, i);
                         }
-
-                        ++completedDays;
-                        status = "Day Complete";
-                        currentSegment = "13 / 13";
-                        UI::Get().Refresh();
                     }
+
+                    ++completedDays;
+                    status = "Day Complete";
+                    currentSegment = "13 / 13";
+                    UI::Get().Refresh();
                 }
             }
 
