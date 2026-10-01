@@ -21,12 +21,28 @@ FetchContent_Declare(ftxui
 
 FetchContent_MakeAvailable(ftxui)
 
+FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG v1.18.0
+)
+
+FetchContent_MakeAvailable(googletest)
+
+add_library(sonny_common STATIC
+    src/common/datetime.cpp
+)
+
+target_include_directories(sonny_common
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}/src
+)
+
 add_executable(sonny)
 
 target_sources(sonny
     PRIVATE
         src/sonny.cpp
-        src/common/datetime.cpp
         src/common/logger.cpp
         src/common/storage.cpp
         src/client/curlrequest.cpp
@@ -46,6 +62,7 @@ find_package(faiss CONFIG REQUIRED)
 
 target_link_libraries(sonny
     PRIVATE
+        sonny_common
         CURL::libcurl
         nlohmann_json::nlohmann_json
         faiss
@@ -53,3 +70,6 @@ target_link_libraries(sonny
         ftxui::dom
         ftxui::component
 )
+
+enable_testing()
+add_subdirectory(tests)
