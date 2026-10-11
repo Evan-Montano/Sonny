@@ -1,0 +1,27 @@
+{
+  "name": "sonny",
+  "version": "1.0.0",
+  "description": "TODO",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Evan-Montano/Sonny.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Evan-Montano/Sonny/issues"
+  },
+  "homepage": "https://github.com/Evan-Montano/Sonny#readme",
+  "dependencies": {
+    "playwright": "^1.64.0"
+  }
+}

@@ -42,7 +42,7 @@ namespace Client {
         curl_easy_cleanup(this->curlHandle);
     }
 
-    SimpleCurlWrapper::SimpleCurlWrapper() {
+    SimpleCurlWrapper::SimpleCurlWrapper(const bool &executeInBrowser) : ExecuteInBrowser(executeInBrowser) {
         static CurlGlobal curlGlobal;
         this->curlHandle = curl_easy_init();
         if (this->curlHandle == nullptr) {

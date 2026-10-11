@@ -339,66 +339,68 @@ namespace Dukascopy {
 
             hourRequest.SetCallback(
                 [&](const std::string& response) {
-                    const Common::JsonUtility hourJson(response);
+                    if (response.empty() == false) {
+                        const Common::JsonUtility hourJson(response);
 
-                    ApiTickResponse res{};
+                        ApiTickResponse res{};
 
-                    hourJson.TryGet<Common::UnixTimestamp>(
-                        "timestamp",
-                        res.Timestamp
-                    );
+                        hourJson.TryGet<Common::UnixTimestamp>(
+                            "timestamp",
+                            res.Timestamp
+                        );
 
-                    hourJson.TryGet<float>(
-                        "multiplier",
-                        res.Multiplier
-                    );
+                        hourJson.TryGet<float>(
+                            "multiplier",
+                            res.Multiplier
+                        );
 
-                    hourJson.TryGet<float>(
-                        "bid",
-                        res.Bid
-                    );
+                        hourJson.TryGet<float>(
+                            "bid",
+                            res.Bid
+                        );
 
-                    hourJson.TryGet<float>(
-                        "ask",
-                        res.Ask
-                    );
+                        hourJson.TryGet<float>(
+                            "ask",
+                            res.Ask
+                        );
 
-                    hourJson.TryGet<std::vector<std::int32_t>>(
-                        "times",
-                        res.Times
-                    );
+                        hourJson.TryGet<std::vector<std::int32_t>>(
+                            "times",
+                            res.Times
+                        );
 
-                    hourJson.TryGet<std::vector<std::int16_t>>(
-                        "asks",
-                        res.Asks
-                    );
+                        hourJson.TryGet<std::vector<std::int16_t>>(
+                            "asks",
+                            res.Asks
+                        );
 
-                    hourJson.TryGet<std::vector<std::int16_t>>(
-                        "bids",
-                        res.Bids
-                    );
+                        hourJson.TryGet<std::vector<std::int16_t>>(
+                            "bids",
+                            res.Bids
+                        );
 
-                    hourJson.TryGet<std::vector<std::int32_t>>(
-                        "askVolumes",
-                        res.AskVolumes
-                    );
+                        hourJson.TryGet<std::vector<std::int32_t>>(
+                            "askVolumes",
+                            res.AskVolumes
+                        );
 
-                    hourJson.TryGet<std::vector<std::int32_t>>(
-                        "bidVolumes",
-                        res.BidVolumes
-                    );
+                        hourJson.TryGet<std::vector<std::int32_t>>(
+                            "bidVolumes",
+                            res.BidVolumes
+                        );
 
-                    if (res.Timestamp > 0 &&
-                        res.Multiplier > 0 &&
-                        res.Bid > 0 &&
-                        res.Ask > 0 &&
-                        res.Times.empty() == false &&
-                        res.Asks.empty() == false &&
-                        res.Bids.empty() == false &&
-                        res.AskVolumes.empty() == false &&
-                        res.BidVolumes.empty() == false) {
+                        if (res.Timestamp > 0 &&
+                            res.Multiplier > 0 &&
+                            res.Bid > 0 &&
+                            res.Ask > 0 &&
+                            res.Times.empty() == false &&
+                            res.Asks.empty() == false &&
+                            res.Bids.empty() == false &&
+                            res.AskVolumes.empty() == false &&
+                            res.BidVolumes.empty() == false) {
 
-                        tickResponses.push_back(std::move(res));
+                            tickResponses.push_back(std::move(res));
+                        }
                     }
                 }
             );
@@ -491,9 +493,7 @@ namespace Dukascopy {
             Client::CurlRequest infoRequest(infoUrl);
             infoRequest.AddHeader(
                 "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/153.0.0.0 Safari/537.36"
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
             );
 
             infoRequest.SetCallback(

@@ -7,3 +7,4 @@ config.json
 vcpkg_installed
 .cache
 faiss
+node_modules

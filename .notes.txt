@@ -1,16 +1,6 @@
-=====================================================================================================
-HOW TO BUILD
-
-Install dependencies:
-
-
-Build FAISS:
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local/faiss" -DFAISS_ENABLE_GPU=OFF -DFAISS_ENABLE_PYTHON=OFF -DBUILD_TESTING=OFF
-
-cmake --build build --target faiss
-cmake --install build
-
-Building Sonny:
-cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_PREFIX_PATH="$HOME/.local/faiss"
-
-=====================================================================================================
+Need to update readme build instructions:
+- Add npm as a dependency
+- npm init -y
+- npm install playwright
+- npx playwright install chromium
+- For the build instructions I think we just need to do npm install since I've already got the package-lock files.
