@@ -55,6 +55,11 @@ target_sources(sonny
         src/core/setup.cpp
 )
 
+target_compile_definitions(sonny
+    PRIVATE
+        SONNY_BROWSER_CLIENT_PATH="${PROJECT_SOURCE_DIR}/src/client/browserclient.js"
+)
+
 find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(OpenMP REQUIRED)

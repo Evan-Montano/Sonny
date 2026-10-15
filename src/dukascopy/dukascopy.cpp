@@ -320,7 +320,7 @@ namespace Dukascopy {
         return true;
     }
 
-    void ExportFullDay(const Common::DateTime& dt) {
+    void ExportFullDay(const Common::DateTime& dt, Client::SimpleCurlWrapper &curlWrapper) {
         std::vector<OHLCV_BidAsk> candleSticks;
 
         {
@@ -328,7 +328,6 @@ namespace Dukascopy {
 
             std::vector<ApiTickResponse> tickResponses;
 
-            Client::SimpleCurlWrapper curl;
             Client::CurlRequest hourRequest("");
             hourRequest.AddHeader(
                 "User-Agent",
@@ -411,7 +410,7 @@ namespace Dukascopy {
                     ticksUrl + std::to_string(hour)
                 );
 
-                curl.ExecuteHttpRequest(hourRequest);
+                curlWrapper.ExecuteHttpRequest(hourRequest);
             }
 
             candleSticks = ExtractOneSecondCandlesticks(
@@ -488,8 +487,10 @@ namespace Dukascopy {
 
         Common::JsonUtility spyData(std::string("{}"));
 
+        // Wrapper running browser instance. Will be sharing this object throughout the full corpus run.
+        Client::SimpleCurlWrapper curlWrapper(true);
+
         {
-            Client::SimpleCurlWrapper curl;
             Client::CurlRequest infoRequest(infoUrl);
             infoRequest.AddHeader(
                 "User-Agent",
@@ -510,7 +511,7 @@ namespace Dukascopy {
                 }
             );
 
-            curl.ExecuteHttpRequest(infoRequest);
+            curlWrapper.ExecuteHttpRequest(infoRequest);
         }
 
         std::string description{};
@@ -533,10 +534,8 @@ namespace Dukascopy {
                 status = std::format("Processing {}", currentDate);
                 UI::Get().Refresh();
 
-                const std::filesystem::path corpusPath = 
-                    CORPUS_BASE_PATH / (exportDate.ToString_Date() + ".corpus");
-                const std::filesystem::path recordsPath = 
-                    RECORDS_BASE_PATH / (exportDate.ToString_Date() + ".rec");
+                const std::filesystem::path corpusPath = CORPUS_BASE_PATH / (exportDate.ToString_Date() + ".corpus");
+                const std::filesystem::path recordsPath = RECORDS_BASE_PATH / (exportDate.ToString_Date() + ".rec");
 
                 if (replaceExisting) {
                     // Ensure that the record file does not exist, or is empty,
@@ -550,7 +549,7 @@ namespace Dukascopy {
                     }
 
                     if (exportDate.IsWeekday()) {
-                        ExportFullDay(exportDate);
+                        ExportFullDay(exportDate, curlWrapper);
                     }
                     else {
                         Logger::Warning(std::format(
@@ -567,7 +566,7 @@ namespace Dukascopy {
                         DeleteFile(corpusPath);
                         DeleteFile(recordsPath);
                         if (exportDate.IsWeekday()) {
-                            ExportFullDay(exportDate);
+                            ExportFullDay(exportDate, curlWrapper);
                         }
                         else {
                             Logger::Warning(std::format(

@@ -3,15 +3,18 @@
 
 #pragma once
 
-#include <curl/curl.h>
 #include "curlrequest.hpp"
+
+#include <curl/curl.h>
+#include <memory>
+#include <mutex>
 
 namespace Client {
 
     class SimpleCurlWrapper {
     public:
         // CONSTRUCTOR
-        SimpleCurlWrapper(const bool &executeInBrowser = false);
+        SimpleCurlWrapper(bool executeInBrowser = false);
 
         // DESTRUCTOR
         ~SimpleCurlWrapper();
@@ -26,11 +29,15 @@ namespace Client {
          * When true, a live browser running via a javascript process is active for the lifecycle of this object.
          * 
          */
-        bool ExecuteInBrowser;
+        const bool ExecuteInBrowser;
 
     private:
+        class BrowserProcess;
+
         // MEMBERS
         CURL *curlHandle;
+        std::unique_ptr<BrowserProcess> browserProcess;
+        std::mutex executionMutex;
     };
 
 }

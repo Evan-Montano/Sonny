@@ -10,6 +10,18 @@ I'm providing examples for **Fedora**, my favorite, and **Ubuntu / WSL Ubuntu**.
 
 ## 1. Install Dependencies
 
+The browser-assisted Dukascopy helper uses Node.js and Playwright. Install Node.js
+and npm, then install the dependencies declared in `package.json` and Playwright's
+Chromium browser:
+
+```bash
+npm install
+npx playwright install chromium
+```
+
+Run these commands from the Sonny project root. `npm install` uses the existing
+`package-lock.json` to install the project's pinned dependency tree.
+
 ### Fedora
 
 ```bash
@@ -18,6 +30,8 @@ sudo dnf install \
     clang-tools-extra \
     cmake \
     ninja-build \
+    nodejs \
+    npm \
     git \
     curl \
     libcurl-devel \
@@ -39,6 +53,8 @@ sudo apt install \
     clangd \
     cmake \
     ninja-build \
+    nodejs \
+    npm \
     git \
     curl \
     libcurl4-openssl-dev \
