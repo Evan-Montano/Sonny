@@ -5,6 +5,7 @@
 #include "../common/storage.hpp"
 #include "../common/logger.hpp"
 
+#include <algorithm>
 #include <format>
 #include <fstream>
 #include <stdexcept>
@@ -12,12 +13,12 @@
 
 namespace Core {
 
-    std::string HalfHourIndex::GetHalfHourName(const std::size_t numOfMinutes) {
-        const std::size_t bucket = numOfMinutes / SECONDS_PER_HALF_HOUR;
+    std::string HalfHourIndex::GetHalfHourName(const std::size_t numOfSeconds) {
+        const std::size_t bucket = numOfSeconds / SECONDS_PER_HALF_HOUR;
         
         if (bucket >= TOTAL_HALF_HOURS) {
             throw std::out_of_range(
-                std::format("Invalid half-hour offset: {}", numOfMinutes)
+                std::format("Invalid half-hour offset: {}", numOfSeconds)
             );
         }
 
@@ -39,19 +40,19 @@ namespace Core {
         );
     }
 
-    std::filesystem::path HalfHourIndex::GetIndexPath(const std::size_t numOfMinutes) {
+    std::filesystem::path HalfHourIndex::GetIndexPath(const std::size_t numOfSeconds) {
         return Common::Storage::INDEXES_BASE_PATH /
             std::format(
                 "{}.index",
-                GetHalfHourName(numOfMinutes)
+                GetHalfHourName(numOfSeconds)
             );
     }
 
-    std::filesystem::path HalfHourIndex::GetMetadataPath(const std::size_t numOfMinutes) {
+    std::filesystem::path HalfHourIndex::GetMetadataPath(const std::size_t numOfSeconds) {
         return Common::Storage::METADATA_BASE_PATH /
             std::format(
                 "{}.meta",
-                GetHalfHourName(numOfMinutes)
+                GetHalfHourName(numOfSeconds)
             );
     }
 
@@ -79,9 +80,9 @@ namespace Core {
         return shortDate;
     }
 
-    HalfHourIndex::HalfHourIndex(const std::size_t &numOfMinutes) : _index(DIMENSION) {
-        this->_indexPath = GetIndexPath(numOfMinutes);
-        this->_metadataPath = GetMetadataPath(numOfMinutes);
+    HalfHourIndex::HalfHourIndex(const std::size_t &numOfSeconds) : _index(DIMENSION) {
+        this->_indexPath = GetIndexPath(numOfSeconds);
+        this->_metadataPath = GetMetadataPath(numOfSeconds);
 
         if (Common::Storage::FileExists(this->_indexPath)) {
             Logger::Info(
@@ -173,8 +174,8 @@ namespace Core {
                     true
                 );
 
-                if (Common::Storage::FileExists(Common::Storage::INDEXES_BASE_PATH) == false) {
-                    Common::Storage::CreateDirectory(Common::Storage::INDEXES_BASE_PATH);
+                if (Common::Storage::FileExists(this->_indexPath.root_path()) == false) {
+                    Common::Storage::CreateDirectory(this->_indexPath.root_path());
                 }
 
                 faiss::write_index(
@@ -228,8 +229,8 @@ namespace Core {
             true
         );
 
-        if (Common::Storage::FileExists(Common::Storage::METADATA_BASE_PATH) == false) {
-            Common::Storage::CreateDirectory(Common::Storage::METADATA_BASE_PATH);
+        if (Common::Storage::FileExists(this->_metadataPath.root_path()) == false) {
+            Common::Storage::CreateDirectory(this->_metadataPath.root_path());
         }
 
         if (Common::Storage::FileExists(this->_metadataPath)) {
@@ -346,6 +347,69 @@ namespace Core {
                 true
             );
         }
+    }
+
+    std::vector<HalfHourIndex::QueryResult> HalfHourIndex::Query(const std::vector<float> &normalizedQuery, const std::size_t maxResults) const {
+        std::vector<QueryResult> res{};
+
+        if (normalizedQuery.size() == DIMENSION) {
+            if (maxResults > 0 && this->_index.ntotal > 0) {
+                const faiss::idx_t resultCount = static_cast<faiss::idx_t>(
+                    std::min(maxResults, static_cast<std::size_t>(this->_index.ntotal))
+                );
+
+                std::vector<float> distances(static_cast<std::size_t>(resultCount));
+                std::vector<faiss::idx_t> ids(static_cast<std::size_t>(resultCount));
+
+                this->_index.search(
+                    1,
+                    normalizedQuery.data(),
+                    resultCount,
+                    distances.data(),
+                    ids.data()
+                );
+
+                res.reserve(static_cast<std::size_t>(resultCount));
+
+                for (std::size_t i = 0; i < static_cast<std::size_t>(resultCount); ++i) {
+                    const faiss::idx_t id = ids[i];
+                    
+                    if (id < 0 || static_cast<std::size_t>(id) >= this->_windowLocations.size()) {
+                        Logger::Error(
+                            std::format("Missing metadata for FAISS vector ID {}", id)
+                        );
+                        throw std::runtime_error(
+                            std::format("Missing metadata for FAISS vector ID {}", id)
+                        );
+                    }
+
+                    const WindowLocation &location = this->_windowLocations[static_cast<std::size_t>(id)];
+                    res.push_back(QueryResult{
+                        .distance = distances[i],
+                        .tradingDayId = location.tradingDay,
+                        .recordIndex = location.recordIndex
+                    });
+                }
+            }
+        }
+        else {
+            Logger::Error(
+                std::format(
+                    "Query dimension is {}, expected {}",
+                    normalizedQuery.size(),
+                    DIMENSION
+                )
+            );
+            throw std::invalid_argument(
+                std::format(
+                    "Query dimension is {}, expected {}",
+                    normalizedQuery.size(),
+                    DIMENSION
+                )
+            );
+        }
+
+        return res;
     }
 
 }

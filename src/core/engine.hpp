@@ -7,11 +7,13 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <faiss/IndexFlat.h>
 #include <faiss/index_io.h>
 
 #include <filesystem>
 #include <span>
+#include <vector>
 
 namespace Core {
 
@@ -95,26 +97,26 @@ namespace Core {
         /**
          * @brief Returns the appropriate index file name based on the number of minutes passed since market start.
          * 
-         * @param numOfMinutes 
+         * @param numOfSeconds Number of seconds that have elapsed since the market opened.
          * @return std::string 
          */
-        static std::string GetHalfHourName(std::size_t numOfMinutes);
+        static std::string GetHalfHourName(std::size_t numOfSeconds);
 
         /**
          * @brief Gets the file path of the appropraite index file based on the number of minutes passed since market start.
          * 
-         * @param numOfMinutes 
+         * @param numOfSeconds Number of seconds that have elapsed since the market opened.
          * @return std::filesystem::path 
          */
-        static std::filesystem::path GetIndexPath(std::size_t numOfMinutes);
+        static std::filesystem::path GetIndexPath(std::size_t numOfSeconds);
 
         /**
          * @brief Gets the file path of the appropraite metadata file based on the number of minutes passed since market start.
          * 
-         * @param numOfMinutes 
+         * @param numOfSeconds Number of seconds that have elapsed since the market opened.
          * @return std::filesystem::path 
          */
-        static std::filesystem::path GetMetadataPath(std::size_t numOfMinutes);
+        static std::filesystem::path GetMetadataPath(std::size_t numOfSeconds);
 
         /**
          * @brief Gets the file path of the "yyyy-mm-dd.rec" file based on the shortened "yyyymmdd" array.
@@ -144,6 +146,14 @@ namespace Core {
          */
         void SaveMetadataToDisk();
 
+        // FRIENDS AND TEST OVERLOADS
+        friend class HalfHourIndex_Test;
+
+        HalfHourIndex(
+            const std::filesystem::path indexPath,
+            const std::filesystem::path metadataPath
+        ) : _indexPath(indexPath), _metadataPath(metadataPath) {}
+
     public:
         // CONSTRUCTOR
 
@@ -152,20 +162,25 @@ namespace Core {
          * Calling an empty constructor will initialize an empty faiss index.
          */
         HalfHourIndex()
-            : _index(DIMENSION) {
-
-        }
+            : _index(DIMENSION) {}
 
         /**
          * @brief Construct a new Half Hour Index object.
          * Calling this constructor will find the appropriate, existing
          * index structure on disk in "~/storage/indexes/" and load it in.
-         * @param numOfMinutes Number of minutes that have passed since the market open.
+         * @param numOfSeconds Number of seconds that have elapsed since the market opened.
          */
-        HalfHourIndex(const std::size_t &numOfMinutes);
+        HalfHourIndex(const std::size_t &numOfSeconds);
 
         // DESTRUCTOR
         ~HalfHourIndex();
+
+        // MEMBERS
+        struct QueryResult {
+            float distance;
+            std::array<char, 8> tradingDayId;
+            uint32_t recordIndex;
+        };
 
         // METHODS
 
@@ -183,6 +198,24 @@ namespace Core {
             const std::filesystem::path &recFilePath,
             const std::size_t recordOffset
         );
+
+        /**
+         * @brief Takes in a normalized query vector and return the specified number of approximate nearest neighbors.
+         * Returned in the form of a QueryResult, which describes the particular (.)rec record and the segment's offset.
+         * 
+         * @param normalizedQuery 
+         * @param maxResults 
+         * @return std::vector<QueryResult> 
+         */
+        std::vector<QueryResult> Query(
+            const std::vector<float> &normalizedQuery,
+            std::size_t maxResults
+        ) const;
+    };
+
+
+    class HalfHourIndex_Test {
+
     };
 
 }
