@@ -15,6 +15,8 @@
 #include <span>
 #include <vector>
 
+class HalfHourIndex_Test;
+
 namespace Core {
 
     /**
@@ -146,13 +148,22 @@ namespace Core {
          */
         void SaveMetadataToDisk();
 
-        // FRIENDS AND TEST OVERLOADS
-        friend class HalfHourIndex_Test;
+        /**
+         * @brief Initializes the HalfHourIndex object.
+         * 
+         */
+        void Initialize();
 
-        HalfHourIndex(
-            const std::filesystem::path indexPath,
-            const std::filesystem::path metadataPath
-        ) : _indexPath(indexPath), _metadataPath(metadataPath) {}
+        // FRIENDS AND TEST OVERLOADS
+        friend class ::HalfHourIndex_Test;
+
+        /**
+         * @brief Construct a new Half Hour Index object for the GTest suite.
+         * 
+         * @param indexPath 
+         * @param metadataPath 
+         */
+        HalfHourIndex(const std::filesystem::path indexPath, const std::filesystem::path metadataPath);
 
     public:
         // CONSTRUCTOR
@@ -212,10 +223,4 @@ namespace Core {
             std::size_t maxResults
         ) const;
     };
-
-
-    class HalfHourIndex_Test {
-
-    };
-
 }

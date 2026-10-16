@@ -80,10 +80,34 @@ namespace Core {
         return shortDate;
     }
 
-    HalfHourIndex::HalfHourIndex(const std::size_t &numOfSeconds) : _index(DIMENSION) {
-        this->_indexPath = GetIndexPath(numOfSeconds);
-        this->_metadataPath = GetMetadataPath(numOfSeconds);
+    HalfHourIndex::HalfHourIndex(
+        const std::filesystem::path indexPath,
+        const std::filesystem::path metadataPath
+    )
+        : _index(DIMENSION),
+        _indexPath(indexPath),
+        _metadataPath(metadataPath)
+    {
+        if (_indexPath.empty()) {
+            _indexPath = GetIndexPath(1);
+        }
 
+        if (_metadataPath.empty()) {
+            _metadataPath = GetMetadataPath(1);
+        }
+
+        Initialize();
+    }
+
+    HalfHourIndex::HalfHourIndex(const std::size_t& numOfSeconds)
+        : _index(DIMENSION),
+        _indexPath(GetIndexPath(numOfSeconds)),
+        _metadataPath(GetMetadataPath(numOfSeconds))
+    {
+        Initialize();
+    }
+
+    void HalfHourIndex::Initialize() {
         if (Common::Storage::FileExists(this->_indexPath)) {
             Logger::Info(
                 std::format(

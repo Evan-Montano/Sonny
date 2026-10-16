@@ -43,7 +43,7 @@ async function executeRequest(page, request) {
 }
 
 async function main() {
-    const browser = await chromium.launch({ headless: false });
+    const browser = await chromium.launch({ headless: true });
 
     try {
         const context = await browser.newContext();
