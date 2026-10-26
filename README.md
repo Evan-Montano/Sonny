@@ -36,6 +36,10 @@ sudo dnf install \
     curl \
     libcurl-devel \
     json-devel \
+    libsecret-devel \
+    libsecret-tools \
+    openssl-devel \
+    pkgconf-pkg-config \
     libomp-devel \
     openblas-devel \
     libsecret \
@@ -220,5 +224,9 @@ Sonny currently uses:
 * **libcurl**
 * **nlohmann/json**
 * **OpenMP**
+* **Paho MQTT C++ / C** (fetched and built statically with TLS by CMake)
+* **libsecret** (read-only Secret Service access)
+
+See [docs/webull-streaming.md](docs/webull-streaming.md) for OpenAPI application setup, Secret Service provisioning, and live/sandbox quote-stream details.
 
 Linux builds are configured as **Debug** builds with debugging symbols and optimizations disabled, for now while development is still in progress.

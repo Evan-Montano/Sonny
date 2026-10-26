@@ -5,6 +5,7 @@
 
 #include "../common/logger.hpp"
 #include "../core/setup.hpp"
+#include "../client/webullstream.hpp"
 
 #include <ftxui/dom/direction.hpp>
 #include <ftxui/ftxui.hpp>
@@ -29,15 +30,19 @@ private:
      */
     int main_selected = 0;
     int setup_selected = 0;
+    Client::WebullStreamingClient webull_stream;
 
     // Main menu
     std::vector<std::string> main_entries = {
+        "Start Live Webull SPY Quote Stream",
+        "Stop Webull Quote Stream",
         "Setup",
         "Exit"
     };
 
     // Setup menu
     std::vector<std::string> setup_entries = {
+        "Start Sandbox Webull SPY Quote Stream",
         "Run All Setup Processes (Clears Everything)",
         "Download Historical Records (Clears Existing)",
         "Download Missing Records (Keeps Existing)",
@@ -132,11 +137,17 @@ public:
         this->main_menu_options.on_enter = [&] {
             switch (this->main_selected) {
                 case 0:
+                    this->webull_stream.Start(Client::WebullEnvironment::Live);
+                    break;
+                case 1:
+                    this->webull_stream.RequestStop();
+                    break;
+                case 2:
                     // Setup
                     this->current_menu = 1;
                     break;
 
-                case 1:
+                case 3:
                     // Exit
                     this->screen.ExitLoopClosure()();
                     break;
@@ -156,26 +167,30 @@ public:
         this->setup_menu_options.on_enter = [&] {
             switch (this->setup_selected) {
                 case 0:
+                    this->webull_stream.Start(Client::WebullEnvironment::Sandbox);
+                    break;
+
+                case 1:
                     // Total setup process
                     DispatchOperation(&Core::Setup::ExecuteTotalSetupProcess);
                     break;
 
-                case 1:
+                case 2:
                     // Download all record files
                     DispatchOperation(&Core::Setup::ExecuteDownloadAllRecordFiles);
                     break;
 
-                case 2:
+                case 3:
                     // Download missing records, keep existing
                     DispatchOperation(&Core::Setup::ExecuteDownloadAllMissingRecordFiles);
                     break;
 
-                case 3:
+                case 4:
                     // Create vector files
                     DispatchOperation(&Core::Setup::ExecuteUpdateIndexes);
                     break;
 
-                case 4:
+                case 5:
                     // Back to main menu
                     this->current_menu = 0;
                     break;
@@ -276,6 +291,7 @@ public:
 
         // Run
         this->screen.Loop(app);
+        this->webull_stream.Stop();
     }
 
     ViewGuard PushView(RenderFunction renderer) {

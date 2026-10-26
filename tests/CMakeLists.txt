@@ -2,6 +2,7 @@ add_executable(sonny_common_tests
     common/datetime_tests.cpp
     common/jsonutil_tests.cpp
     core/halfhourindex_tests.cpp
+    client/webullstream_tests.cpp
 )
 
 target_compile_definitions(sonny_common_tests
@@ -12,6 +13,7 @@ target_compile_definitions(sonny_common_tests
 target_link_libraries(sonny_common_tests
     PRIVATE
         sonny_core
+        sonny_webull
         GTest::gtest_main
 )
 
