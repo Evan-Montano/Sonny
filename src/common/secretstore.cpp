@@ -12,7 +12,7 @@ namespace Common {
     namespace {
         // Stable attributes let secret-tool provision entries without storing them in Sonny settings.
         constexpr SecretSchema WebullSchema = {
-            "org.sonny.credentials",
+            "org.freedesktop.Secret.Generic",
             SECRET_SCHEMA_NONE,
             {
                 {"application", SECRET_SCHEMA_ATTRIBUTE_STRING},

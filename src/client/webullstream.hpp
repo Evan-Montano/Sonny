@@ -10,8 +10,16 @@
 #include <thread>
 
 namespace Client {
+    /**
+     * @brief Enum class to identify if we are running within a sandbox, or the user's real webull trading account.
+     * 
+     */
     enum class WebullEnvironment { Live, Sandbox };
 
+    /**
+     * @brief Contains configuration info for the TCP connection.
+     * 
+     */
     struct WebullEnvironmentConfig {
         WebullEnvironment environment;
         const char* name;
@@ -21,14 +29,21 @@ namespace Client {
     };
 
     const WebullEnvironmentConfig& GetWebullEnvironmentConfig(WebullEnvironment environment);
+
     std::string BuildWebullSubscriptionBody(const std::string& session_id);
+
     std::string GenerateWebullSignature(const std::string& path, const std::string& body,
                                         const std::string& app_key, const std::string& app_secret,
                                         const std::string& host, const std::string& timestamp,
                                         const std::string& nonce,
                                         const std::map<std::string, std::string>& query_parameters = {});
 
+    /**
+     * @brief Subscription HTTP Request status types.
+     * 
+     */
     enum class SubscriptionResultKind { Success, AuthenticationFailure, PermissionFailure, InvalidRequest, TransportFailure, ServerFailure };
+
     struct SubscriptionResult {
         SubscriptionResultKind kind = SubscriptionResultKind::TransportFailure;
         long http_status = 0;

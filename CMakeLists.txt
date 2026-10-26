@@ -84,7 +84,6 @@ target_link_libraries(sonny_common
 add_library(sonny_core STATIC
     src/core/engine.cpp
     src/core/transformer.cpp
-    src/core/chartdata.cpp
 )
 
 target_include_directories(sonny_core
@@ -102,7 +101,6 @@ add_executable(sonny
     src/sonny.cpp
     src/client/curlrequest.cpp
     src/client/simplecurlwrapper.cpp
-    src/client/webullclient.cpp
     src/dukascopy/dukascopy.cpp
     src/core/setup.cpp
 )

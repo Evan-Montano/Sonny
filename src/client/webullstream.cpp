@@ -103,7 +103,7 @@ namespace Client {
             std::string signing;
             // Webull signs sorted query and header fields plus the hash of the exact body sent.
             for (const auto& [key, value] : values) {
-                if (!signing.empty()) signing += '&';
+                if (signing.empty() == false) signing += '&';
                 signing += key + "=" + value;
             }
             const std::string to_encode = path + "&" + signing + "&" + HexUpper(md5.data(), md5_len);
@@ -164,10 +164,19 @@ namespace Client {
             }
         }
 
+        /**
+         * @brief 
+         * 
+         * @param config 
+         * @param credentials 
+         * @param session 
+         * @param unsubscribe 
+         * @return SubscriptionResult 
+         */
         SubscriptionResult PostSubscription(const WebullEnvironmentConfig& config, const Credentials& credentials,
                                              const std::string& session, bool unsubscribe) {
             static const bool curl_initialized = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK;
-            if (!curl_initialized) return {SubscriptionResultKind::TransportFailure, 0, "libcurl initialization failed"};
+            if (curl_initialized == false) return {SubscriptionResultKind::TransportFailure, 0, "libcurl initialization failed"};
             const std::string path = unsubscribe ? "/market-data/streaming/unsubscribe" : "/market-data/streaming/subscribe";
             // Compact serialization keeps the signed bytes identical to the transmitted JSON body.
             const std::string body = BuildWebullSubscriptionBody(session);
@@ -188,10 +197,14 @@ namespace Client {
             add("x-signature-nonce: " + nonce);
             add("x-version: v3");
             add("reqid: " + NewId());
-            if (!credentials.access_token.empty()) add("x-access-token: " + credentials.access_token);
+            if (credentials.access_token.empty() == false) add("x-access-token: " + credentials.access_token);
 
             CURL* curl = curl_easy_init();
-            if (!curl) { curl_slist_free_all(headers); return {SubscriptionResultKind::TransportFailure, 0, "Unable to create HTTP request"}; }
+            if (!curl) { 
+                curl_slist_free_all(headers); 
+                return {SubscriptionResultKind::TransportFailure, 0, "Unable to create HTTP request"}; 
+            }
+
             std::string response;
             const std::string url = "https://" + std::string(config.api_host) + path;
             curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -232,11 +245,13 @@ namespace Client {
             std::string lower = diagnostic;
             std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             SubscriptionResultKind kind = SubscriptionResultKind::ServerFailure;
-            if (status == 401 || lower.find("authentication") != std::string::npos || lower.find("invalid app key") != std::string::npos)
+            if (status == 401 || lower.find("authentication") != std::string::npos || lower.find("invalid app key") != std::string::npos) {
                 kind = SubscriptionResultKind::AuthenticationFailure;
+            }
             // A bare 403 cannot identify the cause; treat it as an entitlement issue unless auth detail is present.
-            else if (status == 403 || lower.find("permission") != std::string::npos || lower.find("entitlement") != std::string::npos)
+            else if (status == 403 || lower.find("permission") != std::string::npos || lower.find("entitlement") != std::string::npos) {
                 kind = SubscriptionResultKind::PermissionFailure;
+            }
             else if (status == 400 || status == 422) kind = SubscriptionResultKind::InvalidRequest;
             return {kind, status, diagnostic};
         }
@@ -258,6 +273,10 @@ namespace Client {
             }
         }
 
+        /**
+         * @brief Callback class inheriting mqtt callback interface for handling quote messages.
+         * 
+         */
         class StreamCallback final : public virtual mqtt::callback {
         public:
             void connected(const std::string&) override { connected_.store(true); }
@@ -351,21 +370,25 @@ namespace Client {
 
     void WebullStreamingClient::Run(WebullEnvironment environment) {
         const auto& config = GetWebullEnvironmentConfig(environment);
+
         Logger::Info(std::string("Webull environment selected: ") + config.name, true);
+
         const auto secret_environment = environment == WebullEnvironment::Live
             ? Common::SecretEnvironment::Live : Common::SecretEnvironment::Sandbox;
+
         Credentials credentials;
         credentials.app_key = GetCredential(secret_environment, "app_key");
         if (credentials.app_key.empty()) goto done;
         credentials.app_secret = GetCredential(secret_environment, "app_secret");
         if (credentials.app_secret.empty()) goto done;
+
         // Token creation needs Webull's interactive verification, so only read a provisioned token.
         credentials.access_token = GetCredential(secret_environment, "access_token", false);
 
         {
             std::chrono::seconds backoff{1};
             bool permanently_failed = false;
-            while (!permanently_failed) {
+            while (permanently_failed == false) {
                 {
                     std::lock_guard lock(mutex_);
                     if (stop_requested_) break;
@@ -373,10 +396,12 @@ namespace Client {
                 const std::string session = NewId();
                 const std::string uri = "ssl://" + std::string(config.mqtt_host) + ":1883";
                 Logger::Info("Webull MQTT connection attempt to " + uri, true);
+
                 try {
                     StreamCallback callback;
                     mqtt::async_client client(uri, session);
                     client.set_callback(callback);
+
                     mqtt::ssl_options ssl = mqtt::ssl_options_builder()
                         // Verify the broker certificate to reject untrusted endpoints.
                         .enable_server_cert_auth(true)
@@ -389,11 +414,15 @@ namespace Client {
                         .password("sonny")
                         .ssl(ssl)
                         .finalize();
+                    
                     client.connect(options)->wait();
+
                     // Webull binds the HTTP subscription to this already-connected MQTT client ID.
                     Logger::Info("Webull MQTT connected; awaiting HTTP subscription", true);
+
                     const auto subscribed = PostSubscription(config, credentials, session, false);
                     LogSubscription("subscribe", subscribed);
+                    
                     if (!subscribed) {
                         permanently_failed = subscribed.kind == SubscriptionResultKind::AuthenticationFailure ||
                             subscribed.kind == SubscriptionResultKind::PermissionFailure ||
@@ -403,12 +432,14 @@ namespace Client {
                     } else {
                         Logger::Info("Webull subscription accepted; waiting for market-data messages", true);
                         backoff = std::chrono::seconds(1);
+
                         while (true) {
                             std::unique_lock lock(mutex_);
                             if (cv_.wait_for(lock, std::chrono::seconds(1), [this] { return stop_requested_; })) break;
                             lock.unlock();
-                            if (!client.is_connected() || !callback.Connected()) break;
+                            if (client.is_connected() == false || callback.Connected() == false) break;
                         }
+
                         if (client.is_connected()) {
                             const auto unsubscribed = PostSubscription(config, credentials, session, true);
                             LogSubscription("unsubscribe", unsubscribed);
@@ -426,6 +457,7 @@ namespace Client {
                     (void)error;
                     Logger::Error("Webull streaming operation failed", true);
                 }
+
                 // Webull does not restore subscriptions after reconnect; the next loop uses a fresh session ID.
                 {
                     std::unique_lock lock(mutex_);
@@ -433,9 +465,11 @@ namespace Client {
                     Logger::Warning("Webull reconnect attempt scheduled in " + std::to_string(backoff.count()) + " seconds", true);
                     if (cv_.wait_for(lock, backoff, [this] { return stop_requested_; })) break;
                 }
+                
                 backoff = std::min(backoff * 2, std::chrono::seconds(30));
             }
         }
+
     done:
         {
             std::lock_guard lock(mutex_);

@@ -66,6 +66,7 @@ sudo apt install \
     libomp-dev \
     libopenblas-dev \
     libsecret-tools \
+    libsecret-1-dev \
     gdb
 ```
 
