@@ -357,7 +357,7 @@ namespace Client {
     void WebullStreamingClient::RequestStop() {
         {
             std::lock_guard lock(mutex_);
-            if (!running_ && !worker_.joinable()) return;
+            if (running_ == false && worker_.joinable() == false) return;
             stop_requested_ = true;
         }
         cv_.notify_all();
@@ -369,11 +369,11 @@ namespace Client {
     }
 
     void WebullStreamingClient::Run(WebullEnvironment environment) {
-        const auto& config = GetWebullEnvironmentConfig(environment);
+        const WebullEnvironmentConfig& config = GetWebullEnvironmentConfig(environment);
 
         Logger::Info(std::string("Webull environment selected: ") + config.name, true);
 
-        const auto secret_environment = environment == WebullEnvironment::Live
+        const Common::SecretEnvironment secret_environment = environment == WebullEnvironment::Live
             ? Common::SecretEnvironment::Live : Common::SecretEnvironment::Sandbox;
 
         Credentials credentials;

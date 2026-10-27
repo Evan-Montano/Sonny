@@ -112,6 +112,26 @@ target_link_libraries(sonny_webull
     PRIVATE CURL::libcurl OpenSSL::Crypto PahoMqttCpp::paho-mqttpp3-static
 )
 
+add_library(sonny_runtime STATIC
+    src/runtime/runtime.cpp
+)
+
+target_include_directories(sonny_runtime
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}/src
+)
+
+target_link_libraries(sonny_runtime
+    PUBLIC
+        sonny_core
+        sonny_common
+        sonny_webull
+    PRIVATE
+        ftxui::screen
+        ftxui::dom
+        ftxui::component
+)
+
 target_compile_definitions(sonny
     PRIVATE
         SONNY_BROWSER_CLIENT_PATH="${PROJECT_SOURCE_DIR}/src/client/browserclient.js"
@@ -119,8 +139,7 @@ target_compile_definitions(sonny
 
 target_link_libraries(sonny
     PRIVATE
-        sonny_core
-        sonny_webull
+        sonny_runtime
         CURL::libcurl
         nlohmann_json::nlohmann_json
         OpenMP::OpenMP_CXX

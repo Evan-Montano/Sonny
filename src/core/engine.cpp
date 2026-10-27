@@ -198,8 +198,8 @@ namespace Core {
                     true
                 );
 
-                if (Common::Storage::FileExists(this->_indexPath.root_path()) == false) {
-                    Common::Storage::CreateDirectory(this->_indexPath.root_path());
+                if (Common::Storage::FileExists(this->_indexPath.parent_path()) == false) {
+                    Common::Storage::CreateDirectory(this->_indexPath.parent_path());
                 }
 
                 faiss::write_index(
@@ -253,8 +253,8 @@ namespace Core {
             true
         );
 
-        if (Common::Storage::FileExists(this->_metadataPath.root_path()) == false) {
-            Common::Storage::CreateDirectory(this->_metadataPath.root_path());
+        if (Common::Storage::FileExists(this->_metadataPath.parent_path()) == false) {
+            Common::Storage::CreateDirectory(this->_metadataPath.parent_path());
         }
 
         if (Common::Storage::FileExists(this->_metadataPath)) {

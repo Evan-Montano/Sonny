@@ -5,7 +5,7 @@
 
 #include "../common/logger.hpp"
 #include "../core/setup.hpp"
-#include "../client/webullstream.hpp"
+#include "../runtime/runtime.hpp"
 
 #include <ftxui/dom/direction.hpp>
 #include <ftxui/ftxui.hpp>
@@ -29,20 +29,24 @@ private:
      * 
      */
     int main_selected = 0;
+    int sandbox_selected = 0;
     int setup_selected = 0;
-    Client::WebullStreamingClient webull_stream;
 
     // Main menu
     std::vector<std::string> main_entries = {
-        "Start Live Webull SPY Quote Stream",
-        "Stop Webull Quote Stream",
+        "Sandbox",
         "Setup",
         "Exit"
     };
 
+    // Sandbox menu
+    std::vector<std::string> sandbox_entries = {
+        "Sandbox Webull SPY Quote Stream",
+        "Back"
+    };
+
     // Setup menu
     std::vector<std::string> setup_entries = {
-        "Start Sandbox Webull SPY Quote Stream",
         "Run All Setup Processes (Clears Everything)",
         "Download Historical Records (Clears Existing)",
         "Download Missing Records (Keeps Existing)",
@@ -51,10 +55,12 @@ private:
     };
 
     MenuOption main_menu_options;
+    MenuOption sandbox_menu_options;
     MenuOption setup_menu_options;
 
     using RenderFunction = std::function<ftxui::Element()>;
     RenderFunction temporary_renderer;
+    ftxui::Component temporary_component;
     int temporary_previous_menu = 0;
 
     // CONSTRUCTOR
@@ -72,6 +78,7 @@ private:
      */
     void RestorePreviousMenu() {
         this->temporary_renderer = nullptr;
+        this->temporary_component.reset();
         this->current_menu = this->temporary_previous_menu;
         this->screen.PostEvent(Event::Custom);
     }
@@ -137,17 +144,15 @@ public:
         this->main_menu_options.on_enter = [&] {
             switch (this->main_selected) {
                 case 0:
-                    this->webull_stream.Start(Client::WebullEnvironment::Live);
-                    break;
-                case 1:
-                    this->webull_stream.RequestStop();
-                    break;
-                case 2:
-                    // Setup
+                    // Sandbox
                     this->current_menu = 1;
                     break;
+                case 1:
+                    // Setup
+                    this->current_menu = 2;
+                    break;
 
-                case 3:
+                case 2:
                     // Exit
                     this->screen.ExitLoopClosure()();
                     break;
@@ -158,39 +163,58 @@ public:
         };
 
         auto main_menu =
-            Menu(
-                &this->main_entries,
-                &this->main_selected,
-                this->main_menu_options
-            );
+        Menu(
+            &this->main_entries,
+            &this->main_selected,
+            this->main_menu_options
+        );
+
+        this->sandbox_menu_options.on_enter = [&] {
+            switch(this->sandbox_selected) {
+                case 0:
+                    // Start sandbox spy quote stream.
+                    DispatchOperation(&Runtime::BeginSandboxRuntime);
+                    break;
+                case 1:
+                    // Back to main menu
+                    this->current_menu = 0;
+                    break;
+                default:
+                    break;
+            }
+        };
+
+        auto sandbox_menu = 
+        Menu(
+            &this->sandbox_entries,
+            &this->sandbox_selected,
+            this->sandbox_menu_options
+        );
+
 
         this->setup_menu_options.on_enter = [&] {
             switch (this->setup_selected) {
                 case 0:
-                    this->webull_stream.Start(Client::WebullEnvironment::Sandbox);
-                    break;
-
-                case 1:
                     // Total setup process
                     DispatchOperation(&Core::Setup::ExecuteTotalSetupProcess);
                     break;
 
-                case 2:
+                case 1:
                     // Download all record files
                     DispatchOperation(&Core::Setup::ExecuteDownloadAllRecordFiles);
                     break;
 
-                case 3:
+                case 2:
                     // Download missing records, keep existing
                     DispatchOperation(&Core::Setup::ExecuteDownloadAllMissingRecordFiles);
                     break;
 
-                case 4:
+                case 3:
                     // Create vector files
                     DispatchOperation(&Core::Setup::ExecuteUpdateIndexes);
                     break;
 
-                case 5:
+                case 4:
                     // Back to main menu
                     this->current_menu = 0;
                     break;
@@ -201,11 +225,11 @@ public:
         };
 
         auto setup_menu =
-            Menu(
-                &this->setup_entries,
-                &this->setup_selected,
-                this->setup_menu_options
-            );
+        Menu(
+            &this->setup_entries,
+            &this->setup_selected,
+            this->setup_menu_options
+        );
 
         // Temporary view
         auto temporary_view = Renderer([&] {
@@ -220,6 +244,7 @@ public:
         auto menus = Container::Tab(
             {
                 main_menu,
+                sandbox_menu,
                 setup_menu,
                 temporary_view
             },
@@ -250,12 +275,19 @@ public:
         auto renderer = Renderer(menus, [&] {
             Element main_view;
 
-            if (this->current_menu == 2) {
+            if (this->current_menu == 3) {
                 main_view = temporary_view->Render();
             }
             else {
+                std::string title;
+                switch (this->current_menu) {
+                    case 0: title = "Menu"; break;
+                    case 1: title = "Sandbox"; break;
+                    case 2: title = "Setup"; break;
+                    default: title = "Sonny"; break;
+                }
                 main_view = window(
-                    text(this->current_menu == 0 ? "Menu" : "Setup") | bold,
+                    text(title) | bold,
                     vbox({
                         menus->Render()
                     })
@@ -264,12 +296,7 @@ public:
 
             return vbox({
                 text("Sonny") | bold | center,
-
                 main_view | flex,
-
-                // Space between the UI and console.
-                // text("") | size(HEIGHT, EQUAL, 1),
-
                 // Console: exactly 12 terminal rows tall.
                 console_view->Render()
                     | size(HEIGHT, EQUAL, 12)
@@ -278,11 +305,22 @@ public:
 
         // Global keyboard handling
         auto app = CatchEvent(renderer, [&](Event event) {
-            if (event == Event::Escape) {
-                if (this->current_menu == 1) {
-                    // Escape from Setup -> Main Menu
-                    this->current_menu = 0;
+            // Forward events to the active temporary component first.
+            if (this->current_menu == 3 && this->temporary_component) {
+                if (this->temporary_component->OnEvent(event)) {
                     return true;
+                }
+            }
+
+            if (event == Event::Escape) {
+                switch (this->current_menu) {
+                    case 1: // Sandbox menu
+                    case 2: // Setup menu
+                        this->current_menu = 0;
+                        return true;
+
+                    default:
+                        break;
                 }
             }
 
@@ -291,19 +329,37 @@ public:
 
         // Run
         this->screen.Loop(app);
-        this->webull_stream.Stop();
     }
 
     ViewGuard PushView(RenderFunction renderer) {
+        this->temporary_component.reset();
         this->temporary_previous_menu = this->current_menu;
         this->temporary_renderer = std::move(renderer);
 
         // 0 = Main
-        // 1 = Setup
-        // 2 = Temporary view
-        this->current_menu = 2;
-
+        // 1 = Sandbox
+        // 2 = Setup
+        // 3 = Temporary view
+        this->current_menu = 3;
         this->screen.PostEvent(Event::Custom);
+
+        return ViewGuard(this);
+    }
+
+    ViewGuard PushView(ftxui::Component component) {
+        this->temporary_previous_menu = this->current_menu;
+
+        // Retain the component so its event handler remains accessible.
+        this->temporary_component = component;
+
+        // Also provide its rendering function to the existing view system.
+        this->temporary_renderer = [component = std::move(component)] {
+            return component->Render();
+        };
+
+        this->current_menu = 3;
+        this->screen.PostEvent(Event::Custom);
+
         return ViewGuard(this);
     }
 

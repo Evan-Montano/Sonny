@@ -46,56 +46,50 @@ namespace Core {
         std::filesystem::path GetRecordPathForDay(const Common::DateTime &date) {
             return Common::Storage::RECORDS_BASE_PATH / (date.ToString_Date() + ".rec");
         }
-
+        
         void ExecuteUpdateIndexes() {
-            // For every .rec file under ~/storage/records/
-            //      Grab the full day's MLRecords into a vector
-            //      Pass the vector through normalization
-            //      Split the vector into half-hour segments -> vector<vector<MLRecord>>
-            //      For each half-hour segment
-            //          Initialize HalfHourIndex object for the appropriate segment
-            //          Pass segment vector<MLRecord> to HalfHourIndex.Add() method
-            static_assert(sizeof(MLRecord) == 12);
+            using namespace Common::Storage;
 
-            Logger::Info("========================================", true);
-            Logger::Info("            Creating Indexes", true);
-            Logger::Info("========================================", true);
+            constexpr std::size_t RECORDS_PER_HALF_HOUR = 1800;
+            constexpr std::size_t SEARCH_WINDOW_LENGTH = 30;
+            constexpr std::size_t TOTAL_SEGMENTS = 13;
+
+            const std::size_t totalDays = static_cast<std::size_t>(Core::Setup::TOTAL_DAYS);
+            const std::size_t totalUnits = totalDays * TOTAL_SEGMENTS;
 
             std::string status{};
             std::string currentDate{};
             std::string currentSegment{};
-
-            std::size_t completedDays = 0;
-            const long totalDays = TOTAL_DAYS;
+            std::size_t completedUnits = 0;
 
             auto view = UI::Get().PushView([&] {
-                const float dayProgress =
-                    totalDays == 0
-                    ? 0.0f
-                    : static_cast<float>(completedDays) /
-                    static_cast<float>(totalDays);
+                const float progress =
+                    totalUnits == 0
+                        ? 0.0f
+                        : static_cast<float>(completedUnits) /
+                            static_cast<float>(totalUnits);
 
                 return ftxui::window(
-                    ftxui::text("Creating FAISS Indexes") | ftxui::bold,
+                    ftxui::text("Updating FAISS Indexes") | ftxui::bold,
                     ftxui::vbox({
                         ftxui::text(status),
                         ftxui::separator(),
                         ftxui::hbox({
-                            ftxui::text("Trading day: "),
-                            ftxui::text(currentDate) | ftxui::bold,
-                        }),
-                        ftxui::hbox({
-                            ftxui::text("Segment: "),
+                            ftxui::text("Current segment: "),
                             ftxui::text(currentSegment) | ftxui::bold,
                         }),
-                        ftxui::gauge(dayProgress),
+                        ftxui::hbox({
+                            ftxui::text("Current date: "),
+                            ftxui::text(currentDate) | ftxui::bold,
+                        }),
+                        ftxui::gauge(progress),
                         ftxui::text(
-                        std::format(
-                            "{} / {} days",
-                            completedDays,
-                            totalDays
+                            std::format(
+                                "{} / {} segment-days",
+                                completedUnits,
+                                totalUnits
+                            )
                         )
-                    )
                     }) |
                     ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, 55)
                 );
@@ -103,75 +97,91 @@ namespace Core {
 
             UI::Get().Refresh();
 
-            if (Common::Storage::FileExists(Common::Storage::RECORDS_BASE_PATH)) {
-                for (Common::DateTime procDate = BEGIN_DATE; procDate <= END_DATE; procDate.NextDay()) {
-                    std::filesystem::path recFilePath = GetRecordPathForDay(procDate);
+            if (FileExists(RECORDS_BASE_PATH)) {
+                // Process one half-hour index at a time.
+                for (std::size_t segmentIndex = 0; segmentIndex < TOTAL_SEGMENTS; ++segmentIndex) {
+                    // The constructor uses the record offset to select the index.
+                    const std::size_t segmentOffset = segmentIndex * RECORDS_PER_HALF_HOUR;
+                    currentSegment = std::format("{} / {}", segmentIndex + 1, TOTAL_SEGMENTS);
 
-                    if (Common::Storage::FileExists(recFilePath)) {
+                    // Keep this index alive across the entire historical date range.
+                    // Its destructor saves the index and metadata when this scope ends.
+                    {
+                        Core::HalfHourIndex indexSegment(segmentOffset);
 
-                        currentDate = procDate.ToString_Date();
-                        status = std::format("Loading {}", recFilePath.string());
-                        UI::Get().Refresh();
+                        Common::DateTime dt = Core::Setup::BEGIN_DATE;
 
-                        // Open and load into vector
-                        std::vector<MLRecord> allRecords{};
-                        allRecords.reserve(23000);
-                        std::ifstream recFile(recFilePath, std::ios::binary);
+                        for (; dt <= Core::Setup::END_DATE; dt.NextDay()) {
+                            currentDate = dt.ToString_Date();
 
-                        if (recFile && recFile.is_open()) {
-                            Logger::Info(std::format("Beginning read for: {}", recFilePath.string()), true);
+                            const std::filesystem::path recFilePath = RECORDS_BASE_PATH / (currentDate + ".rec");
 
-                            MLRecord recordFromDisk{};
-                            while (recFile.read(reinterpret_cast<char*>(&recordFromDisk), sizeof(recordFromDisk))) {
-                                allRecords.push_back(recordFromDisk);
-                            }
-                            if (recFile.eof()) {
-                                Logger::Info("Successfully parsed record file", true);
-                            }
-                            recFile.close();
-                        }
-                        else {
-                            Logger::Error(std::format("Skipped: Could not open record file: {}", recFilePath.string()), true);
-                            continue;
-                        }
-
-                        // Run the full day through a normalization process
-                        NormalizeRecordsVector(allRecords);
-
-                        // allRecords now contains MLRecords, where each item represents 1s
-                        // Process in 30 minute segments (1800 items)
-                        constexpr std::size_t RECORDS_PER_HALF_HOUR = 1800;
-                        
-                        // Extra padding so we can index the end of the segment, peeks into the next half-hour
-                        constexpr std::size_t SEARCH_WINDOW_LENGTH = 30;
-
-                        for (std::size_t i = 0; i < allRecords.size(); i += RECORDS_PER_HALF_HOUR) {
-                            const std::size_t end = std::min(
-                                i + RECORDS_PER_HALF_HOUR + (SEARCH_WINDOW_LENGTH - 1),
-                                allRecords.size()
-                            );
-
-                            std::span<MLRecord> segment(allRecords.begin() + i, allRecords.begin() + end);
-
-                            const std::size_t segmentNumber = (i / RECORDS_PER_HALF_HOUR) + 1;
-                            currentSegment = std::format("{} / 13", segmentNumber);
                             status = std::format("Indexing {}", recFilePath.filename().string());
+
                             UI::Get().Refresh();
 
-                            // The constructor is in charge of loading in the right index files based on the num of minutes since market start
-                            HalfHourIndex indexSegment(i);
-                            indexSegment.AddVectorsToIndex(segment, recFilePath, i);
+                            // Mising record files are skipped, as in the existing flow.
+                            if (FileExists(recFilePath)) {
+                                std::ifstream recFileStream(recFilePath, std::ios::binary);
+
+                                if (recFileStream.is_open()) {
+                                    // Load only one day's records into memory at a time.
+                                    std::vector<Core::MLRecord> allRecords{};
+                                    allRecords.reserve(23000);
+
+                                    Core::MLRecord record{};
+
+                                    while (recFileStream.read(reinterpret_cast<char*>(&record), sizeof(record))) {
+                                        allRecords.push_back(record);
+                                    }
+
+                                    recFileStream.close();
+
+                                    // Normalize the complete trading day before extracting a segment.
+                                    // Normalizing segments independently would change the existing vector values.
+                                    NormalizeRecordsVector(allRecords);
+
+                                    // Only process this segment if the day has records
+                                    // beginning at its offset.
+                                    if (allRecords.size() > segmentOffset) {
+                                        const std::size_t end = std::min(
+                                            segmentOffset + RECORDS_PER_HALF_HOUR + (SEARCH_WINDOW_LENGTH - 1), 
+                                            allRecords.size()
+                                        );
+
+                                        // Include 29 additional records so the final window in this segment
+                                        // can contain 30 records.
+                                        std::span<Core::MLRecord> segment(
+                                            allRecords.begin() + segmentOffset,
+                                            allRecords.begin() + end
+                                        );
+
+                                        indexSegment.AddVectorsToIndex(segment, recFilePath, segmentOffset);
+                                    }
+
+                                    // allRecordsd is released at the end of this scope
+                                    // before the net historical day is loaded.
+                                }
+                            }
+
+                            ++completedUnits;
+                            UI::Get().Refresh();
                         }
                     }
 
-                    ++completedDays;
-                    status = "Day Complete";
-                    currentSegment = "13 / 13";
+                    // indexSegment is destroyed here, saving the updated index and
+                    // metadata once after every date has been processed for this segment.
                     UI::Get().Refresh();
                 }
             }
+            else {
+                Logger::Error("Records directory does not exist.", true);
+            }
 
-            Logger::Info("Indexing Complete.", true);
+            status = "Finished updating FAISS indexes";
+            currentDate.clear();
+            currentSegment.clear();
+            UI::Get().Refresh();
         }
 
     }

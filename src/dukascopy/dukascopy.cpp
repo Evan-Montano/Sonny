@@ -30,6 +30,24 @@ namespace Dukascopy {
     inline static const std::string ticksUrlBase =
         "https://jetta.dukascopy.com/v1/ticks/SPY.US-USD/";
 
+    std::unordered_map<std::string, std::string> headers = {
+        { "Accept", "*/*" },
+        { "Accept-Language", "en-US,en;q=0.6" },
+        { "Cache-Control", "no-cache" },
+        { "Origin", "https://widgets.dukascopy.com" },
+        { "Pragma", "no-cache" },
+        { "Priority", "u=1, i" },
+        { "Referer", "https://widgets.dukascopy.com/" },
+        { "sec-ch-ua", "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Brave\";v=\"156\"" },
+        { "sec-ch-ua-mobile", "?0" },
+        { "sec-ch-ua-platform", "\"Windows\"" },
+        { "sec-fetch-dest", "empty" },
+        { "sec-fetch-mode", "cors" },
+        { "sec-fetch-site", "same-site" },
+        { "sec-gpc", "1" },
+        { "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36" }
+    };
+
     struct ApiTickResponse {
         Common::UnixTimestamp Timestamp;
         float Multiplier;
@@ -329,12 +347,7 @@ namespace Dukascopy {
             std::vector<ApiTickResponse> tickResponses;
 
             Client::CurlRequest hourRequest("");
-            hourRequest.AddHeader(
-                "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/153.0.0.0 Safari/537.36"
-            );
+            hourRequest.AddHeader(headers);
 
             hourRequest.SetCallback(
                 [&](const std::string& response) {
@@ -488,19 +501,16 @@ namespace Dukascopy {
         Common::JsonUtility spyData(std::string("{}"));
 
         // Wrapper running browser instance. Will be sharing this object throughout the full corpus run.
-        Client::SimpleCurlWrapper curlWrapper(true);
+        Client::SimpleCurlWrapper curlWrapper;
 
         {
             Client::CurlRequest infoRequest(infoUrl);
-            infoRequest.AddHeader(
-                "User-Agent",
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
-            );
+            infoRequest.AddHeader(headers);
 
             infoRequest.SetCallback(
                 [&](const std::string& response) {
                     if (response.empty() == false) {
-                        spyData = Common::JsonUtility(response);
+                        spyData = Common::JsonUtility(response); // We are throwing in here.
                     }
                     else {
                         Logger::Error(
