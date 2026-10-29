@@ -8,6 +8,7 @@
 
 #include <cerrno>
 #include <csignal>
+#include <cstring>
 #include <format>
 #include <stdexcept>
 #include <string>
@@ -421,6 +422,7 @@ namespace Client {
                     std::format("Browser request failed: {}", error.what()),
                     true
                 );
+                request.RecordResult(0, error.what());
                 if (request.ClearSettingsAfterUse) {
                     request.Reset();
                 }
@@ -432,6 +434,7 @@ namespace Client {
                 request.AppendResponse(body);
             }
             request.FinishResponse();
+            request.RecordResult(0, "");
             if (request.ClearSettingsAfterUse) {
                 request.Reset();
             }
@@ -447,12 +450,32 @@ namespace Client {
         // 4. Configure the curl handle.
         curl_easy_setopt(this->curlHandle, CURLOPT_URL, uriWithParams.c_str()); // set url
         curl_easy_setopt(this->curlHandle, CURLOPT_CA_CACHE_TIMEOUT, 604800L);
+        curl_easy_setopt(this->curlHandle, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(this->curlHandle, CURLOPT_SSL_VERIFYHOST, 2L);
+
+        // Set body. The request owns the bytes, so they stay valid through curl_easy_perform.
+        if (request.HasBody()) {
+            const std::string& body = request.GetBody();
+            curl_easy_setopt(this->curlHandle, CURLOPT_POST, 1L);
+            curl_easy_setopt(this->curlHandle, CURLOPT_POSTFIELDS, body.data());
+            curl_easy_setopt(this->curlHandle, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+        }
+
+        // Set timeouts. Signals cannot be used to interrupt a timed out request on a worker thread.
+        if (request.GetTimeout().count() > 0 || request.GetConnectTimeout().count() > 0) {
+            curl_easy_setopt(this->curlHandle, CURLOPT_TIMEOUT, static_cast<long>(request.GetTimeout().count()));
+            curl_easy_setopt(this->curlHandle, CURLOPT_CONNECTTIMEOUT, static_cast<long>(request.GetConnectTimeout().count()));
+            curl_easy_setopt(this->curlHandle, CURLOPT_NOSIGNAL, 1L);
+        }
 
         // Set headers
         curl_slist *list = nullptr;
         for (const auto& [key, value] : request.GetHeaders()) {
-            const std::string headerStr = std::format("{}: {}", key, value);
+            std::string headerStr = std::format("{}: {}", key, value);
             list = curl_slist_append(list, headerStr.c_str());
+            if (request.SensitiveData) {
+                CurlRequest::WipeString(headerStr);
+            }
         }
         curl_easy_setopt(this->curlHandle, CURLOPT_HTTPHEADER, list);
 
@@ -469,9 +492,20 @@ namespace Client {
             request.FinishResponse();
         }
 
+        long responseCode = 0;
+        curl_easy_getinfo(this->curlHandle, CURLINFO_RESPONSE_CODE, &responseCode);
+        request.RecordResult(responseCode, result == CURLE_OK ? "" : curl_easy_strerror(result));
+
         // 6. Cleanup request object.
         if (request.ClearSettingsAfterUse) {
             request.Reset();
+        }
+        if (request.SensitiveData) {
+            for (curl_slist *header = list; header != nullptr; header = header->next) {
+                if (header->data != nullptr) {
+                    explicit_bzero(header->data, std::strlen(header->data));
+                }
+            }
         }
         curl_slist_free_all(list);
 
@@ -484,6 +518,21 @@ namespace Client {
             default:
                 res = CurlRequestEnum::UNKNOWN;
                 break;
+        }
+
+        return res;
+    }
+
+    std::string SimpleCurlWrapper::EncodeUrl(std::string_view value) {
+        std::string res{};
+
+        CURL* curl = curl_easy_init();
+        if (curl) {
+            char* encoded = curl_easy_escape(curl, value.data(), static_cast<int>(value.size()));
+            res = encoded != nullptr ? encoded : "";
+            
+            if (encoded) curl_free(encoded);
+            curl_easy_cleanup(curl);
         }
 
         return res;

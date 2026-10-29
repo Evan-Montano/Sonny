@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <map>
@@ -50,6 +51,11 @@ namespace Client {
         std::string diagnostic;
         explicit operator bool() const noexcept { return kind == SubscriptionResultKind::Success; }
     };
+
+    /**
+     * @brief App credentials loaded from Secret Service; wiped from memory on destruction.
+     */
+    struct WebullCredentials;
 
     /**
      * @brief Manages one Webull market-data stream and its worker lifetime.
@@ -106,6 +112,11 @@ namespace Client {
         bool IsRunning() const;
 
     private:
+        /**
+         * @brief What the reconnect loop should do after a stream session ends.
+         */
+        enum class SessionOutcome { Reconnect, GiveUp };
+
         // METHODS
 
         /**
@@ -114,6 +125,29 @@ namespace Client {
          * @param environment Environment selected by the caller.
          */
         void Run(WebullEnvironment environment);
+
+        /**
+         * @brief Connect once, subscribe, and stream until the connection drops or shutdown is requested.
+         *
+         * @param config Endpoints for the selected environment.
+         * @param credentials Signing credentials for the selected environment.
+         * @param backoff Reconnect delay; reset once a subscription is accepted.
+         * @return Whether another connection attempt can succeed.
+         */
+        SessionOutcome RunSession(const WebullEnvironmentConfig& config, const WebullCredentials& credentials,
+                                  std::chrono::seconds& backoff);
+
+        /**
+         * @brief Block until shutdown is requested or the timeout elapses.
+         *
+         * @return true if shutdown was requested.
+         */
+        bool WaitForStop(std::chrono::seconds timeout);
+
+        /**
+         * @brief Check whether shutdown was requested without waiting.
+         */
+        bool StopRequested() const;
 
         // MEMBERS
 

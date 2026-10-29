@@ -3,27 +3,27 @@
 
 #include "webullstream.hpp"
 
+#include "mqttwrapper.hpp"
+#include "simplecurlwrapper.hpp"
+#include "../common/datetime.hpp"
+#include "../common/jsonutil.hpp"
 #include "../common/logger.hpp"
 #include "../common/secretstore.hpp"
 
-#include <mqtt/async_client.h>
-#include <curl/curl.h>
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
-#include <openssl/crypto.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cctype>
-#include <cstring>
-#include <ctime>
 #include <format>
-#include <iomanip>
+#include <initializer_list>
+#include <memory>
 #include <random>
-#include <sstream>
-#include <utility>
+#include <string_view>
+#include <vector>
 
 namespace Client {
     namespace {
@@ -35,30 +35,77 @@ namespace Client {
             WebullEnvironment::Sandbox, "sandbox", "api.sandbox.webull.com", "data-api.sandbox.webull.com", "sandbox"
         };
 
-        struct Credentials {
-            std::string app_key;
-            std::string app_secret;
-            std::string access_token;
-            ~Credentials() {
-                // Minimize the time credential bytes remain in process memory.
-                auto wipe = [](std::string& value) {
-                    OPENSSL_cleanse(value.data(), value.size());
-                    value.clear();
-                };
-                wipe(app_key);
-                wipe(app_secret);
-                wipe(access_token);
-            }
+        constexpr const char* SubscribePath = "/market-data/streaming/subscribe";
+        constexpr const char* UnsubscribePath = "/market-data/streaming/unsubscribe";
+
+        constexpr int MqttPort = 1883;
+
+        // Webull authenticates the MQTT connection by App Key; the password is not checked.
+        constexpr const char* MqttPassword = "sonny";
+
+        constexpr std::chrono::seconds MqttKeepAlive{30};
+        constexpr std::chrono::seconds ConnectionPollInterval{1};
+        constexpr std::chrono::seconds InitialBackoff{1};
+        constexpr std::chrono::seconds MaxBackoff{30};
+        constexpr std::chrono::seconds HttpTimeout{15};
+        constexpr std::chrono::seconds HttpConnectTimeout{8};
+
+        constexpr std::size_t MaxDiagnosticLength = 240;
+
+        /* ========================================================================================================== */
+
+        /**
+         * @brief Overwrite and release a string that held credential or signature bytes.
+         */
+        void Cleanse(std::string& value) {
+            OPENSSL_cleanse(value.data(), value.size());
+            value.clear();
+        }
+
+        /**
+         * @brief Cleanses the referenced strings when the enclosing scope exits, on every return path.
+         */
+        class CleanseOnExit {
+        public:
+            CleanseOnExit(std::initializer_list<std::string*> values) : values_(values) {}
+            ~CleanseOnExit() { for (std::string* value : values_) Cleanse(*value); }
+
+            CleanseOnExit(const CleanseOnExit&) = delete;
+            CleanseOnExit& operator=(const CleanseOnExit&) = delete;
+
+        private:
+            std::vector<std::string*> values_;
         };
+    }
+
+    /* ============================================================================================================== */
+
+    struct WebullCredentials {
+        std::string app_key;
+        std::string app_secret;
+        std::string access_token;
+
+        // Minimize the time credential bytes remain in process memory.
+        ~WebullCredentials() {
+            Cleanse(app_key);
+            Cleanse(app_secret);
+            Cleanse(access_token);
+        }
+    };
+
+    /* ============================================================================================================== */
+
+    namespace {
+        enum class SubscriptionAction { Subscribe, Unsubscribe };
+
+        /* ========================================================================================================== */
 
         std::string UtcTimestamp() {
-            const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-            std::tm tm{};
-            gmtime_r(&now, &tm);
-            std::ostringstream out;
-            out << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
-            return out.str();
+            return std::format("{:%Y-%m-%dT%H:%M:%SZ}",
+                               std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
         }
+
+        /* ========================================================================================================== */
 
         std::string NewId() {
             static constexpr char hex[] = "0123456789abcdef";
@@ -68,95 +115,64 @@ namespace Client {
             return id;
         }
 
-        std::string UrlEncode(std::string_view value) {
-            CURL* curl = curl_easy_init();
-            if (!curl) return {};
-            char* encoded = curl_easy_escape(curl, value.data(), static_cast<int>(value.size()));
-            std::string result = encoded != nullptr ? encoded : "";
-            if (encoded) curl_free(encoded);
-            curl_easy_cleanup(curl);
-            return result;
-        }
+        /* ========================================================================================================== */
 
         std::string HexUpper(const unsigned char* bytes, unsigned length) {
-            std::ostringstream out;
-            out << std::uppercase << std::hex << std::setfill('0');
-            for (unsigned i = 0; i < length; ++i) out << std::setw(2) << static_cast<unsigned>(bytes[i]);
-            return out.str();
+            std::string hex;
+            for (unsigned i = 0; i < length; ++i) hex += std::format("{:02X}", bytes[i]);
+            return hex;
         }
 
-        std::string SignRequest(const std::string& path, const std::string& body,
-                                const std::string& app_key, const std::string& app_secret,
-                                const std::string& host, const std::string& timestamp,
-                                const std::string& nonce,
-                                const std::map<std::string, std::string>& query_parameters = {}) {
-            std::array<unsigned char, EVP_MAX_MD_SIZE> md5{};
-            unsigned md5_len = 0;
-            if (EVP_Digest(body.data(), body.size(), md5.data(), &md5_len, EVP_md5(), nullptr) != 1) return {};
-            std::map<std::string, std::string> values = query_parameters;
-            values["host"] = host;
-            values["x-app-key"] = app_key;
-            values["x-signature-algorithm"] = "HMAC-SHA1";
-            values["x-signature-nonce"] = nonce;
-            values["x-signature-version"] = "1.0";
-            values["x-timestamp"] = timestamp;
-            std::string signing;
-            // Webull signs sorted query and header fields plus the hash of the exact body sent.
-            for (const auto& [key, value] : values) {
-                if (signing.empty() == false) signing += '&';
-                signing += key + "=" + value;
+        /* ========================================================================================================== */
+
+        std::string ToLower(std::string value) {
+            std::ranges::transform(value, value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return value;
+        }
+
+        bool ContainsAny(std::string_view text, std::initializer_list<std::string_view> needles) {
+            return std::ranges::any_of(needles, [text](std::string_view needle) { return text.find(needle) != std::string_view::npos; });
+        }
+
+        void Redact(std::string& text, const std::string& secret) {
+            if (secret.empty()) return;
+            static constexpr std::string_view Placeholder = "[redacted]";
+            for (std::size_t position = text.find(secret); position != std::string::npos;
+                 position = text.find(secret, position + Placeholder.size())) {
+                text.replace(position, secret.size(), Placeholder);
             }
-            const std::string to_encode = path + "&" + signing + "&" + HexUpper(md5.data(), md5_len);
-            const std::string encoded = UrlEncode(to_encode);
-            std::string key = app_secret + "&";
-            std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-            unsigned digest_len = 0;
-            const auto* signed_result = HMAC(EVP_sha1(), key.data(), static_cast<int>(key.size()),
-                     reinterpret_cast<const unsigned char*>(encoded.data()), encoded.size(),
-                     digest.data(), &digest_len);
-            OPENSSL_cleanse(key.data(), key.size());
-            if (signed_result == nullptr) return {};
-            std::array<unsigned char, 128> b64{};
-            const int b64_len = EVP_EncodeBlock(b64.data(), digest.data(), static_cast<int>(digest_len));
-            return b64_len > 0 ? std::string(reinterpret_cast<char*>(b64.data()), static_cast<std::size_t>(b64_len)) : std::string{};
         }
 
-        size_t CollectBody(char* data, size_t size, size_t count, void* context) {
-            static_cast<std::string*>(context)->append(data, size * count);
-            return size * count;
-        }
+        /* ========================================================================================================== */
 
-        std::string SafeDiagnostic(std::string_view response, const Credentials& credentials,
-                                   const std::string& signature, const std::string& nonce,
-                                   const std::string& session) {
+        /**
+         * @brief Reduce an error response to fields that are safe to log.
+         * Error bodies can echo request credentials, so only selected fields are exposed, after redaction.
+         *
+         * @param response Raw HTTP response body.
+         * @param secrets Values that must never appear in the returned text.
+         */
+        std::string SafeDiagnostic(const std::string& response, std::initializer_list<const std::string*> secrets) {
             try {
-                // Error bodies can echo request credentials, so expose only selected fields after redaction.
-                const auto json = nlohmann::json::parse(response);
+                const Common::JsonUtility json(response);
+
                 std::string code;
-                std::string message;
                 for (const char* key : {"code", "error_code"}) {
-                    if (json.contains(key) && (json[key].is_number() || json[key].is_boolean())) code = json[key].dump();
+                    nlohmann::json value;
+                    if (json.TryGet(key, value) && (value.is_number() || value.is_boolean())) code = value.dump();
                 }
+
+                std::string message;
                 for (const char* key : {"message", "msg", "error"}) {
-                    if (json.contains(key) && json[key].is_string()) { message = json[key].get<std::string>(); break; }
+                    if (json.TryGet(key, message)) break;
                 }
-                std::string lower = message;
-                std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                if (lower.find("token") != std::string::npos || lower.find("secret") != std::string::npos ||
-                    lower.find("signature") != std::string::npos || lower.find("authorization") != std::string::npos) {
+
+                if (ContainsAny(ToLower(message), {"token", "secret", "signature", "authorization"})) {
                     message = "Sensitive authentication detail omitted.";
                 }
-                for (const std::string* sensitive : {&credentials.app_key, &credentials.app_secret,
-                                                       &credentials.access_token, &signature, &nonce, &session}) {
-                    if (!sensitive->empty()) {
-                        std::size_t position = 0;
-                        while ((position = message.find(*sensitive, position)) != std::string::npos) {
-                            message.replace(position, sensitive->size(), "[redacted]");
-                            position += 10;
-                        }
-                    }
-                }
-                if (message.size() > 240) message.resize(240);
+                for (const std::string* secret : secrets) Redact(message, *secret);
+                if (message.size() > MaxDiagnosticLength) message.resize(MaxDiagnosticLength);
+
                 if (code.empty() && message.empty()) return "Response body omitted (no safe diagnostic fields).";
                 return (code.empty() ? "" : "code=" + code + "; ") + message;
             } catch (...) {
@@ -164,144 +180,142 @@ namespace Client {
             }
         }
 
+        /* ========================================================================================================== */
+
+        SubscriptionResultKind ClassifyFailure(long status, const std::string& diagnostic) {
+            const std::string lower = ToLower(diagnostic);
+            if (status == 401 || ContainsAny(lower, {"authentication", "invalid app key"})) {
+                return SubscriptionResultKind::AuthenticationFailure;
+            }
+            // A bare 403 cannot identify the cause; treat it as an entitlement issue unless auth detail is present.
+            if (status == 403 || ContainsAny(lower, {"permission", "entitlement"})) {
+                return SubscriptionResultKind::PermissionFailure;
+            }
+            if (status == 400 || status == 422) {
+                return SubscriptionResultKind::InvalidRequest;
+            }
+            return SubscriptionResultKind::ServerFailure;
+        }
+
         /**
-         * @brief 
-         * 
-         * @param config 
-         * @param credentials 
-         * @param session 
-         * @param unsubscribe 
-         * @return SubscriptionResult 
+         * @brief Failures that need a configuration or entitlement change rather than another attempt.
          */
-        SubscriptionResult PostSubscription(const WebullEnvironmentConfig& config, const Credentials& credentials,
-                                             const std::string& session, bool unsubscribe) {
-            static const bool curl_initialized = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK;
-            if (curl_initialized == false) return {SubscriptionResultKind::TransportFailure, 0, "libcurl initialization failed"};
-            const std::string path = unsubscribe ? "/market-data/streaming/unsubscribe" : "/market-data/streaming/subscribe";
+        bool IsPermanentFailure(SubscriptionResultKind kind) {
+            return kind == SubscriptionResultKind::AuthenticationFailure ||
+                   kind == SubscriptionResultKind::PermissionFailure ||
+                   kind == SubscriptionResultKind::InvalidRequest;
+        }
+
+        /**
+         * @brief These CONNACK failures need configuration changes, not another retry.
+         */
+        bool IsPermanentMqttFailure(int reason_code) {
+            static constexpr std::array<int, 6> PermanentReasons{1, 2, 3, 5, 103, 104};
+            return std::ranges::find(PermanentReasons, reason_code) != PermanentReasons.end();
+        }
+
+        /* ========================================================================================================== */
+
+        /**
+         * @brief Send a signed subscribe or unsubscribe request for the given MQTT session.
+         *
+         * @param config Endpoints for the selected environment.
+         * @param credentials Signing credentials for the selected environment.
+         * @param session MQTT client ID the subscription is bound to.
+         * @param action Subscribe or unsubscribe.
+         * @return The classified HTTP outcome with a log-safe diagnostic.
+         */
+        SubscriptionResult PostSubscription(const WebullEnvironmentConfig& config, const WebullCredentials& credentials,
+                                            const std::string& session, SubscriptionAction action) {
+            const std::string path = action == SubscriptionAction::Subscribe ? SubscribePath : UnsubscribePath;
             // Compact serialization keeps the signed bytes identical to the transmitted JSON body.
             const std::string body = BuildWebullSubscriptionBody(session);
             const std::string timestamp = UtcTimestamp();
             const std::string nonce = NewId();
-            std::string signature = SignRequest(path, body, credentials.app_key, credentials.app_secret,
-                                                config.api_host, timestamp, nonce);
+
+            std::string signature = GenerateWebullSignature(path, body, credentials.app_key, credentials.app_secret,
+                                                            config.api_host, timestamp, nonce);
+            std::string response;
+            const CleanseOnExit cleanse{&signature, &response};
+
             if (signature.empty()) return {SubscriptionResultKind::TransportFailure, 0, "Request signing failed"};
 
-            struct curl_slist* headers = nullptr;
-            auto add = [&](const std::string& value) { headers = curl_slist_append(headers, value.c_str()); };
-            add("Content-Type: application/json");
-            add("x-app-key: " + credentials.app_key);
-            add("x-timestamp: " + timestamp);
-            add("x-signature: " + signature);
-            add("x-signature-algorithm: HMAC-SHA1");
-            add("x-signature-version: 1.0");
-            add("x-signature-nonce: " + nonce);
-            add("x-version: v3");
-            add("reqid: " + NewId());
-            if (credentials.access_token.empty() == false) add("x-access-token: " + credentials.access_token);
-
-            CURL* curl = curl_easy_init();
-            if (!curl) { 
-                curl_slist_free_all(headers); 
-                return {SubscriptionResultKind::TransportFailure, 0, "Unable to create HTTP request"}; 
+            std::unique_ptr<SimpleCurlWrapper> http;
+            try {
+                http = std::make_unique<SimpleCurlWrapper>();
+            } catch (const std::exception&) {
+                return {SubscriptionResultKind::TransportFailure, 0, "libcurl initialization failed"};
             }
 
-            std::string response;
-            const std::string url = "https://" + std::string(config.api_host) + path;
-            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-            curl_easy_setopt(curl, CURLOPT_POST, 1L);
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.data());
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
-            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CollectBody);
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-            curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
-            curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
-            curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-            const CURLcode curl_result = curl_easy_perform(curl);
-            long status = 0;
-            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-            for (struct curl_slist* header = headers; header != nullptr; header = header->next) {
-                if (header->data != nullptr) OPENSSL_cleanse(header->data, std::strlen(header->data));
-            }
-            curl_slist_free_all(headers);
-            curl_easy_cleanup(curl);
-            if (curl_result != CURLE_OK) {
-                OPENSSL_cleanse(signature.data(), signature.size());
-                OPENSSL_cleanse(response.data(), response.size());
-                return {SubscriptionResultKind::TransportFailure, status,
-                        std::string("HTTP transport failure: ") + curl_easy_strerror(curl_result)};
+            CurlRequest request("https://" + std::string(config.api_host) + path);
+            request.SensitiveData = true;
+            request.SetBody(body);
+            request.SetTimeouts(HttpTimeout, HttpConnectTimeout);
+            request.AddHeader("Content-Type", "application/json");
+            request.AddHeader("x-app-key", credentials.app_key);
+            request.AddHeader("x-timestamp", timestamp);
+            request.AddHeader("x-signature", signature);
+            request.AddHeader("x-signature-algorithm", "HMAC-SHA1");
+            request.AddHeader("x-signature-version", "1.0");
+            request.AddHeader("x-signature-nonce", nonce);
+            request.AddHeader("x-version", "v3");
+            request.AddHeader("reqid", NewId());
+            
+            if (credentials.access_token.empty() == false) request.AddHeader("x-access-token", credentials.access_token);
+            request.SetCallback([&response](std::string data) { response = std::move(data); });
+
+            const bool sent = http->ExecuteHttpRequest(request) == CurlRequestEnum::SUCCESS;
+            const long status = request.GetResponseCode();
+
+            if (sent == false) {
+                return {SubscriptionResultKind::TransportFailure, status, "HTTP transport failure: " + request.GetErrorMessage()};
             }
             if (status >= 200 && status < 300) {
-                OPENSSL_cleanse(signature.data(), signature.size());
-                OPENSSL_cleanse(response.data(), response.size());
                 return {SubscriptionResultKind::Success, status, ""};
             }
 
-            const std::string diagnostic = SafeDiagnostic(response, credentials, signature, nonce, session);
-            OPENSSL_cleanse(signature.data(), signature.size());
-            OPENSSL_cleanse(response.data(), response.size());
-            std::string lower = diagnostic;
-            std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            SubscriptionResultKind kind = SubscriptionResultKind::ServerFailure;
-            if (status == 401 || lower.find("authentication") != std::string::npos || lower.find("invalid app key") != std::string::npos) {
-                kind = SubscriptionResultKind::AuthenticationFailure;
+            const std::string diagnostic = SafeDiagnostic(response, {&credentials.app_key, &credentials.app_secret,
+                                                                     &credentials.access_token, &signature, &nonce, &session});
+            return {ClassifyFailure(status, diagnostic), status, diagnostic};
+        }
+
+        /* ========================================================================================================== */
+
+        const char* DescribeFailure(SubscriptionResultKind kind) {
+            switch (kind) {
+                case SubscriptionResultKind::AuthenticationFailure: return "authentication failure";
+                case SubscriptionResultKind::PermissionFailure: return "market-data permission failure";
+                case SubscriptionResultKind::InvalidRequest: return "invalid request";
+                case SubscriptionResultKind::TransportFailure: return "transport failure";
+                case SubscriptionResultKind::ServerFailure: break;
+                case SubscriptionResultKind::Success: break;
             }
-            // A bare 403 cannot identify the cause; treat it as an entitlement issue unless auth detail is present.
-            else if (status == 403 || lower.find("permission") != std::string::npos || lower.find("entitlement") != std::string::npos) {
-                kind = SubscriptionResultKind::PermissionFailure;
-            }
-            else if (status == 400 || status == 422) kind = SubscriptionResultKind::InvalidRequest;
-            return {kind, status, diagnostic};
+            return "server failure";
         }
 
         void LogSubscription(const char* verb, const SubscriptionResult& result) {
-            const std::string prefix = std::string("Webull HTTP ") + verb + " status=" + std::to_string(result.http_status);
-            if (result) Logger::Info(prefix + " succeeded", true);
-            else {
-                const char* kind = "server failure";
-                switch (result.kind) {
-                    case SubscriptionResultKind::AuthenticationFailure: kind = "authentication failure"; break;
-                    case SubscriptionResultKind::PermissionFailure: kind = "market-data permission failure"; break;
-                    case SubscriptionResultKind::InvalidRequest: kind = "invalid request"; break;
-                    case SubscriptionResultKind::TransportFailure: kind = "transport failure"; break;
-                    case SubscriptionResultKind::ServerFailure: break;
-                    case SubscriptionResultKind::Success: break;
-                }
-                Logger::Error(prefix + " failed (" + kind + "): " + result.diagnostic, true);
+            const std::string prefix = std::format("Webull HTTP {} status={}", verb, result.http_status);
+            if (result) {
+                Logger::Info(prefix + " succeeded", true);
+            } else {
+                Logger::Error(std::format("{} failed ({}): {}", prefix, DescribeFailure(result.kind), result.diagnostic), true);
             }
         }
 
-        /**
-         * @brief Callback class inheriting mqtt callback interface for handling quote messages.
-         * 
-         */
-        class StreamCallback final : public virtual mqtt::callback {
-        public:
-            void connected(const std::string&) override { connected_.store(true); }
-            void connection_lost(const std::string&) override {
-                connected_.store(false);
-                Logger::Warning("Webull MQTT connection lost", true);
-            }
-            void message_arrived(mqtt::const_message_ptr message) override {
-                const auto now = std::chrono::system_clock::now();
-                const auto time = std::chrono::system_clock::to_time_t(now);
-                std::tm local{};
-                localtime_r(&time, &local);
-                char stamp[32]{};
-                std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S %Z", &local);
-                // Quote payloads are protobuf; logging bytes avoids presenting undecoded data as quote fields.
-                Logger::Info(std::format("Webull message received at {} topic={} payload_bytes={}", stamp,
-                                         message->get_topic(), message->get_payload().size()), true);
-            }
-            bool Connected() const { return connected_.load(); }
-        private:
-            std::atomic<bool> connected_{false};
-        };
+        /* ========================================================================================================== */
+
+        void LogQuoteMessage(const std::string& topic, const std::string& payload) {
+            const std::string stamp = Common::DateTime::GetCurrentDateTime().ToString_DT();
+
+            // Quote payloads are protobuf; logging bytes avoids presenting undecoded data as quote fields.
+            Logger::Info(std::format("Webull message received at {} topic={} payload_bytes={}", stamp, topic, payload.size()), true);
+        }
+
+        /* ========================================================================================================== */
 
         std::string GetCredential(Common::SecretEnvironment environment, const std::string& name, bool required = true) {
-            auto result = Common::SecretStore::GetWebullSecret(environment, name);
+            Common::SecretResult result = Common::SecretStore::GetWebullSecret(environment, name);
+
             if (!result) {
                 if (result.error == Common::SecretError::Missing && required) {
                     Logger::Error("Webull credential missing: " + name + ". Provision it with secret-tool; see docs/webull-streaming.md.", true);
@@ -310,13 +324,40 @@ namespace Client {
                 }
                 return {};
             }
+
             return std::move(result.value);
         }
+
+        /* ========================================================================================================== */
+
+        /**
+         * @brief Read the selected environment's credentials, stopping at the first missing required one.
+         *
+         * @return true if the App Key and App Secret were both found.
+         */
+        bool LoadCredentials(const WebullEnvironmentConfig& config, WebullCredentials& credentials) {
+            const Common::SecretEnvironment secret_environment = config.environment == WebullEnvironment::Live
+                ? Common::SecretEnvironment::Live : Common::SecretEnvironment::Sandbox;
+
+            credentials.app_key = GetCredential(secret_environment, "app_key");
+            if (credentials.app_key.empty()) return false;
+
+            credentials.app_secret = GetCredential(secret_environment, "app_secret");
+            if (credentials.app_secret.empty()) return false;
+
+            // Token creation needs Webull's interactive verification, so only read a provisioned token.
+            credentials.access_token = GetCredential(secret_environment, "access_token", false);
+            return true;
+        }
     }
+
+    /* ============================================================================================================== */
 
     const WebullEnvironmentConfig& GetWebullEnvironmentConfig(WebullEnvironment environment) {
         return environment == WebullEnvironment::Live ? LiveConfig : SandboxConfig;
     }
+
+    /* ============================================================================================================== */
 
     std::string BuildWebullSubscriptionBody(const std::string& session_id) {
         return nlohmann::json({
@@ -325,34 +366,79 @@ namespace Client {
         }).dump(-1, ' ', false, nlohmann::json::error_handler_t::strict);
     }
 
+    /* ============================================================================================================== */
+
     std::string GenerateWebullSignature(const std::string& path, const std::string& body,
                                         const std::string& app_key, const std::string& app_secret,
                                         const std::string& host, const std::string& timestamp,
                                         const std::string& nonce,
                                         const std::map<std::string, std::string>& query_parameters) {
-        return SignRequest(path, body, app_key, app_secret, host, timestamp, nonce, query_parameters);
+        std::array<unsigned char, EVP_MAX_MD_SIZE> md5{};
+        unsigned md5_len = 0;
+        if (EVP_Digest(body.data(), body.size(), md5.data(), &md5_len, EVP_md5(), nullptr) != 1) return {};
+
+        std::map<std::string, std::string> values = query_parameters;
+        values["host"] = host;
+        values["x-app-key"] = app_key;
+        values["x-signature-algorithm"] = "HMAC-SHA1";
+        values["x-signature-nonce"] = nonce;
+        values["x-signature-version"] = "1.0";
+        values["x-timestamp"] = timestamp;
+
+        // Webull signs sorted query and header fields plus the hash of the exact body sent.
+        std::string signing;
+        for (const auto& [key, value] : values) {
+            if (signing.empty() == false) signing += '&';
+            signing += key + "=" + value;
+        }
+        const std::string encoded = SimpleCurlWrapper::EncodeUrl(path + "&" + signing + "&" + HexUpper(md5.data(), md5_len));
+
+        std::string key = app_secret + "&";
+        std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+        unsigned digest_len = 0;
+        const auto* signed_result = HMAC(EVP_sha1(), key.data(), static_cast<int>(key.size()),
+                                         reinterpret_cast<const unsigned char*>(encoded.data()), encoded.size(),
+                                         digest.data(), &digest_len);
+        Cleanse(key);
+        if (signed_result == nullptr) return {};
+
+        std::array<unsigned char, 128> b64{};
+        const int b64_len = EVP_EncodeBlock(b64.data(), digest.data(), static_cast<int>(digest_len));
+        return b64_len > 0 ? std::string(reinterpret_cast<char*>(b64.data()), static_cast<std::size_t>(b64_len)) : std::string{};
     }
+
+    /* ============================================================================================================== */
 
     WebullStreamingClient::~WebullStreamingClient() { Stop(); }
 
+    /* ============================================================================================================== */
+
     bool WebullStreamingClient::Start(WebullEnvironment environment) {
         std::lock_guard lock(mutex_);
+
         if (running_) {
             Logger::Warning("A Webull streaming session is already active", true);
             return false;
         }
+
         if (worker_.joinable()) worker_.join();
+
         stop_requested_ = false;
         running_ = true;
+
         Logger::Info(std::string("Webull streaming operation requested; environment=") + GetWebullEnvironmentConfig(environment).name, true);
         worker_ = std::thread(&WebullStreamingClient::Run, this, environment);
         return true;
     }
 
+    /* ============================================================================================================== */
+
     void WebullStreamingClient::Stop() {
         RequestStop();
         if (worker_.joinable()) worker_.join();
     }
+
+    /* ============================================================================================================== */
 
     void WebullStreamingClient::RequestStop() {
         {
@@ -363,119 +449,105 @@ namespace Client {
         cv_.notify_all();
     }
 
+    /* ============================================================================================================== */
+
     bool WebullStreamingClient::IsRunning() const {
         std::lock_guard lock(mutex_);
         return running_;
     }
 
+    /* ============================================================================================================== */
+
+    bool WebullStreamingClient::WaitForStop(std::chrono::seconds timeout) {
+        std::unique_lock lock(mutex_);
+        return cv_.wait_for(lock, timeout, [this] { return stop_requested_; });
+    }
+
+    /* ============================================================================================================== */
+
+    bool WebullStreamingClient::StopRequested() const {
+        std::lock_guard lock(mutex_);
+        return stop_requested_;
+    }
+
+    /* ============================================================================================================== */
+
     void WebullStreamingClient::Run(WebullEnvironment environment) {
         const WebullEnvironmentConfig& config = GetWebullEnvironmentConfig(environment);
-
         Logger::Info(std::string("Webull environment selected: ") + config.name, true);
 
-        const Common::SecretEnvironment secret_environment = environment == WebullEnvironment::Live
-            ? Common::SecretEnvironment::Live : Common::SecretEnvironment::Sandbox;
+        WebullCredentials credentials;
+        if (LoadCredentials(config, credentials)) {
+            std::chrono::seconds backoff = InitialBackoff;
 
-        Credentials credentials;
-        credentials.app_key = GetCredential(secret_environment, "app_key");
-        if (credentials.app_key.empty()) goto done;
-        credentials.app_secret = GetCredential(secret_environment, "app_secret");
-        if (credentials.app_secret.empty()) goto done;
+            while (StopRequested() == false) {
+                if (RunSession(config, credentials, backoff) == SessionOutcome::GiveUp || StopRequested()) break;
 
-        // Token creation needs Webull's interactive verification, so only read a provisioned token.
-        credentials.access_token = GetCredential(secret_environment, "access_token", false);
+                // Webull does not restore subscriptions after reconnect; the next session uses a fresh session ID.
+                Logger::Warning(std::format("Webull reconnect attempt scheduled in {} seconds", backoff.count()), true);
+                if (WaitForStop(backoff)) break;
 
-        {
-            std::chrono::seconds backoff{1};
-            bool permanently_failed = false;
-            while (permanently_failed == false) {
-                {
-                    std::lock_guard lock(mutex_);
-                    if (stop_requested_) break;
-                }
-                const std::string session = NewId();
-                const std::string uri = "ssl://" + std::string(config.mqtt_host) + ":1883";
-                Logger::Info("Webull MQTT connection attempt to " + uri, true);
-
-                try {
-                    StreamCallback callback;
-                    mqtt::async_client client(uri, session);
-                    client.set_callback(callback);
-
-                    mqtt::ssl_options ssl = mqtt::ssl_options_builder()
-                        // Verify the broker certificate to reject untrusted endpoints.
-                        .enable_server_cert_auth(true)
-                        .finalize();
-                    mqtt::connect_options options = mqtt::connect_options_builder()
-                        .mqtt_version(MQTTVERSION_3_1_1)
-                        .keep_alive_interval(std::chrono::seconds(30))
-                        .clean_session(true)
-                        .user_name(credentials.app_key)
-                        .password("sonny")
-                        .ssl(ssl)
-                        .finalize();
-                    
-                    client.connect(options)->wait();
-
-                    // Webull binds the HTTP subscription to this already-connected MQTT client ID.
-                    Logger::Info("Webull MQTT connected; awaiting HTTP subscription", true);
-
-                    const auto subscribed = PostSubscription(config, credentials, session, false);
-                    LogSubscription("subscribe", subscribed);
-                    
-                    if (!subscribed) {
-                        permanently_failed = subscribed.kind == SubscriptionResultKind::AuthenticationFailure ||
-                            subscribed.kind == SubscriptionResultKind::PermissionFailure ||
-                            subscribed.kind == SubscriptionResultKind::InvalidRequest;
-                        client.disconnect()->wait();
-                        if (permanently_failed) break;
-                    } else {
-                        Logger::Info("Webull subscription accepted; waiting for market-data messages", true);
-                        backoff = std::chrono::seconds(1);
-
-                        while (true) {
-                            std::unique_lock lock(mutex_);
-                            if (cv_.wait_for(lock, std::chrono::seconds(1), [this] { return stop_requested_; })) break;
-                            lock.unlock();
-                            if (client.is_connected() == false || callback.Connected() == false) break;
-                        }
-
-                        if (client.is_connected()) {
-                            const auto unsubscribed = PostSubscription(config, credentials, session, true);
-                            LogSubscription("unsubscribe", unsubscribed);
-                            client.disconnect()->wait();
-                        }
-                    }
-                } catch (const mqtt::exception& error) {
-                    const int reason = error.get_reason_code();
-                    Logger::Error("Webull MQTT connection/stream failure; broker reason=" + std::to_string(reason), true);
-                    // These CONNACK failures need configuration changes, not another retry.
-                    permanently_failed = reason == 1 || reason == 2 || reason == 3 || reason == 5 ||
-                        reason == 103 || reason == 104;
-                    if (permanently_failed) Logger::Error("Webull MQTT rejected the protocol or application credentials; stopping retries", true);
-                } catch (const std::exception& error) {
-                    (void)error;
-                    Logger::Error("Webull streaming operation failed", true);
-                }
-
-                // Webull does not restore subscriptions after reconnect; the next loop uses a fresh session ID.
-                {
-                    std::unique_lock lock(mutex_);
-                    if (stop_requested_ || permanently_failed) break;
-                    Logger::Warning("Webull reconnect attempt scheduled in " + std::to_string(backoff.count()) + " seconds", true);
-                    if (cv_.wait_for(lock, backoff, [this] { return stop_requested_; })) break;
-                }
-                
-                backoff = std::min(backoff * 2, std::chrono::seconds(30));
+                backoff = std::min(backoff * 2, MaxBackoff);
             }
         }
 
-    done:
         {
             std::lock_guard lock(mutex_);
             running_ = false;
             stop_requested_ = false;
         }
+
         Logger::Info("Webull stream stopped; resources cleaned up", true);
     }
+
+    /* ============================================================================================================== */
+
+    WebullStreamingClient::SessionOutcome WebullStreamingClient::RunSession(const WebullEnvironmentConfig& config,
+                                                                            const WebullCredentials& credentials,
+                                                                            std::chrono::seconds& backoff) {
+        const std::string session = NewId();
+        const std::string uri = std::format("ssl://{}:{}", config.mqtt_host, MqttPort);
+        Logger::Info("Webull MQTT connection attempt to " + uri, true);
+
+        try {
+            MqttWrapper mqtt(uri, session);
+            mqtt.SetMessageHandler(LogQuoteMessage);
+            mqtt.SetConnectionLostHandler([] { Logger::Warning("Webull MQTT connection lost", true); });
+            mqtt.Connect({.UserName = credentials.app_key, .Password = MqttPassword, .KeepAlive = MqttKeepAlive});
+
+            // Webull binds the HTTP subscription to this already-connected MQTT client ID.
+            Logger::Info("Webull MQTT connected; awaiting HTTP subscription", true);
+
+            const SubscriptionResult subscribed = PostSubscription(config, credentials, session, SubscriptionAction::Subscribe);
+            LogSubscription("subscribe", subscribed);
+
+            if (!subscribed) {
+                mqtt.Disconnect();
+                return IsPermanentFailure(subscribed.kind) ? SessionOutcome::GiveUp : SessionOutcome::Reconnect;
+            }
+
+            Logger::Info("Webull subscription accepted; waiting for market-data messages", true);
+            backoff = InitialBackoff;
+
+            // Poll the connection so a dropped broker link ends the session even without a stop request.
+            while (WaitForStop(ConnectionPollInterval) == false && mqtt.IsConnected()) {}
+
+            if (mqtt.IsConnected()) {
+                LogSubscription("unsubscribe", PostSubscription(config, credentials, session, SubscriptionAction::Unsubscribe));
+                mqtt.Disconnect();
+            }
+        } catch (const MqttException& error) {
+            Logger::Error("Webull MQTT connection/stream failure; broker reason=" + std::to_string(error.ReasonCode), true);
+            if (IsPermanentMqttFailure(error.ReasonCode)) {
+                Logger::Error("Webull MQTT rejected the protocol or application credentials; stopping retries", true);
+                return SessionOutcome::GiveUp;
+            }
+        } catch (const std::exception&) {
+            Logger::Error("Webull streaming operation failed", true);
+        }
+
+        return SessionOutcome::Reconnect;
+    }
+
+    /* ============================================================================================================== */
 }

@@ -99,17 +99,30 @@ target_link_libraries(sonny_core
 
 add_executable(sonny
     src/sonny.cpp
-    src/client/curlrequest.cpp
-    src/client/simplecurlwrapper.cpp
     src/dukascopy/dukascopy.cpp
     src/core/setup.cpp
+)
+
+add_library(sonny_client STATIC
+    src/client/curlrequest.cpp
+    src/client/simplecurlwrapper.cpp
+    src/client/mqttwrapper.cpp
+)
+target_include_directories(sonny_client PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(sonny_client
+    PRIVATE
+        SONNY_BROWSER_CLIENT_PATH="${PROJECT_SOURCE_DIR}/src/client/browserclient.js"
+)
+target_link_libraries(sonny_client
+    PUBLIC sonny_common CURL::libcurl nlohmann_json::nlohmann_json
+    PRIVATE PahoMqttCpp::paho-mqttpp3-static
 )
 
 add_library(sonny_webull STATIC src/client/webullstream.cpp)
 target_include_directories(sonny_webull PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(sonny_webull
-    PUBLIC sonny_common nlohmann_json::nlohmann_json
-    PRIVATE CURL::libcurl OpenSSL::Crypto PahoMqttCpp::paho-mqttpp3-static
+    PUBLIC sonny_common sonny_client nlohmann_json::nlohmann_json
+    PRIVATE OpenSSL::Crypto
 )
 
 add_library(sonny_runtime STATIC
@@ -132,14 +145,10 @@ target_link_libraries(sonny_runtime
         ftxui::component
 )
 
-target_compile_definitions(sonny
-    PRIVATE
-        SONNY_BROWSER_CLIENT_PATH="${PROJECT_SOURCE_DIR}/src/client/browserclient.js"
-)
-
 target_link_libraries(sonny
     PRIVATE
         sonny_runtime
+        sonny_client
         CURL::libcurl
         nlohmann_json::nlohmann_json
         OpenMP::OpenMP_CXX

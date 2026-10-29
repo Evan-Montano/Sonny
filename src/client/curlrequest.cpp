@@ -3,11 +3,19 @@
 
 #include "curlrequest.hpp"
 
+#include <cstring>
+
 namespace Client {
 
     // CURL REQUEST IMPLEMENTATION //
 
     CurlRequest::CurlRequest(std::string uri) : Uri(std::move(uri)) {}
+
+    CurlRequest::~CurlRequest() {
+        if (this->SensitiveData) {
+            this->WipeSensitiveData();
+        }
+    }
 
     void CurlRequest::AddHeader(const std::string &key, const std::string &value) {
         this->HeaderDictionary[key] = value;
@@ -24,6 +32,11 @@ namespace Client {
     }
 
     void CurlRequest::ClearHeaders() {
+        if (this->SensitiveData) {
+            for (auto &[key, value] : this->HeaderDictionary) {
+                WipeString(value);
+            }
+        }
         this->HeaderDictionary.clear();
     }
 
@@ -53,6 +66,12 @@ namespace Client {
         this->ClearParams();
         this->RemoveCallback();
         this->FormattedUri.clear();
+        if (this->SensitiveData) {
+            WipeString(this->Body);
+        }
+        this->Body.clear();
+        this->Timeout = std::chrono::seconds{0};
+        this->ConnectTimeout = std::chrono::seconds{0};
     }
 
     std::string& CurlRequest::GetFormattedUri() {
@@ -92,6 +111,57 @@ namespace Client {
 
     const std::unordered_map<std::string, std::string>& CurlRequest::GetHeaders() const {
         return this->HeaderDictionary;
+    }
+
+    void CurlRequest::SetBody(std::string body) {
+        this->Body = std::move(body);
+    }
+
+    const std::string& CurlRequest::GetBody() const {
+        return this->Body;
+    }
+
+    bool CurlRequest::HasBody() const {
+        return this->Body.empty() == false;
+    }
+
+    void CurlRequest::SetTimeouts(const std::chrono::seconds total, const std::chrono::seconds connect) {
+        this->Timeout = total;
+        this->ConnectTimeout = connect;
+    }
+
+    std::chrono::seconds CurlRequest::GetTimeout() const {
+        return this->Timeout;
+    }
+
+    std::chrono::seconds CurlRequest::GetConnectTimeout() const {
+        return this->ConnectTimeout;
+    }
+
+    void CurlRequest::RecordResult(const long responseCode, std::string errorMessage) {
+        this->ResponseCode = responseCode;
+        this->ErrorMessage = std::move(errorMessage);
+    }
+
+    long CurlRequest::GetResponseCode() const {
+        return this->ResponseCode;
+    }
+
+    const std::string& CurlRequest::GetErrorMessage() const {
+        return this->ErrorMessage;
+    }
+
+    void CurlRequest::WipeString(std::string &value) {
+        // Unlike memset, explicit_bzero is not removed by the optimizer when the string is freed right after.
+        explicit_bzero(value.data(), value.size());
+    }
+
+    void CurlRequest::WipeSensitiveData() {
+        for (auto &[key, value] : this->HeaderDictionary) {
+            WipeString(value);
+        }
+        WipeString(this->Body);
+        WipeString(this->_response);
     }
 
 }

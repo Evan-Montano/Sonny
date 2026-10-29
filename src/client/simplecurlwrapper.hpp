@@ -8,6 +8,7 @@
 #include <curl/curl.h>
 #include <memory>
 #include <mutex>
+#include <string_view>
 
 namespace Client {
 
@@ -22,6 +23,8 @@ namespace Client {
         // METHODS
         CurlRequestEnum ExecuteHttpRequest(CurlRequest &request);
 
+        static std::string EncodeUrl(std::string_view value);
+
         // MEMBERS
 
         /**
@@ -29,7 +32,7 @@ namespace Client {
          * When true, a live browser running via a javascript process is active for the lifecycle of this object.
          * 
          */
-        const bool ExecuteInBrowser;
+        const bool ExecuteInBrowser;        
 
     private:
         class BrowserProcess;
