@@ -9,6 +9,8 @@
 
 #include <ftxui/dom/direction.hpp>
 #include <ftxui/ftxui.hpp>
+#include <format>
+#include <mutex>
 #include <thread>
 
 using namespace ftxui;
@@ -63,6 +65,40 @@ private:
     ftxui::Component temporary_component;
     int temporary_previous_menu = 0;
 
+    /**
+     * @brief Guards all view state shared between the UI thread and operation threads.
+     * The UI thread holds it while rendering and handling events. Operation threads take it
+     * through PushView, RestorePreviousMenu, and Update. Recursive so UI-thread callbacks
+     * can call these methods while the UI thread already holds it.
+     */
+    std::recursive_mutex view_mutex;
+
+    /**
+     * @brief Root component that holds the view lock while the UI thread renders or handles events,
+     * so it never observes view state that an operation thread is halfway through changing.
+     */
+    class LockedRoot : public ComponentBase {
+    public:
+        LockedRoot(Component child, std::recursive_mutex &mutex)
+            : mutex(mutex) {
+            Add(std::move(child));
+        }
+
+        Element OnRender() override {
+            std::lock_guard lock(this->mutex);
+            return ChildAt(0)->Render();
+        }
+
+        bool OnEvent(Event event) override {
+            std::lock_guard lock(this->mutex);
+            // Forward directly: the child is not focusable while a temporary view is shown.
+            return ChildAt(0)->OnEvent(event);
+        }
+
+    private:
+        std::recursive_mutex &mutex;
+    };
+
     // CONSTRUCTOR
     UI() = default;
     UI(const UI&) = delete;
@@ -77,9 +113,13 @@ private:
      * 
      */
     void RestorePreviousMenu() {
-        this->temporary_renderer = nullptr;
-        this->temporary_component.reset();
-        this->current_menu = this->temporary_previous_menu;
+        {
+            // Cleared synchronously so the renderer cannot run after the caller's captured state is destroyed.
+            std::lock_guard lock(this->view_mutex);
+            this->temporary_renderer = nullptr;
+            this->temporary_component.reset();
+            this->current_menu = this->temporary_previous_menu;
+        }
         this->screen.PostEvent(Event::Custom);
     }
 
@@ -90,7 +130,16 @@ private:
      */
     void DispatchOperation(std::function<void()> callback) {
         std::thread([cb = std::move(callback)] {
-            cb();
+            // An exception escaping a detached thread terminates the whole application.
+            try {
+                cb();
+            }
+            catch (const std::exception &error) {
+                Logger::Error(std::format("Operation failed: {}", error.what()), true);
+            }
+            catch (...) {
+                Logger::Error("Operation failed with an unknown error.", true);
+            }
         }).detach();
     }
 
@@ -328,36 +377,55 @@ public:
         });
 
         // Run
-        this->screen.Loop(app);
+        this->screen.Loop(Make<LockedRoot>(app, this->view_mutex));
     }
 
+    /**
+     * @brief Show a temporary view until the returned guard is destroyed.
+     * The renderer runs on the UI thread, so any state it reads must be changed through Update.
+     *
+     * @param renderer 
+     * @return ViewGuard 
+     */
     ViewGuard PushView(RenderFunction renderer) {
-        this->temporary_component.reset();
-        this->temporary_previous_menu = this->current_menu;
-        this->temporary_renderer = std::move(renderer);
+        {
+            std::lock_guard lock(this->view_mutex);
+            this->temporary_component.reset();
+            this->temporary_previous_menu = this->current_menu;
+            this->temporary_renderer = std::move(renderer);
 
-        // 0 = Main
-        // 1 = Sandbox
-        // 2 = Setup
-        // 3 = Temporary view
-        this->current_menu = 3;
+            // 0 = Main
+            // 1 = Sandbox
+            // 2 = Setup
+            // 3 = Temporary view
+            this->current_menu = 3;
+        }
         this->screen.PostEvent(Event::Custom);
 
         return ViewGuard(this);
     }
 
+    /**
+     * @brief Show a temporary interactive view until the returned guard is destroyed.
+     * 
+     * @param component 
+     * @return ViewGuard 
+     */
     ViewGuard PushView(ftxui::Component component) {
-        this->temporary_previous_menu = this->current_menu;
+        {
+            std::lock_guard lock(this->view_mutex);
+            this->temporary_previous_menu = this->current_menu;
 
-        // Retain the component so its event handler remains accessible.
-        this->temporary_component = component;
+            // Retain the component so its event handler remains accessible.
+            this->temporary_component = component;
 
-        // Also provide its rendering function to the existing view system.
-        this->temporary_renderer = [component = std::move(component)] {
-            return component->Render();
-        };
+            // Also provide its rendering function to the existing view system.
+            this->temporary_renderer = [component = std::move(component)] {
+                return component->Render();
+            };
 
-        this->current_menu = 3;
+            this->current_menu = 3;
+        }
         this->screen.PostEvent(Event::Custom);
 
         return ViewGuard(this);
@@ -365,6 +433,20 @@ public:
 
     void Refresh() {
         this->screen.PostEvent(Event::Custom);
+    }
+
+    /**
+     * @brief Change state read by a temporary view's renderer, then redraw.
+     * Operation threads must use this instead of writing that state directly.
+     *
+     * @param mutation Changes to apply while the view lock is held. Keep it short.
+     */
+    void Update(const std::function<void()> &mutation) {
+        {
+            std::lock_guard lock(this->view_mutex);
+            mutation();
+        }
+        this->Refresh();
     }
 
 };

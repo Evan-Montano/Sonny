@@ -42,10 +42,6 @@ namespace Core {
         void ExecuteDownloadAllMissingRecordFiles() {
             Dukascopy::BeginCorpusExport();
         }
-
-        std::filesystem::path GetRecordPathForDay(const Common::DateTime &date) {
-            return Common::Storage::RECORDS_BASE_PATH / (date.ToString_Date() + ".rec");
-        }
         
         void ExecuteUpdateIndexes() {
             using namespace Common::Storage;
@@ -98,11 +94,18 @@ namespace Core {
             UI::Get().Refresh();
 
             if (FileExists(RECORDS_BASE_PATH)) {
+                // Rebuild from scratch. Loading the existing index would add every day's vectors a second time.
+                Logger::Info("Deleting existing indexes and metadata..", true);
+                DeleteDirectory(INDEXES_BASE_PATH);
+                DeleteDirectory(METADATA_BASE_PATH);
+
                 // Process one half-hour index at a time.
                 for (std::size_t segmentIndex = 0; segmentIndex < TOTAL_SEGMENTS; ++segmentIndex) {
                     // The constructor uses the record offset to select the index.
                     const std::size_t segmentOffset = segmentIndex * RECORDS_PER_HALF_HOUR;
-                    currentSegment = std::format("{} / {}", segmentIndex + 1, TOTAL_SEGMENTS);
+                    UI::Get().Update([&] {
+                        currentSegment = std::format("{} / {}", segmentIndex + 1, TOTAL_SEGMENTS);
+                    });
 
                     // Keep this index alive across the entire historical date range.
                     // Its destructor saves the index and metadata when this scope ends.
@@ -112,13 +115,13 @@ namespace Core {
                         Common::DateTime dt = Core::Setup::BEGIN_DATE;
 
                         for (; dt <= Core::Setup::END_DATE; dt.NextDay()) {
-                            currentDate = dt.ToString_Date();
+                            const std::string date = dt.ToString_Date();
+                            const std::filesystem::path recFilePath = RECORDS_BASE_PATH / (date + ".rec");
 
-                            const std::filesystem::path recFilePath = RECORDS_BASE_PATH / (currentDate + ".rec");
-
-                            status = std::format("Indexing {}", recFilePath.filename().string());
-
-                            UI::Get().Refresh();
+                            UI::Get().Update([&] {
+                                currentDate = date;
+                                status = std::format("Indexing {}", recFilePath.filename().string());
+                            });
 
                             // Mising record files are skipped, as in the existing flow.
                             if (FileExists(recFilePath)) {
@@ -164,8 +167,7 @@ namespace Core {
                                 }
                             }
 
-                            ++completedUnits;
-                            UI::Get().Refresh();
+                            UI::Get().Update([&] { ++completedUnits; });
                         }
                     }
 
@@ -178,10 +180,11 @@ namespace Core {
                 Logger::Error("Records directory does not exist.", true);
             }
 
-            status = "Finished updating FAISS indexes";
-            currentDate.clear();
-            currentSegment.clear();
-            UI::Get().Refresh();
+            UI::Get().Update([&] {
+                status = "Finished updating FAISS indexes";
+                currentDate.clear();
+                currentSegment.clear();
+            });
         }
 
     }

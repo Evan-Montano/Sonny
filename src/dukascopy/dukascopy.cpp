@@ -18,6 +18,8 @@
 #include <format>
 #include <fstream>
 #include <ftxui/dom/elements.hpp>
+#include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -29,6 +31,9 @@ namespace Dukascopy {
 
     inline static const std::string ticksUrlBase =
         "https://jetta.dukascopy.com/v1/ticks/SPY.US-USD/";
+
+    // Regular US session length: 9:30 to 16:00 New York time (6.5 hours).
+    constexpr Common::UnixTimestamp sessionLengthSeconds = 23400;
 
     std::unordered_map<std::string, std::string> headers = {
         { "Accept", "*/*" },
@@ -92,88 +97,161 @@ namespace Dukascopy {
             std::to_string(dt.GetDay()) + "/";
     }
 
+    /**
+     * @brief A single decoded tick with an absolute time and absolute integer prices.
+     */
+    struct Tick {
+        std::int64_t TimeMs;
+        std::int64_t Bid;
+        std::int64_t Ask;
+        std::uint32_t BidVolume;
+        std::uint32_t AskVolume;
+        float Multiplier;
+    };
+
+    /**
+     * @brief Decodes the delta-encoded hourly responses into absolute ticks ordered by time.
+     * 
+     * @param tickResponses 
+     * @return std::vector<Tick> 
+     */
+    std::vector<Tick> DecodeTicks(const std::vector<ApiTickResponse>& tickResponses) {
+        std::vector<Tick> ticks;
+
+        for (const ApiTickResponse& response : tickResponses) {
+            const float multiplier = response.Multiplier;
+
+            // The first tick carries the absolute prices; later ticks are deltas from the previous tick.
+            // Times are deltas too, starting from the response timestamp (milliseconds).
+            auto runningBid = static_cast<std::int64_t>(std::round(response.Bid / multiplier));
+            auto runningAsk = static_cast<std::int64_t>(std::round(response.Ask / multiplier));
+            auto runningTime = static_cast<std::int64_t>(response.Timestamp);
+
+            const std::size_t tickCount = std::min({
+                response.Times.size(),
+                response.Bids.size(),
+                response.Asks.size(),
+                response.BidVolumes.size(),
+                response.AskVolumes.size()
+            });
+
+            for (std::size_t i = 0; i < tickCount; ++i) {
+                runningTime += response.Times[i];
+
+                if (i > 0) {
+                    runningBid += response.Bids[i];
+                    runningAsk += response.Asks[i];
+                }
+
+                ticks.push_back(Tick{
+                    .TimeMs = runningTime,
+                    .Bid = runningBid,
+                    .Ask = runningAsk,
+                    .BidVolume = static_cast<std::uint32_t>(response.BidVolumes[i]),
+                    .AskVolume = static_cast<std::uint32_t>(response.AskVolumes[i]),
+                    .Multiplier = multiplier
+                });
+            }
+        }
+
+        std::ranges::stable_sort(ticks, {}, &Tick::TimeMs);
+        return ticks;
+    }
+
+    /**
+     * @brief Creates a zero-volume candle whose prices all equal the given tick's prices.
+     */
+    OHLCV_BidAsk FlatCandle(const Common::UnixTimestamp second, const Tick& tick) {
+        return OHLCV_BidAsk{
+            .Timestamp = second,
+
+            .OpenBid = tick.Bid,
+            .HighBid = tick.Bid,
+            .LowBid = tick.Bid,
+            .CloseBid = tick.Bid,
+
+            .OpenAsk = tick.Ask,
+            .HighAsk = tick.Ask,
+            .LowAsk = tick.Ask,
+            .CloseAsk = tick.Ask,
+
+            .BidVolume = 0,
+            .AskVolume = 0,
+
+            .Multiplier = tick.Multiplier
+        };
+    }
+
+    /**
+     * @brief Folds a tick into a candle that already holds an earlier tick from the same second.
+     */
+    void AddTickToCandle(OHLCV_BidAsk& candle, const Tick& tick) {
+        candle.HighBid = std::max(candle.HighBid, tick.Bid);
+        candle.LowBid = std::min(candle.LowBid, tick.Bid);
+        candle.CloseBid = tick.Bid;
+
+        candle.HighAsk = std::max(candle.HighAsk, tick.Ask);
+        candle.LowAsk = std::min(candle.LowAsk, tick.Ask);
+        candle.CloseAsk = tick.Ask;
+
+        candle.BidVolume += tick.BidVolume;
+        candle.AskVolume += tick.AskVolume;
+
+        candle.Multiplier = tick.Multiplier;
+    }
+
+    /**
+     * @brief Builds exactly one candle per second of the regular session, so record N is always
+     * N seconds after the open. Seconds without ticks repeat the previous close with zero volume.
+     * 
+     * @param tickResponses Hourly responses for the day.
+     * @param sessionOpen Session open as a Unix timestamp in seconds.
+     * @param sessionClose Session close as a Unix timestamp in seconds (exclusive).
+     * @return One candle per session second, or empty if no ticks fall inside the session.
+     */
     std::vector<OHLCV_BidAsk>
     ExtractOneSecondCandlesticks(
         const std::vector<ApiTickResponse>& tickResponses,
-        const Common::DateTime& dt)
+        const Common::UnixTimestamp sessionOpen,
+        const Common::UnixTimestamp sessionClose)
     {
+        const std::vector<Tick> ticks = DecodeTicks(tickResponses);
+
+        const auto toMs = [](const Common::UnixTimestamp seconds) {
+            return static_cast<std::int64_t>(seconds) * 1000;
+        };
+
+        auto next = std::ranges::lower_bound(ticks, toMs(sessionOpen), {}, &Tick::TimeMs);
+        const auto sessionEnd = std::ranges::lower_bound(ticks, toMs(sessionClose), {}, &Tick::TimeMs);
+
+        if (next == sessionEnd) {
+            return {};
+        }
+
+        // Opening seconds without ticks carry the last pre-open quote,
+        // or the first session quote when nothing was quoted before the open.
+        const Tick* previous = next == ticks.begin() ? &*next : &*std::prev(next);
+
         std::vector<OHLCV_BidAsk> result;
+        result.reserve(static_cast<std::size_t>(sessionClose - sessionOpen));
 
-        if (tickResponses.empty() == false) {
-            Common::UnixTimestamp timestamp = tickResponses.front().Timestamp;
+        for (Common::UnixTimestamp second = sessionOpen; second < sessionClose; ++second) {
+            OHLCV_BidAsk candle = FlatCandle(second, *previous);
 
-            for (const ApiTickResponse& response : tickResponses) {
-                const float multiplier = response.Multiplier;
+            const std::int64_t secondEndMs = toMs(second + 1);
+            bool firstTick = true;
 
-                auto runningBid =
-                    static_cast<std::int64_t>(
-                        std::round(response.Bid / multiplier)
-                    );
-
-                auto runningAsk =
-                    static_cast<std::int64_t>(
-                        std::round(response.Ask / multiplier)
-                    );
-
-                std::int32_t runningTime = 
-                    (response.Timestamp + response.Times[0]) % 1000;
-
-                std::uint32_t runningBidVolume =
-                    response.BidVolumes[0];
-
-                std::uint32_t runningAskVolume =
-                    response.AskVolumes[0];
-
-                std::vector<std::int64_t> currentBidRow;
-                std::vector<std::int64_t> currentAskRow;
-
-                currentBidRow.push_back(runningBid);
-                currentAskRow.push_back(runningAsk);
-
-                for (std::size_t i = 1; i < response.Bids.size(); ++i) {
-                    runningTime += response.Times[i];
-
-                    if (runningTime >= 1000) {
-                        result.push_back(
-                            OHLCV_BidAsk{
-                                .Timestamp = ++timestamp,
-
-                                .OpenBid = currentBidRow.front(),
-                                .HighBid = *std::ranges::max_element(currentBidRow),
-                                .LowBid = *std::ranges::min_element(currentBidRow),
-                                .CloseBid = currentBidRow.back(),
-
-                                .OpenAsk = currentAskRow.front(),
-                                .HighAsk = *std::ranges::max_element(currentAskRow),
-                                .LowAsk = *std::ranges::min_element(currentAskRow),
-                                .CloseAsk = currentAskRow.back(),
-
-                                .BidVolume = runningBidVolume,
-                                .AskVolume = runningAskVolume,
-
-                                .Multiplier = multiplier
-                            }
-                        );
-
-                        currentBidRow.clear();
-                        currentAskRow.clear();
-
-                        runningBidVolume = 0;
-                        runningAskVolume = 0;
-
-                        runningTime -= 1000;
-                    }
-
-                    runningBid += response.Bids[i];
-                    runningAsk += response.Asks[i];
-
-                    runningBidVolume += response.BidVolumes[i];
-                    runningAskVolume += response.AskVolumes[i];
-
-                    currentBidRow.push_back(runningBid);
-                    currentAskRow.push_back(runningAsk);
+            for (; next != sessionEnd && next->TimeMs < secondEndMs; ++next) {
+                if (firstTick) {
+                    candle = FlatCandle(second, *next);
+                    firstTick = false;
                 }
+
+                AddTickToCandle(candle, *next);
+                previous = &*next;
             }
+
+            result.push_back(candle);
         }
 
         return result;
@@ -196,7 +274,7 @@ namespace Dukascopy {
 
         const std::string corpusFile = (dt.ToString_Date() + ".corpus");
 
-        std::ofstream corpusFileStream = OpenFile_App(CORPUS_BASE_PATH, corpusFile);
+        std::ofstream corpusFileStream(CORPUS_BASE_PATH / corpusFile, std::ios::app);
         
         if (corpusFileStream.is_open() == false) {
             Logger::Error("Could not open corpus file");
@@ -246,8 +324,10 @@ namespace Dukascopy {
         }
 
         std::string recFile = (dt.ToString_Date() + ".rec");
-        std::ofstream recFileStream = 
-            OpenFile_App(Common::Storage::RECORDS_BASE_PATH, recFile, true);
+        std::ofstream recFileStream(
+            Common::Storage::RECORDS_BASE_PATH / recFile,
+            std::ios::binary | std::ios::trunc
+        );
 
         if (recFileStream.is_open() == false) {
             Logger::Error(
@@ -338,6 +418,81 @@ namespace Dukascopy {
         return true;
     }
 
+    /**
+     * @brief Executes a GET request and parses the body as JSON.
+     * 
+     * @param curlWrapper 
+     * @param request 
+     * @return The parsed body, or nothing if the request failed, returned a non-2xx status, or was not valid JSON.
+     */
+    std::optional<Common::JsonUtility> FetchJson(Client::SimpleCurlWrapper &curlWrapper, Client::CurlRequest &request) {
+        std::string body;
+        request.SetCallback([&body](std::string response) {
+            body = std::move(response);
+        });
+
+        const Client::CurlRequestEnum result = curlWrapper.ExecuteHttpRequest(request);
+        const std::string& uri = request.GetFormattedUri();
+
+        if (result != Client::CurlRequestEnum::SUCCESS) {
+            Logger::Warning(std::format("Request failed: {} ({})", uri, request.GetErrorMessage()), true);
+            return std::nullopt;
+        }
+
+        // The browser path does not report a status, so 0 is accepted.
+        const long status = request.GetResponseCode();
+        if (status != 0 && (status < 200 || status >= 300)) {
+            Logger::Warning(std::format("Request returned HTTP {}: {}", status, uri), true);
+            return std::nullopt;
+        }
+
+        if (body.empty()) {
+            return std::nullopt;
+        }
+
+        try {
+            return Common::JsonUtility(body);
+        }
+        catch (const std::invalid_argument &) {
+            Logger::Warning(std::format("Response was not valid JSON: {}", uri), true);
+            return std::nullopt;
+        }
+    }
+
+    /**
+     * @brief Reads one hour of tick data from its JSON response.
+     * 
+     * @param hourJson 
+     * @return The tick data, or nothing if any required field is missing or invalid.
+     */
+    std::optional<ApiTickResponse> ParseTickResponse(const Common::JsonUtility &hourJson) {
+        ApiTickResponse res{};
+
+        hourJson.TryGet<Common::UnixTimestamp>("timestamp", res.Timestamp);
+        hourJson.TryGet<float>("multiplier", res.Multiplier);
+        hourJson.TryGet<float>("bid", res.Bid);
+        hourJson.TryGet<float>("ask", res.Ask);
+        hourJson.TryGet<std::vector<std::int32_t>>("times", res.Times);
+        hourJson.TryGet<std::vector<std::int16_t>>("asks", res.Asks);
+        hourJson.TryGet<std::vector<std::int16_t>>("bids", res.Bids);
+        hourJson.TryGet<std::vector<std::int32_t>>("askVolumes", res.AskVolumes);
+        hourJson.TryGet<std::vector<std::int32_t>>("bidVolumes", res.BidVolumes);
+
+        if (res.Timestamp > 0 &&
+            res.Multiplier > 0 &&
+            res.Bid > 0 &&
+            res.Ask > 0 &&
+            res.Times.empty() == false &&
+            res.Asks.empty() == false &&
+            res.Bids.empty() == false &&
+            res.AskVolumes.empty() == false &&
+            res.BidVolumes.empty() == false) {
+            return res;
+        }
+
+        return std::nullopt;
+    }
+
     void ExportFullDay(const Common::DateTime& dt, Client::SimpleCurlWrapper &curlWrapper) {
         std::vector<OHLCV_BidAsk> candleSticks;
 
@@ -349,86 +504,30 @@ namespace Dukascopy {
             Client::CurlRequest hourRequest("");
             hourRequest.AddHeader(headers);
 
-            hourRequest.SetCallback(
-                [&](const std::string& response) {
-                    if (response.empty() == false) {
-                        const Common::JsonUtility hourJson(response);
-
-                        ApiTickResponse res{};
-
-                        hourJson.TryGet<Common::UnixTimestamp>(
-                            "timestamp",
-                            res.Timestamp
-                        );
-
-                        hourJson.TryGet<float>(
-                            "multiplier",
-                            res.Multiplier
-                        );
-
-                        hourJson.TryGet<float>(
-                            "bid",
-                            res.Bid
-                        );
-
-                        hourJson.TryGet<float>(
-                            "ask",
-                            res.Ask
-                        );
-
-                        hourJson.TryGet<std::vector<std::int32_t>>(
-                            "times",
-                            res.Times
-                        );
-
-                        hourJson.TryGet<std::vector<std::int16_t>>(
-                            "asks",
-                            res.Asks
-                        );
-
-                        hourJson.TryGet<std::vector<std::int16_t>>(
-                            "bids",
-                            res.Bids
-                        );
-
-                        hourJson.TryGet<std::vector<std::int32_t>>(
-                            "askVolumes",
-                            res.AskVolumes
-                        );
-
-                        hourJson.TryGet<std::vector<std::int32_t>>(
-                            "bidVolumes",
-                            res.BidVolumes
-                        );
-
-                        if (res.Timestamp > 0 &&
-                            res.Multiplier > 0 &&
-                            res.Bid > 0 &&
-                            res.Ask > 0 &&
-                            res.Times.empty() == false &&
-                            res.Asks.empty() == false &&
-                            res.Bids.empty() == false &&
-                            res.AskVolumes.empty() == false &&
-                            res.BidVolumes.empty() == false) {
-
-                            tickResponses.push_back(std::move(res));
-                        }
-                    }
-                }
-            );
-
             // Dukascopy hours for the regular US trading session.
             for (std::size_t hour = 13; hour < 20; ++hour) {
                 hourRequest.ReassignUri(
                     ticksUrl + std::to_string(hour)
                 );
 
-                curlWrapper.ExecuteHttpRequest(hourRequest);
+                const std::optional<Common::JsonUtility> hourJson = FetchJson(curlWrapper, hourRequest);
+                if (hourJson) {
+                    std::optional<ApiTickResponse> response = ParseTickResponse(*hourJson);
+                    if (response) {
+                        tickResponses.push_back(std::move(*response));
+                    }
+                }
             }
+
+            // The session open is computed in New York time, so it follows daylight saving changes.
+            const Common::UnixTimestamp sessionOpen = Common::DateTime(
+                dt.GetYear(), dt.GetMonth(), dt.GetDay(), 9, 30, 0, true
+            ).GetTimestamp();
 
             candleSticks = ExtractOneSecondCandlesticks(
                 tickResponses,
-                dt
+                sessionOpen,
+                sessionOpen + sessionLengthSeconds
             );
         }
 
@@ -498,34 +597,26 @@ namespace Dukascopy {
 
         UI::Get().Refresh();
 
-        Common::JsonUtility spyData(std::string("{}"));
-
         // Wrapper running browser instance. Will be sharing this object throughout the full corpus run.
         Client::SimpleCurlWrapper curlWrapper;
+
+        std::string description{};
 
         {
             Client::CurlRequest infoRequest(infoUrl);
             infoRequest.AddHeader(headers);
 
-            infoRequest.SetCallback(
-                [&](const std::string& response) {
-                    if (response.empty() == false) {
-                        spyData = Common::JsonUtility(response); // We are throwing in here.
-                    }
-                    else {
-                        Logger::Error(
-                            "Unable to access info URI. Terminating process.", 
-                            true
-                        );
-                    }
-                }
-            );
-
-            curlWrapper.ExecuteHttpRequest(infoRequest);
+            const std::optional<Common::JsonUtility> spyData = FetchJson(curlWrapper, infoRequest);
+            if (spyData) {
+                spyData->TryGet<std::string>("description", description);
+            }
+            else {
+                Logger::Error(
+                    "Unable to access info URI. Terminating process.", 
+                    true
+                );
+            }
         }
-
-        std::string description{};
-        spyData.TryGet<std::string>("description", description);
 
         if (description.empty() == false) {
             Logger::Info(
@@ -540,9 +631,10 @@ namespace Dukascopy {
 
             for (; exportDate <= Core::Setup::END_DATE; exportDate.NextDay()) {
 
-                currentDate = exportDate.ToString_Date();
-                status = std::format("Processing {}", currentDate);
-                UI::Get().Refresh();
+                UI::Get().Update([&] {
+                    currentDate = exportDate.ToString_Date();
+                    status = std::format("Processing {}", currentDate);
+                });
 
                 const std::filesystem::path corpusPath = CORPUS_BASE_PATH / (exportDate.ToString_Date() + ".corpus");
                 const std::filesystem::path recordsPath = RECORDS_BASE_PATH / (exportDate.ToString_Date() + ".rec");
@@ -588,8 +680,7 @@ namespace Dukascopy {
                     }
                 }
 
-                ++daysElapsed;
-                UI::Get().Refresh();
+                UI::Get().Update([&] { ++daysElapsed; });
             }
         }
         else {

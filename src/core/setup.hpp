@@ -18,7 +18,7 @@ namespace Core {
          * @brief End date for export data.
          * 
          */
-        const Common::DateTime END_DATE(2026, Common::SEP, 30);
+        const Common::DateTime END_DATE(2026, Common::SEP, 1);
 
         /**
         * @brief Total number of calendar days in the configured setup range.

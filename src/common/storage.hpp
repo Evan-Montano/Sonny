@@ -7,7 +7,6 @@
 #include "../common/jsonutil.hpp"
 
 #include <filesystem>
-#include <fstream>
 #include <string>
 
 namespace Common {
@@ -84,21 +83,6 @@ namespace Common {
          * @return false if the directory could not be created.
          */
         bool CreateDirectory(const std::filesystem::path &path);
-
-        /**
-         * @brief Creates a file if it does not exist and opens it in append mode.
-         * Optionally opens the file in binary mode.
-         *
-         * @param basePath Base directory path.
-         * @param fileName File name.
-         * @param binaryMode Whether the file should be opened in binary mode.
-         * @return Open file stream.
-         */
-        std::ofstream OpenFile_App(
-            const std::filesystem::path &basePath,
-            const std::string &fileName,
-            const bool &binaryMode = false
-        );
 
 
         /**

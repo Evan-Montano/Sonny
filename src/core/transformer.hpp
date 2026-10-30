@@ -1,6 +1,8 @@
 // transformer.hpp
 // Contains method definitions for things pertaining to data manipulation or normalization in bulk.
 
+#pragma once
+
 #include "engine.hpp"
 #include <vector>
 

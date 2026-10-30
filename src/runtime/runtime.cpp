@@ -1,5 +1,5 @@
 // runtime.cpp
-// TODO
+// Implementation of the Orchestrator class and the runtime entry points started from the UI.
 
 #include "runtime.hpp"
 #include "client/webullstream.hpp"

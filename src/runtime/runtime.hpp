@@ -1,5 +1,6 @@
 // runtime.hpp
-// TODO
+// Orchestrates the long-running live services (the Webull quote stream now, prediction processes later)
+// for as long as their UI view is open.
 
 #pragma once
 

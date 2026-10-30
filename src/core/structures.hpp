@@ -1,6 +1,8 @@
 // structures.hpp
 // Header file to help with containing miscellaneous structure definitions.
 
+#pragma once
+
 namespace Core {
 
     /**
