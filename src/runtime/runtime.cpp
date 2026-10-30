@@ -46,6 +46,17 @@ namespace Runtime {
             )
         );
 
+        // Big TODO:
+        // This section is going to be responsible for the stream and prediction pipeline. Rough draft of the process:
+        // In a live runtime loop, the following is occuring continuously:
+        // 1. Read, parse, and queue incoming quote ticks (separate thread to update UI quote stream display)
+        // 2. Building one-second quote records
+        // 3. Normalizing one-second quote records
+        // 4. When >= 30 size vector is built and normalized, pass as a query vector into the appropriate HalfHourIndex
+        // 5. Get results from the index query and pass into separate function for historical record lookup.
+        // 6. Get results from historical lookup and calculate futures.
+        // 7. Update futures display on UI.
+
         this->QuoteClient.Start(this->EnvironmentType);
         UI::Get().Refresh();
 
