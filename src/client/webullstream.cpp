@@ -9,18 +9,24 @@
 #include "../common/jsonutil.hpp"
 #include "../common/logger.hpp"
 #include "../common/secretstore.hpp"
+#include "webull/marketdata.pb.h"
 
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <nlohmann/json.hpp>
 
+#include <charconv>
+#include <cmath>
+#include <optional>
+#include <utility>
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <format>
 #include <initializer_list>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string_view>
 #include <vector>
@@ -76,6 +82,95 @@ namespace Client {
         private:
             std::vector<std::string*> values_;
         };
+
+        template <typename T>
+        std::optional<T> ParseNumber(std::string_view input) {
+            T value{};
+
+            const auto [ptr, ec] = std::from_chars(
+                input.data(),
+                input.data() + input.size(),
+                value
+            );
+
+            if (ec != std::errc{} || ptr != input.data() + input.size())
+                return std::nullopt;
+
+            return value;
+        }
+
+        std::optional<WebullPriceLevel> ParsePriceLevel(const webull::marketdata::AskBid& level) {
+            auto price = ParseNumber<double>(level.price());
+            auto size = ParseNumber<double>(level.size());
+
+            if (!price || !size)
+                return std::nullopt;
+
+            if (!std::isfinite(*price) || !std::isfinite(*size))
+                return std::nullopt;
+
+            if (*price <= 0.0 || *size < 0.0)
+                return std::nullopt;
+
+            return WebullPriceLevel{
+                .Price = *price,
+                .size = *size
+            };
+        }
+
+        std::optional<WebullQuote> ParseWebullQuote(const std::string& payload) {
+            if (payload.empty())
+                return std::nullopt;
+
+            webull::marketdata::Quote message;
+
+            if (!message.ParseFromString(payload))
+                return std::nullopt;
+
+            if (!message.has_basic())
+                return std::nullopt;
+
+            const auto& basic = message.basic();
+
+            auto timestamp = ParseNumber<std::int64_t>(basic.timestamp());
+
+            if (basic.symbol().empty() ||
+                basic.instrument_id().empty() ||
+                !timestamp ||
+                *timestamp <= 0)
+            {
+                return std::nullopt;
+            }
+
+            WebullQuote quote{
+                .symbol = basic.symbol(),
+                .instrument_id = basic.instrument_id(),
+                .timestamp_ms = *timestamp,
+                .session = basic.session()
+            };
+
+            for (const auto& ask : message.asks())
+            {
+                auto level = ParsePriceLevel(ask);
+
+                if (!level)
+                    return std::nullopt;
+
+                quote.asks.push_back(*level);
+            }
+
+            for (const auto& bid : message.bids())
+            {
+                auto level = ParsePriceLevel(bid);
+
+                if (!level)
+                    return std::nullopt;
+
+                quote.bids.push_back(*level);
+            }
+
+            return quote;
+        }
     }
 
     /* ============================================================================================================== */
@@ -304,15 +399,6 @@ namespace Client {
 
         /* ========================================================================================================== */
 
-        void LogQuoteMessage(const std::string& topic, const std::string& payload) {
-            const std::string stamp = Common::DateTime::GetCurrentDateTime().ToString_DT();
-
-            // Quote payloads are protobuf; logging bytes avoids presenting undecoded data as quote fields.
-            Logger::Info(std::format("Webull message received at {} topic={} payload_bytes={}", stamp, topic, payload.size()), true);
-        }
-
-        /* ========================================================================================================== */
-
         std::string GetCredential(Common::SecretEnvironment environment, const std::string& name, bool required = true) {
             Common::SecretResult result = Common::SecretStore::GetWebullSecret(environment, name);
 
@@ -511,7 +597,23 @@ namespace Client {
 
         try {
             MqttWrapper mqtt(uri, session);
-            mqtt.SetMessageHandler(LogQuoteMessage);
+            mqtt.SetMessageHandler(
+                [this](const std::string &topic, const std::string &payload) {
+                    const std::string stamp = Common::DateTime::GetCurrentDateTime().ToString_DT();
+                    Logger::Info(std::format("Webull message received at {} topic={} payload_bytes={}", stamp, topic, payload.size()), true);
+
+                    if (topic == "quote" && this->QuoteStreamCallback) {
+                        std::optional<WebullQuote> quote = ParseWebullQuote(payload);
+                        if (quote) {
+                            // Transfer ownership to the callback.
+                            this->QuoteStreamCallback(std::move(*quote));
+                        }
+                        else {
+                            Logger::Info("Failed to parse Webull quote payload.", true);
+                        }
+                    }
+                }
+            );
             mqtt.SetConnectionLostHandler([] { Logger::Warning("Webull MQTT connection lost", true); });
             mqtt.Connect({.UserName = credentials.app_key, .Password = MqttPassword, .KeepAlive = MqttKeepAlive});
 
@@ -547,6 +649,12 @@ namespace Client {
         }
 
         return SessionOutcome::Reconnect;
+    }
+
+    /* ============================================================================================================== */
+
+    void WebullStreamingClient::SetQuoteStreamCallback(const std::function<void(WebullQuote)> &callback) {
+        this->QuoteStreamCallback = std::move(callback);
     }
 
     /* ============================================================================================================== */

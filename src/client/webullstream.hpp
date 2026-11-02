@@ -3,14 +3,34 @@
 
 #pragma once
 
+#include "common/datetime.hpp"
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <map>
 #include <string>
 #include <thread>
+#include <functional>
 
 namespace Client {
+
+    struct WebullPriceLevel {
+        double Price{};
+        double size{};
+    };
+
+    struct WebullQuote {
+        std::string symbol;
+        std::string instrument_id;
+
+        std::int64_t timestamp_ms{};
+        std::string session;
+
+        std::vector<WebullPriceLevel> asks;
+        std::vector<WebullPriceLevel> bids;
+    };
+
+
     /**
      * @brief Enum class to identify if we are running within a sandbox, or the user's real webull trading account.
      * 
@@ -111,6 +131,13 @@ namespace Client {
          */
         bool IsRunning() const;
 
+        /**
+         * @brief Set the Quote Stream Callback.
+         * 
+         * @param callback 
+         */
+        void SetQuoteStreamCallback(const std::function<void(WebullQuote)> &callback);
+
     private:
         /**
          * @brief What the reconnect loop should do after a stream session ends.
@@ -175,5 +202,11 @@ namespace Client {
          * @brief Prevents duplicate stream workers from running concurrently.
          */
         bool running_ = false;
+
+        /**
+         * @brief Callback function we forward incoming quote messages to.
+         * The first string is the topic, while the second string is the message itself.
+         */
+        std::function<void(WebullQuote)> QuoteStreamCallback = nullptr;
     };
 }

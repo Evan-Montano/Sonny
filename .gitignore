@@ -7,4 +7,5 @@ config.json
 vcpkg_installed
 .cache
 faiss
+protobuf
 node_modules

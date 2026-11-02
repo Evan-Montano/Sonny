@@ -1,0 +1,42 @@
+
+syntax = "proto3";
+
+package webull.marketdata;
+
+// Shared metadata present in Webull market-data messages.
+message Basic {
+    string symbol = 1;
+    string instrument_id = 2;
+    string timestamp = 3;
+
+    // Observed in sandbox payloads, but not currently
+    // documented in Webull's published Basic definition.
+    string session = 4;
+}
+
+// Real-time order book.
+message Quote {
+    Basic basic = 1;
+    repeated AskBid asks = 2;
+    repeated AskBid bids = 3;
+}
+
+// Individual price level within the order book.
+message AskBid {
+    string price = 1;
+    string size = 2;
+    repeated Order order = 3;
+    repeated Broker broker = 4;
+}
+
+// Individual order contributing to a price level.
+message Order {
+    string mpid = 1;
+    string size = 2;
+}
+
+// Broker information associated with a price level.
+message Broker {
+    string bid = 1;
+    string name = 2;
+}

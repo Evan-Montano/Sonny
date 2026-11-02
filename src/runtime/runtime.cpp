@@ -6,6 +6,8 @@
 #include "../ui/ui.hpp"
 #include <ftxui/dom/elements.hpp>
 
+#include <deque>
+
 namespace Runtime {
 
     // ========== ORCHESTRATOR IMPLEMENTATION ========== //
@@ -56,6 +58,13 @@ namespace Runtime {
         // 5. Get results from the index query and pass into separate function for historical record lookup.
         // 6. Get results from historical lookup and calculate futures.
         // 7. Update futures display on UI.
+
+        // std::deque<std::string> QuoteQueue{};
+        
+
+        this->QuoteClient.SetQuoteStreamCallback([&](Client::WebullQuote quote) {
+            
+        });
 
         this->QuoteClient.Start(this->EnvironmentType);
         UI::Get().Refresh();

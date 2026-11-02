@@ -57,6 +57,7 @@ find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(faiss CONFIG REQUIRED)
+find_package(protobuf CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBSECRET REQUIRED IMPORTED_TARGET libsecret-1)
@@ -118,11 +119,32 @@ target_link_libraries(sonny_client
     PRIVATE PahoMqttCpp::paho-mqttpp3-static
 )
 
-add_library(sonny_webull STATIC src/client/webullstream.cpp)
-target_include_directories(sonny_webull PUBLIC ${PROJECT_SOURCE_DIR}/src)
+# Webull Protobuf definitions and generated source directory.
+set(WEBULL_PROTO_FILE
+    "${PROJECT_SOURCE_DIR}/proto/webull/marketdata.proto"
+)
+
+set(WEBULL_PROTO_BINARY_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+)
+
+add_library(sonny_webull STATIC src/client/webullstream.cpp ${WEBULL_PROTO_FILE})
+
+# Generate C++ source and header files from Webull's Protobuf schema.
+protobuf_generate(
+    TARGET sonny_webull
+    IMPORT_DIRS "${PROJECT_SOURCE_DIR}/proto"
+    PROTOC_OUT_DIR "${WEBULL_PROTO_BINARY_DIR}"
+)
+
+target_include_directories(sonny_webull 
+    PUBLIC ${PROJECT_SOURCE_DIR}/src
+    PRIVATE ${WEBULL_PROTO_BINARY_DIR}
+)
+
 target_link_libraries(sonny_webull
     PUBLIC sonny_common sonny_client nlohmann_json::nlohmann_json
-    PRIVATE OpenSSL::Crypto
+    PRIVATE OpenSSL::Crypto protobuf::libprotobuf
 )
 
 add_library(sonny_runtime STATIC
