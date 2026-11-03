@@ -51,14 +51,12 @@ namespace Core {
             constexpr std::size_t SEARCH_WINDOW_PADDING = SEARCH_WINDOW_LENGTH - 1;
             constexpr std::size_t TOTAL_SEGMENTS = 13;
 
-            const std::size_t totalDays =
-                static_cast<std::size_t>(Core::Setup::TOTAL_DAYS);
+            const std::size_t totalDays = static_cast<std::size_t>(Core::Setup::TOTAL_DAYS);
 
             // Two passes for every segment-day:
             // 1. Calculate normalization statistics.
             // 2. Normalize records and build the index.
-            const std::size_t totalUnits =
-                totalDays * TOTAL_SEGMENTS * 2;
+            const std::size_t totalUnits = totalDays * TOTAL_SEGMENTS * 2;
 
             std::string status{};
             std::string currentDate{};
@@ -153,8 +151,7 @@ namespace Core {
                     segmentIndex < TOTAL_SEGMENTS;
                     ++segmentIndex
                 ) {
-                    const std::size_t segmentOffset =
-                        segmentIndex * RECORDS_PER_HALF_HOUR;
+                    const std::size_t segmentOffset = segmentIndex * RECORDS_PER_HALF_HOUR;
 
                     UI::Get().Update([&] {
                         currentSegment = std::format(
@@ -180,8 +177,7 @@ namespace Core {
                         for (; dt <= Core::Setup::END_DATE; dt.NextDay()) {
                             const std::string date = dt.ToString_Date();
 
-                            const std::filesystem::path recFilePath =
-                                RECORDS_BASE_PATH / (date + ".rec");
+                            const std::filesystem::path recFilePath = RECORDS_BASE_PATH / (date + ".rec");
 
                             UI::Get().Update([&] {
                                 currentDate = date;
@@ -193,8 +189,7 @@ namespace Core {
                             });
 
                             if (FileExists(recFilePath)) {
-                                std::vector<Core::MLRecord> allRecords =
-                                    LoadRecords(recFilePath);
+                                std::vector<Core::MLRecord> allRecords = LoadRecords(recFilePath);
 
                                 if (allRecords.size() > segmentOffset) {
                                     const std::size_t end = std::min(
@@ -204,8 +199,7 @@ namespace Core {
                                         allRecords.size()
                                     );
 
-                                    const std::size_t segmentSize =
-                                        end - segmentOffset;
+                                    const std::size_t segmentSize = end - segmentOffset;
 
                                     // A segment must contain at least one complete
                                     // 30-record search window to contribute statistics.
@@ -226,8 +220,7 @@ namespace Core {
                         }
 
                         // Calculate the final parameters across all historical days.
-                        const Core::NormalizationParameters parameters =
-                            accumulator.GetParameters();
+                        const Core::NormalizationParameters parameters = accumulator.GetParameters();
 
                         Logger::Info(
                             std::format(
@@ -251,8 +244,7 @@ namespace Core {
                         for (; dt <= Core::Setup::END_DATE; dt.NextDay()) {
                             const std::string date = dt.ToString_Date();
 
-                            const std::filesystem::path recFilePath =
-                                RECORDS_BASE_PATH / (date + ".rec");
+                            const std::filesystem::path recFilePath = RECORDS_BASE_PATH / (date + ".rec");
 
                             UI::Get().Update([&] {
                                 currentDate = date;
@@ -264,8 +256,7 @@ namespace Core {
                             });
 
                             if (FileExists(recFilePath)) {
-                                std::vector<Core::MLRecord> allRecords =
-                                    LoadRecords(recFilePath);
+                                std::vector<Core::MLRecord> allRecords = LoadRecords(recFilePath);
 
                                 if (allRecords.size() > segmentOffset) {
                                     const std::size_t end = std::min(
@@ -275,8 +266,7 @@ namespace Core {
                                         allRecords.size()
                                     );
 
-                                    const std::size_t segmentSize =
-                                        end - segmentOffset;
+                                    const std::size_t segmentSize = end - segmentOffset;
 
                                     if (segmentSize >= SEARCH_WINDOW_LENGTH) {
                                         std::span<Core::MLRecord> segment(
@@ -285,16 +275,9 @@ namespace Core {
                                         );
 
                                         // Use this index's shared parameters.
-                                        Core::NormalizeRecordsVector(
-                                            segment,
-                                            parameters
-                                        );
+                                        Core::NormalizeRecordsVector(segment, parameters);
 
-                                        indexSegment.AddVectorsToIndex(
-                                            segment,
-                                            recFilePath,
-                                            segmentOffset
-                                        );
+                                        indexSegment.AddVectorsToIndex(segment, recFilePath, segmentOffset);
                                     }
                                 }
                             }
