@@ -94,6 +94,24 @@ namespace Core {
          */
         std::vector<WindowLocation> _windowLocations{};
 
+        /**
+         * @brief Path for normalization json metadata.
+         * 
+         */
+        std::filesystem::path _normalizationPath;
+
+        /**
+         * @brief Parameters describing the standard deviations for this index. Used for normalizing live data.
+         * 
+         */
+        NormalizationParameters _normalizationParameters{};
+
+        /**
+         * @brief Boolean to track if this index has normalization params.
+         * 
+         */
+        bool _hasNormalizationParameters{false};
+
         // METHODS
 
         /**
@@ -153,6 +171,26 @@ namespace Core {
          * 
          */
         void Initialize();
+
+        /**
+         * @brief Get the Normalization metadata path.
+         * 
+         * @param numOfSeconds 
+         * @return std::filesystem::path 
+         */
+        static std::filesystem::path GetNormalizationPath(std::size_t numOfSeconds);
+
+        /**
+         * @brief Loads normalization json into struct.
+         * 
+         */
+        void LoadNormalizationParameters();
+
+        /**
+         * @brief Saves normalization struct data to json on disk.
+         * 
+         */
+        void SaveNormalizationParametersToDisk() const;
 
         // FRIENDS AND TEST OVERLOADS
         friend class ::HalfHourIndex_Test;
@@ -222,5 +260,19 @@ namespace Core {
             const std::vector<float> &normalizedQuery,
             std::size_t maxResults
         ) const;
+
+        /**
+        * @brief Sets the normalization parameters associated with this index.
+        *
+        * Used during historical index construction.
+        */
+        void SetNormalizationParameters(const NormalizationParameters& parameters);
+
+        /**
+        * @brief Normalizes a 30-record query using this index's parameters.
+        *
+        * Returns a flattened 90-element FAISS-compatible vector.
+        */
+        std::vector<float> NormalizeQuery(std::span<const MLRecord> records) const;
     };
 }

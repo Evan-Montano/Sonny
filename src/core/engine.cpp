@@ -4,6 +4,7 @@
 #include "engine.hpp"
 #include "../common/storage.hpp"
 #include "../common/logger.hpp"
+#include "transformer.hpp"
 
 #include <algorithm>
 #include <format>
@@ -56,6 +57,11 @@ namespace Core {
             );
     }
 
+    std::filesystem::path HalfHourIndex::GetNormalizationPath(const std::size_t numOfSeconds) {
+        const std::filesystem::path metadataPath = GetMetadataPath(numOfSeconds);
+        return metadataPath.parent_path() / (metadataPath.stem().string() + ".normalization.json");
+    }
+
     std::filesystem::path HalfHourIndex::GetRecordFilePathFromWindowLocation(const std::array<char,8> &yyyymmdd) {
         const std::string date(yyyymmdd.data(), yyyymmdd.size());
         const std::string formattedDate = 
@@ -96,13 +102,16 @@ namespace Core {
             _metadataPath = GetMetadataPath(1);
         }
 
+        _normalizationPath = _metadataPath.parent_path() / (_metadataPath.stem().string() + ".normalization.json");
+
         Initialize();
     }
 
     HalfHourIndex::HalfHourIndex(const std::size_t& numOfSeconds)
         : _index(DIMENSION),
         _indexPath(GetIndexPath(numOfSeconds)),
-        _metadataPath(GetMetadataPath(numOfSeconds))
+        _metadataPath(GetMetadataPath(numOfSeconds)),
+        _normalizationPath(GetNormalizationPath(numOfSeconds))
     {
         Initialize();
     }
@@ -173,6 +182,9 @@ namespace Core {
             if (Common::Storage::FileExists(this->_metadataPath)) {
                 LoadMetadata();
             }
+
+            // Laod the normalization parameters associated with this index.
+            LoadNormalizationParameters();
         }
         else {
             Logger::Info(
@@ -190,6 +202,12 @@ namespace Core {
     HalfHourIndex::~HalfHourIndex() {
         if (this->Updated) {
             try {
+                if (_hasNormalizationParameters == false) {
+                    throw std::runtime_error(
+                        "Cannot persist HalfHourIndex without normalization parameters."
+                    );
+                }
+
                 Logger::Info(
                     std::format(
                         "Saving FAISS index: {}",
@@ -198,8 +216,11 @@ namespace Core {
                     true
                 );
 
-                if (Common::Storage::FileExists(this->_indexPath.parent_path()) == false) {
-                    Common::Storage::CreateDirectory(this->_indexPath.parent_path());
+                if (Common::Storage::FileExists(
+                        this->_indexPath.parent_path()) == false) {
+                    Common::Storage::CreateDirectory(
+                        this->_indexPath.parent_path()
+                    );
                 }
 
                 faiss::write_index(
@@ -208,6 +229,7 @@ namespace Core {
                 );
 
                 SaveMetadataToDisk();
+                SaveNormalizationParametersToDisk();
             }
             catch (const std::exception& e) {
                 Logger::Error(
@@ -301,11 +323,234 @@ namespace Core {
         }
     }
 
-    void HalfHourIndex::AddVectorsToIndex(
-        const std::span<Core::MLRecord> &normalizedMLSpan,
-        const std::filesystem::path &recFilePath,
-        const std::size_t recordOffset
-    ) {
+    void HalfHourIndex::LoadNormalizationParameters() {
+        if (Common::Storage::FileExists(_normalizationPath) == false) {
+            throw std::runtime_error(
+                std::format(
+                    "Normalization parameters missing: {}. "
+                    "The historical indexes must be rebuilt.",
+                    _normalizationPath.string()
+                )
+            );
+        }
+
+        Common::JsonUtility json = Common::JsonUtility::FromFile(_normalizationPath);
+
+        const int schemaVersion = json.Get<int>("schema_version");
+
+        if (schemaVersion != 1) {
+            throw std::runtime_error(
+                std::format(
+                    "Unsupported normalization schema version: {}",
+                    schemaVersion
+                )
+            );
+        }
+
+        const std::vector<std::string> expectedFeatureOrder{
+            "mid_delta",
+            "spread_delta",
+            "volume"
+        };
+
+        const auto featureOrder = json.Get<std::vector<std::string>>("feature_order");
+
+        if (featureOrder != expectedFeatureOrder) {
+            throw std::runtime_error(
+                "Normalization feature order does not match Sonny's MLRecord layout."
+            );
+        }
+
+        if (json.Get<std::string>("volume_transform") != "log1p") {
+            throw std::runtime_error(
+                "Unsupported normalization volume transformation."
+            );
+        }
+
+        if (json.Get<std::string>("standard_deviation") != "population") {
+            throw std::runtime_error(
+                "Unsupported normalization standard deviation convention."
+            );
+        }
+
+        NormalizationParameters parameters{
+            .sample_count = json.Get<std::uint64_t>("sample_count"),
+
+            .mid_delta_mean = json.Get<double>("mid_delta_mean"),
+            .mid_delta_stddev = json.Get<double>("mid_delta_stddev"),
+
+            .spread_delta_mean = json.Get<double>("spread_delta_mean"),
+            .spread_delta_stddev = json.Get<double>("spread_delta_stddev"),
+
+            .volume_mean = json.Get<double>("volume_mean"),
+            .volume_stddev = json.Get<double>("volume_stddev")
+        };
+
+        ValidateNormalizationParameters(parameters);
+
+        _normalizationParameters = parameters;
+        _hasNormalizationParameters = true;
+
+        Logger::Info(
+            std::format(
+                "Loaded normalization parameters: {} ({} samples)",
+                _normalizationPath.string(),
+                parameters.sample_count
+            ),
+            true
+        );
+    }
+
+    void HalfHourIndex::SaveNormalizationParametersToDisk() const {
+        if (_hasNormalizationParameters == false) {
+            throw std::runtime_error(
+                "Cannot save an index without normalization parameters."
+            );
+        }
+
+        Common::JsonUtility json{};
+
+        json.Set("schema_version", 1);
+
+        json.Set(
+            "feature_order",
+            std::vector<std::string>{
+                "mid_delta",
+                "spread_delta",
+                "volume"
+            }
+        );
+
+        json.Set("volume_transform", "log1p");
+        json.Set("standard_deviation", "population");
+
+        json.Set("sample_count", _normalizationParameters.sample_count);
+
+        json.Set("mid_delta_mean", _normalizationParameters.mid_delta_mean);
+        json.Set("mid_delta_stddev", _normalizationParameters.mid_delta_stddev);
+
+        json.Set("spread_delta_mean", _normalizationParameters.spread_delta_mean);
+        json.Set("spread_delta_stddev", _normalizationParameters.spread_delta_stddev);
+
+        json.Set("volume_mean", _normalizationParameters.volume_mean);
+        json.Set("volume_stddev", _normalizationParameters.volume_stddev);
+
+        std::filesystem::create_directories(_normalizationPath.parent_path());
+
+        // Write to a temporary file first.
+        std::filesystem::path temporaryPath = _normalizationPath;
+        temporaryPath += ".tmp";
+
+        {
+            std::ofstream file(
+                temporaryPath,
+                std::ios::binary | std::ios::trunc
+            );
+
+            if (file.is_open() == false) {
+                throw std::runtime_error(
+                    "Unable to open normalization JSON for writing: " +
+                    temporaryPath.string()
+                );
+            }
+
+            file << json.ToString();
+            file.flush();
+
+            if (file.good() == false) {
+                throw std::runtime_error(
+                    "Failed writing normalization JSON: " +
+                    temporaryPath.string()
+                );
+            }
+        }
+
+        // Rename the completed file into place.
+        std::error_code error;
+
+        std::filesystem::rename(
+            temporaryPath,
+            _normalizationPath,
+            error
+        );
+
+        // Fallback for platforms that don't replace existing destinations.
+        if (error) {
+            std::error_code removeError;
+
+            std::filesystem::remove(
+                _normalizationPath,
+                removeError
+            );
+
+            error.clear();
+
+            std::filesystem::rename(
+                temporaryPath,
+                _normalizationPath,
+                error
+            );
+        }
+
+        if (error) {
+            std::filesystem::remove(temporaryPath);
+
+            throw std::runtime_error(
+                "Failed to install normalization JSON: " +
+                error.message()
+            );
+        }
+
+        Logger::Info(
+            std::format(
+                "Saved normalization parameters: {}",
+                _normalizationPath.string()
+            ),
+            true
+        );
+    }
+
+    void HalfHourIndex::SetNormalizationParameters(const NormalizationParameters &parameters) {
+        if (_index.ntotal > 0) {
+            throw std::logic_error(
+                "Cannot change normalization parameters after vectors have been indexed."
+            );
+        }
+
+        ValidateNormalizationParameters(parameters);
+
+        _normalizationParameters = parameters;
+        _hasNormalizationParameters = true;
+        Updated = true;
+    }
+
+    std::vector<float> HalfHourIndex::NormalizeQuery(std::span<const MLRecord> records) const {
+        if (_hasNormalizationParameters == false) {
+            throw std::logic_error(
+                "Cannot normalize a query without loaded normalization parameters."
+            );
+        }
+
+        if (records.size() != DIMENSION / 3) {
+            throw std::invalid_argument(
+                std::format(
+                    "Query contains {} records; expected {}.",
+                    records.size(),
+                    DIMENSION / 3
+                )
+            );
+        }
+
+        return NormalizeRecordsToVector(records, _normalizationParameters);
+    }
+
+    void HalfHourIndex::AddVectorsToIndex(const std::span<Core::MLRecord> &normalizedMLSpan, const std::filesystem::path &recFilePath, const std::size_t recordOffset) {
+        if (_hasNormalizationParameters == false) {
+            throw std::logic_error(
+                "Cannot add vectors before normalization parameters are set."
+            );
+        }
+
         // A complete search window contins 30 MLRecords.
         constexpr std::size_t SEARCH_WINDOW_LENGTH = DIMENSION / 3;
 
@@ -374,6 +619,12 @@ namespace Core {
     }
 
     std::vector<HalfHourIndex::QueryResult> HalfHourIndex::Query(const std::vector<float> &normalizedQuery, const std::size_t maxResults) const {
+        if (_hasNormalizationParameters == false) {
+            throw std::logic_error(
+                "Cannot query an index without normalization parameters."
+            );
+        }
+        
         std::vector<QueryResult> res{};
 
         if (normalizedQuery.size() == DIMENSION) {

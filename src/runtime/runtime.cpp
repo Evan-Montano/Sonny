@@ -186,6 +186,18 @@ namespace Runtime {
         UI::Get().Refresh();
 
         // ========== PREDICTION LOOP ========== //
+        // Figure out which HalfHourIndex that is necessary to be loaded in based on the number of seconds passed since the market start. 
+        // The loop is going to be (either periodically or for every single iteration in the loop) 
+        // checking if a new index should be loaded in based on the same metric.
+
+        // Checks under a mutex to make sure that the quoteQueue has 30 elements. It can have less, but will never have more.
+
+        // If the above condition passes, we save a snapshot of the MLRecord quoteQueue into a vector.
+        // At this stage we release the lock on the queue mutex so we can process without blocking the data stream.
+
+        // We must then pass the vector through a normalization algorithm, just like the HalfHourIndex data, 
+        // transformed from the dukascopy records.**
+        // Pass the normalized vector into the HalfHourIndex query method and complete the prediction, which is currently TODO.
         while (this->Running.load()) {
             // TODO
             std::this_thread::sleep_for(std::chrono::milliseconds(50));

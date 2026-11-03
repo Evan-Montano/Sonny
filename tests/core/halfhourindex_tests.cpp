@@ -1,15 +1,17 @@
-// halfhourindex_tests.cpp
 
 #include "core/engine.hpp"
+#include "core/transformer.hpp"
 
 #include <gtest/gtest.h>
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -21,9 +23,26 @@ protected:
     std::filesystem::path tempDirectory_;
     std::filesystem::path indexPath_;
     std::filesystem::path metadataPath_;
+    std::filesystem::path normalizationPath_;
     std::filesystem::path recordFixturePath_;
 
     std::unique_ptr<Core::HalfHourIndex> testIndex_;
+
+    // Known normalization parameters for deterministic tests.
+    static Core::NormalizationParameters MakeTestNormalizationParameters() {
+        return Core::NormalizationParameters{
+            .sample_count = 100,
+
+            .mid_delta_mean = 0.0,
+            .mid_delta_stddev = 1.0,
+
+            .spread_delta_mean = 0.0,
+            .spread_delta_stddev = 1.0,
+
+            .volume_mean = 0.0,
+            .volume_stddev = 1.0
+        };
+    }
 
     void SetUp() override {
         const auto timestamp =
@@ -37,17 +56,24 @@ protected:
 
         indexPath_ = tempDirectory_ / "test.index";
         metadataPath_ = tempDirectory_ / "test.meta";
+        normalizationPath_ = tempDirectory_ / "test.normalization.json";
 
         recordFixturePath_ =
             std::filesystem::path(SONNY_PROJECT_ROOT) /
             "tests/test_storage/records/2026-09-01.rec";
 
         OpenIndex();
+
+        // Every test index must have valid normalization parameters.
+        testIndex_->SetNormalizationParameters(
+            MakeTestNormalizationParameters()
+        );
     }
 
     void TearDown() override {
         // Destroy the index before deleting its backing files.
         testIndex_.reset();
+
         std::filesystem::remove_all(tempDirectory_);
     }
 
@@ -59,11 +85,18 @@ protected:
         );
     }
 
+    // Normalize a copy of the records before passing them to FAISS.
     void AddRecords(
-        std::vector<Core::MLRecord>& records,
-        const std::size_t recordOffset = 0
+        const std::vector<Core::MLRecord>& records,
+        const std::size_t recordOffset = 0,
+        const Core::NormalizationParameters& parameters =
+            MakeTestNormalizationParameters()
     ) {
-        std::span<Core::MLRecord> recordSpan(records);
+        std::vector<Core::MLRecord> normalizedRecords = records;
+
+        std::span<Core::MLRecord> recordSpan(normalizedRecords);
+
+        Core::NormalizeRecordsVector(recordSpan, parameters);
 
         testIndex_->AddVectorsToIndex(
             recordSpan,
@@ -79,7 +112,21 @@ protected:
         return testIndex_->Query(query, maxResults);
     }
 
-    // Produce deterministic records for testing the indexing algorithm.
+    // Construct a normalized 90-dimensional query through HalfHourIndex.
+    // This also verifies that the index's normalization parameters are used.
+    std::vector<float> MakeQuery(
+        const std::vector<Core::MLRecord>& records,
+        const std::size_t firstRecord
+    ) const {
+        std::span<const Core::MLRecord> window(
+            records.data() + firstRecord,
+            WINDOW_LENGTH
+        );
+
+        return testIndex_->NormalizeQuery(window);
+    }
+
+    // Produce deterministic raw records for testing the indexing algorithm.
     static std::vector<Core::MLRecord> MakeRecords(
         const std::size_t count
     ) {
@@ -99,27 +146,11 @@ protected:
 
         return records;
     }
-
-    // Construct the exact flattened 90-float query corresponding
-    // to a 30-record window.
-    static std::vector<float> MakeQuery(
-        const std::vector<Core::MLRecord>& records,
-        const std::size_t firstRecord
-    ) {
-        std::vector<float> query;
-        query.reserve(QUERY_DIMENSION);
-
-        for (std::size_t i = 0; i < WINDOW_LENGTH; ++i) {
-            const Core::MLRecord& record = records[firstRecord + i];
-
-            query.push_back(record.mid_delta);
-            query.push_back(record.spread_delta);
-            query.push_back(record.volume);
-        }
-
-        return query;
-    }
 };
+
+// ============================================================ //
+// FIXTURE TESTS
+// ============================================================ //
 
 // Verify that the immutable test fixtures are present.
 TEST_F(HalfHourIndex_Test, CheckedInFixturesExist) {
@@ -130,6 +161,10 @@ TEST_F(HalfHourIndex_Test, CheckedInFixturesExist) {
     EXPECT_TRUE(std::filesystem::is_regular_file(corpusPath));
     EXPECT_TRUE(std::filesystem::is_regular_file(recordFixturePath_));
 }
+
+// ============================================================ //
+// QUERY TESTS
+// ============================================================ //
 
 // A new index should return no results.
 TEST_F(HalfHourIndex_Test, EmptyIndexReturnsNoResults) {
@@ -150,9 +185,49 @@ TEST_F(HalfHourIndex_Test, QueryRejectsIncorrectDimension) {
     );
 }
 
+// Query normalization requires exactly 30 MLRecords.
+TEST_F(HalfHourIndex_Test, NormalizeQueryRejectsIncorrectRecordCount) {
+    const auto records = MakeRecords(WINDOW_LENGTH - 1);
+
+    std::span<const Core::MLRecord> recordSpan(records);
+
+    EXPECT_THROW(
+        testIndex_->NormalizeQuery(recordSpan),
+        std::invalid_argument
+    );
+}
+
+// Verify that normalization produces the expected feature ordering.
+TEST_F(HalfHourIndex_Test, NormalizeQueryProducesCorrectFeatureOrder) {
+    const auto records = MakeRecords(WINDOW_LENGTH);
+
+    const auto query = MakeQuery(records, 0);
+
+    ASSERT_EQ(query.size(), QUERY_DIMENSION);
+
+    // First record:
+    // mid_delta = 1.0
+    // spread_delta = 0.25
+    // volume = 0.5
+    //
+    // Mean = 0 and standard deviation = 1 for all features.
+    // Volume is transformed using log1p before normalization.
+
+    EXPECT_FLOAT_EQ(query[0], 1.0F);
+    EXPECT_FLOAT_EQ(query[1], 0.25F);
+    EXPECT_FLOAT_EQ(
+        query[2],
+        static_cast<float>(std::log1p(0.5))
+    );
+}
+
+// ============================================================ //
+// INDEXING TESTS
+// ============================================================ //
+
 // Fewer than 30 records cannot produce a complete search window.
 TEST_F(HalfHourIndex_Test, IgnoresInsufficientRecords) {
-    auto records = MakeRecords(WINDOW_LENGTH - 1);
+    const auto records = MakeRecords(WINDOW_LENGTH - 1);
 
     AddRecords(records);
 
@@ -164,7 +239,7 @@ TEST_F(HalfHourIndex_Test, IgnoresInsufficientRecords) {
 
 // Exactly 30 records should produce exactly one vector.
 TEST_F(HalfHourIndex_Test, IndexesOneCompleteWindow) {
-    auto records = MakeRecords(WINDOW_LENGTH);
+    const auto records = MakeRecords(WINDOW_LENGTH);
 
     AddRecords(records, 17);
 
@@ -185,7 +260,7 @@ TEST_F(HalfHourIndex_Test, IndexesOneCompleteWindow) {
 
 // N records produce N - 29 overlapping 30-record windows.
 TEST_F(HalfHourIndex_Test, IndexesOverlappingWindows) {
-    auto records = MakeRecords(32);
+    const auto records = MakeRecords(32);
 
     AddRecords(records, 100);
 
@@ -201,7 +276,7 @@ TEST_F(HalfHourIndex_Test, IndexesOverlappingWindows) {
 
 // Query should respect the requested result limit.
 TEST_F(HalfHourIndex_Test, QueryRespectsMaxResults) {
-    auto records = MakeRecords(35);
+    const auto records = MakeRecords(35);
 
     AddRecords(records);
 
@@ -211,25 +286,55 @@ TEST_F(HalfHourIndex_Test, QueryRespectsMaxResults) {
     EXPECT_TRUE(QueryIndex(query, 0).empty());
 }
 
-// Index vectors and their metadata should survive a disk round trip.
-TEST_F(HalfHourIndex_Test, PersistsIndexAndMetadata) {
-    auto records = MakeRecords(31);
+// ============================================================ //
+// NORMALIZATION PERSISTENCE TESTS
+// ============================================================ //
 
-    AddRecords(records, 300);
+// Index vectors, metadata, and normalization parameters
+// should survive a complete disk round trip.
+TEST_F(HalfHourIndex_Test, PersistsIndexMetadataAndNormalization) {
+    auto parameters = MakeTestNormalizationParameters();
+
+    // Use distinctive parameters so we can verify that the exact
+    // normalization configuration survives JSON serialization.
+    parameters.mid_delta_mean = 2.5;
+    parameters.mid_delta_stddev = 3.5;
+
+    parameters.spread_delta_mean = 1.5;
+    parameters.spread_delta_stddev = 2.5;
+
+    parameters.volume_mean = 0.75;
+    parameters.volume_stddev = 1.25;
+
+    testIndex_->SetNormalizationParameters(parameters);
+
+    const auto records = MakeRecords(31);
+
+    AddRecords(records, 300, parameters);
 
     // Query the second overlapping window.
-    const auto query = MakeQuery(records, 1);
+    const auto queryBeforeSave = MakeQuery(records, 1);
 
-    // Destroying an updated index saves the index and metadata.
+    // Destroying an updated index saves all three files.
     testIndex_.reset();
 
     ASSERT_TRUE(std::filesystem::is_regular_file(indexPath_));
     ASSERT_TRUE(std::filesystem::is_regular_file(metadataPath_));
+    ASSERT_TRUE(std::filesystem::is_regular_file(normalizationPath_));
 
     // Reopen the same files using the test-only constructor.
+    // This should load the normalization parameters from JSON.
     OpenIndex();
 
-    const auto results = QueryIndex(query, 2);
+    const auto queryAfterLoad = MakeQuery(records, 1);
+
+    ASSERT_EQ(queryAfterLoad.size(), QUERY_DIMENSION);
+
+    // Verify that the loaded normalization parameters produce
+    // exactly the same query as the original parameters.
+    EXPECT_EQ(queryAfterLoad, queryBeforeSave);
+
+    const auto results = QueryIndex(queryAfterLoad, 2);
 
     ASSERT_EQ(results.size(), 2U);
 
@@ -241,4 +346,21 @@ TEST_F(HalfHourIndex_Test, PersistsIndexAndMetadata) {
     };
 
     EXPECT_EQ(results[0].tradingDayId, expectedTradingDay);
+}
+
+// An existing index without its normalization JSON must not be usable.
+TEST_F(HalfHourIndex_Test, RejectsIndexWithoutNormalizationParameters) {
+    // Save the initial empty index and its normalization parameters.
+    testIndex_.reset();
+
+    ASSERT_TRUE(std::filesystem::is_regular_file(indexPath_));
+    ASSERT_TRUE(std::filesystem::is_regular_file(normalizationPath_));
+
+    // Simulate a legacy index or missing normalization file.
+    std::filesystem::remove(normalizationPath_);
+
+    EXPECT_THROW(
+        OpenIndex(),
+        std::runtime_error
+    );
 }
