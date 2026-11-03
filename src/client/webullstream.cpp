@@ -85,92 +85,104 @@ namespace Client {
 
         template <typename T>
         std::optional<T> ParseNumber(std::string_view input) {
-            T value{};
+            std::optional<T> result;
 
-            const auto [ptr, ec] = std::from_chars(
-                input.data(),
-                input.data() + input.size(),
-                value
-            );
+            if (input.empty() == false) {
+                T value{};
 
-            if (ec != std::errc{} || ptr != input.data() + input.size())
-                return std::nullopt;
+                const auto [ptr, ec] = std::from_chars(
+                    input.data(),
+                    input.data() + input.size(),
+                    value
+                );
 
-            return value;
+                if (ec == std::errc{} && ptr == input.data() + input.size())
+                    result = value;
+            }
+
+            return result;
         }
 
         std::optional<WebullPriceLevel> ParsePriceLevel(const webull::marketdata::AskBid& level) {
-            auto price = ParseNumber<double>(level.price());
-            auto size = ParseNumber<double>(level.size());
+            std::optional<WebullPriceLevel> result;
 
-            if (!price || !size)
-                return std::nullopt;
+            std::optional<double> price = ParseNumber<double>(level.price());
+            std::optional<double> size = ParseNumber<double>(level.size());
 
-            if (!std::isfinite(*price) || !std::isfinite(*size))
-                return std::nullopt;
+            bool valid = price.has_value() != false &&
+                        size.has_value() != false;
 
-            if (*price <= 0.0 || *size < 0.0)
-                return std::nullopt;
+            if (valid) {
+                valid = std::isfinite(*price) != false &&
+                        std::isfinite(*size) != false &&
+                        *price > 0.0 &&
+                        *size >= 0.0;
+            }
 
-            return WebullPriceLevel{
-                .Price = *price,
-                .size = *size
-            };
+            if (valid) {
+                result = WebullPriceLevel{
+                    .Price = *price,
+                    .size = *size
+                };
+            }
+
+            return result;
         }
 
         std::optional<WebullQuote> ParseWebullQuote(const std::string& payload) {
-            if (payload.empty())
-                return std::nullopt;
+            std::optional<WebullQuote> result;
 
             webull::marketdata::Quote message;
 
-            if (!message.ParseFromString(payload))
-                return std::nullopt;
+            bool valid = payload.empty() == false;
 
-            if (!message.has_basic())
-                return std::nullopt;
+            if (valid) valid = message.ParseFromString(payload);
 
-            const auto& basic = message.basic();
+            if (valid) valid = message.has_basic();
 
-            auto timestamp = ParseNumber<std::int64_t>(basic.timestamp());
+            WebullQuote quote{};
 
-            if (basic.symbol().empty() ||
-                basic.instrument_id().empty() ||
-                !timestamp ||
-                *timestamp <= 0)
-            {
-                return std::nullopt;
+            if (valid) {
+                const ::webull::marketdata::Basic& basic = message.basic();
+
+                std::optional<long> timestamp = ParseNumber<std::int64_t>(basic.timestamp());
+
+                valid = basic.symbol().empty() == false &&
+                        basic.instrument_id().empty() == false &&
+                        timestamp.has_value() != false &&
+                        *timestamp > 0;
+
+                if (valid) {
+                    quote.symbol = basic.symbol();
+                    quote.instrument_id = basic.instrument_id();
+                    quote.timestamp_ms = *timestamp;
+                    quote.session = basic.session();
+                }
             }
 
-            WebullQuote quote{
-                .symbol = basic.symbol(),
-                .instrument_id = basic.instrument_id(),
-                .timestamp_ms = *timestamp,
-                .session = basic.session()
-            };
+            if (valid) {
+                for (const webull::marketdata::AskBid& ask : message.asks()) {
+                    std::optional<WebullPriceLevel> level = ParsePriceLevel(ask);
 
-            for (const auto& ask : message.asks())
-            {
-                auto level = ParsePriceLevel(ask);
-
-                if (!level)
-                    return std::nullopt;
-
-                quote.asks.push_back(*level);
+                    if (level.has_value() != false) quote.asks.push_back(*level);
+                    else valid = false;
+                }
             }
 
-            for (const auto& bid : message.bids())
-            {
-                auto level = ParsePriceLevel(bid);
+            if (valid) {
+                for (const webull::marketdata::AskBid& bid : message.bids()) {
+                    std::optional<WebullPriceLevel> level = ParsePriceLevel(bid);
 
-                if (!level)
-                    return std::nullopt;
-
-                quote.bids.push_back(*level);
+                    if (level.has_value() != false) quote.bids.push_back(*level);
+                    else valid = false;
+                }
             }
 
-            return quote;
+            if (valid) result = std::move(quote);
+
+            return result;
         }
+
     }
 
     /* ============================================================================================================== */
@@ -482,7 +494,7 @@ namespace Client {
         std::string key = app_secret + "&";
         std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
         unsigned digest_len = 0;
-        const auto* signed_result = HMAC(EVP_sha1(), key.data(), static_cast<int>(key.size()),
+        const unsigned char* signed_result = HMAC(EVP_sha1(), key.data(), static_cast<int>(key.size()),
                                          reinterpret_cast<const unsigned char*>(encoded.data()), encoded.size(),
                                          digest.data(), &digest_len);
         Cleanse(key);
