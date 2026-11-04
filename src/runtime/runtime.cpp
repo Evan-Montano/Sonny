@@ -344,15 +344,6 @@ namespace Runtime {
                     quoteViewState.recent_deltas.emplace_back(second, mid_delta);
                 }
             });
-
-            // Logger::Info(
-            //     std::format(
-            //         "Quote: {}     Mid: ${}",
-            //         Common::DateTime(static_cast<Common::UnixTimestamp>(timestamp_ms/1000)).ToString_Time(),
-            //         std::to_string(mid_delta)
-            //     ),
-            //     true
-            // );
         };
 
         // Finalize the last snapshot received during a completed second.
@@ -403,6 +394,7 @@ namespace Runtime {
 
         std::uint64_t rawQuoteCount = 0;
         auto lastQuoteViewRefresh = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+
         this->QuoteClient.SetQuoteStreamCallback([&](Client::WebullQuote quote) {
             ++rawQuoteCount;
 

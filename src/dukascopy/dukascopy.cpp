@@ -1,9 +1,12 @@
 // dukascopy.cpp
+
 // Implementation of the Dukascopy namespace for exporting historical raw tick
+
 // data into a binary format used by Sonny's ML architecture.
 
-#include "dukascopy.hpp"
 
+
+#include "dukascopy.hpp"
 #include "../common/jsonutil.hpp"
 #include "../common/logger.hpp"
 #include "../common/storage.hpp"
@@ -13,27 +16,48 @@
 #include "../ui/ui.hpp"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <ftxui/dom/elements.hpp>
 #include <iterator>
+#include <limits>
 #include <optional>
-#include <stdexcept>
 #include <string>
+#include <system_error>
+#include <unordered_map>
+#include <utility>
 #include <vector>
+
 
 namespace Dukascopy {
 
+
+
     inline static const std::string infoUrl =
+
         "https://jetta.dukascopy.com/v1/instruments/SPY.US-USD";
 
+
+
     inline static const std::string ticksUrlBase =
+
         "https://jetta.dukascopy.com/v1/ticks/SPY.US-USD/";
 
+
+
     // Regular US session length: 9:30 to 16:00 New York time (6.5 hours).
+    // Early closes require an exchange calendar and are not inferred from tick silence.
     constexpr Common::UnixTimestamp sessionLengthSeconds = 23400;
+
+    // SPY is highly liquid during regular hours. A longer gap may indicate a
+    // truncated hourly response or an incomplete session rather than inactivity.
+    // This is an integrity heuristic, not proof that every source tick was delivered.
+    constexpr std::int64_t MAX_IN_SESSION_TICK_GAP_MS = 5 * 60 * 1000;
 
     std::unordered_map<std::string, std::string> headers = {
         { "Accept", "*/*" },
@@ -69,9 +93,15 @@ namespace Dukascopy {
         std::vector<std::int32_t> BidVolumes;
     };
 
+
+
+    struct HourlyTickResponse {
+        std::int64_t UtcHour;
+        ApiTickResponse Data;
+    };
+
     struct OHLCV_BidAsk {
         Common::UnixTimestamp Timestamp;
-
         std::int64_t OpenBid;
         std::int64_t HighBid;
         std::int64_t LowBid;
@@ -88,9 +118,10 @@ namespace Dukascopy {
         float Multiplier;
     };
 
-    std::string BuildTicksUrl(
-        const Common::DateTime& dt)
-    {
+
+
+    std::string BuildTicksUrl(const Common::DateTime& dt) {
+
         return ticksUrlBase +
             std::to_string(dt.GetYear()) + "/" +
             std::to_string(dt.GetMonth()) + "/" +
@@ -98,8 +129,8 @@ namespace Dukascopy {
     }
 
     /**
-     * @brief A single decoded tick with an absolute time and absolute integer prices.
-     */
+    * @brief A single decoded tick with an absolute time and absolute integer prices.
+    */
     struct Tick {
         std::int64_t TimeMs;
         std::int64_t Bid;
@@ -110,37 +141,76 @@ namespace Dukascopy {
     };
 
     /**
-     * @brief Decodes the delta-encoded hourly responses into absolute ticks ordered by time.
-     * 
-     * @param tickResponses 
-     * @return std::vector<Tick> 
-     */
-    std::vector<Tick> DecodeTicks(const std::vector<ApiTickResponse>& tickResponses) {
+    * @brief Decodes the delta-encoded hourly responses into absolute ticks ordered by time.
+    *
+    * @param tickResponses
+    * @return std::vector<Tick>
+    */
+    std::optional<std::vector<Tick>> DecodeTicks(
+        const std::vector<HourlyTickResponse>& tickResponses,
+        const std::int64_t sessionOpenMs,
+        const std::int64_t sessionCloseMs)
+    {
         std::vector<Tick> ticks;
+        std::optional<float> expectedMultiplier;
 
-        for (const ApiTickResponse& response : tickResponses) {
+        for (const HourlyTickResponse& hourlyResponse : tickResponses) {
+            const ApiTickResponse& response = hourlyResponse.Data;
             const float multiplier = response.Multiplier;
 
-            // The first tick carries the absolute prices; later ticks are deltas from the previous tick.
-            // Times are deltas too, starting from the response timestamp (milliseconds).
+            if (response.Times.empty() ||
+                response.Times.size() != response.Bids.size() ||
+                response.Times.size() != response.Asks.size() ||
+                response.Times.size() != response.BidVolumes.size() ||
+                response.Times.size() != response.AskVolumes.size()) {
+                return std::nullopt;
+            }
+
+            if (expectedMultiplier.has_value() == false) {
+                expectedMultiplier = multiplier;
+            }
+            else if (multiplier != *expectedMultiplier) {
+                // The corpus stores one multiplier for the entire trading day.
+                // A multiplier change cannot be represented safely by this format.
+                return std::nullopt;
+            }
+
+            const std::int64_t hourStartMs = hourlyResponse.UtcHour * 3'600'000;
+            const std::int64_t hourEndMs = hourStartMs + 3'600'000;
+
             auto runningBid = static_cast<std::int64_t>(std::round(response.Bid / multiplier));
             auto runningAsk = static_cast<std::int64_t>(std::round(response.Ask / multiplier));
             auto runningTime = static_cast<std::int64_t>(response.Timestamp);
 
-            const std::size_t tickCount = std::min({
-                response.Times.size(),
-                response.Bids.size(),
-                response.Asks.size(),
-                response.BidVolumes.size(),
-                response.AskVolumes.size()
-            });
+            if (runningBid <= 0 || runningAsk < runningBid) {
+                return std::nullopt;
+            }
 
-            for (std::size_t i = 0; i < tickCount; ++i) {
-                runningTime += response.Times[i];
+            bool hasSessionTick = false;
+
+            for (std::size_t i = 0; i < response.Times.size(); ++i) {
+                const std::int64_t timeDelta = response.Times[i];
+
+                if (timeDelta < 0 ||
+                    runningTime > std::numeric_limits<std::int64_t>::max() - timeDelta) {
+                    return std::nullopt;
+                }
+
+                runningTime += timeDelta;
 
                 if (i > 0) {
                     runningBid += response.Bids[i];
                     runningAsk += response.Asks[i];
+                }
+
+                if (runningBid <= 0 || runningAsk < runningBid ||
+                    runningTime < hourStartMs || runningTime >= hourEndMs ||
+                    response.BidVolumes[i] < 0 || response.AskVolumes[i] < 0) {
+                    return std::nullopt;
+                }
+
+                if (runningTime >= sessionOpenMs && runningTime < sessionCloseMs) {
+                    hasSessionTick = true;
                 }
 
                 ticks.push_back(Tick{
@@ -152,19 +222,27 @@ namespace Dukascopy {
                     .Multiplier = multiplier
                 });
             }
+
+            // Every UTC hour that intersects the regular session must contain
+            // at least one actual in-session tick. An empty/irrelevant response
+            // must not be mistaken for a successfully downloaded hour.
+            if (hasSessionTick == false) {
+                return std::nullopt;
+            }
+        }
+
+        if (ticks.empty()) {
+            return std::nullopt;
         }
 
         std::ranges::stable_sort(ticks, {}, &Tick::TimeMs);
         return ticks;
     }
 
-    /**
-     * @brief Creates a zero-volume candle whose prices all equal the given tick's prices.
-     */
+
     OHLCV_BidAsk FlatCandle(const Common::UnixTimestamp second, const Tick& tick) {
         return OHLCV_BidAsk{
             .Timestamp = second,
-
             .OpenBid = tick.Bid,
             .HighBid = tick.Bid,
             .LowBid = tick.Bid,
@@ -183,9 +261,15 @@ namespace Dukascopy {
     }
 
     /**
-     * @brief Folds a tick into a candle that already holds an earlier tick from the same second.
-     */
-    void AddTickToCandle(OHLCV_BidAsk& candle, const Tick& tick) {
+    * @brief Folds a tick into a candle that already holds an earlier tick from the same second.
+    */
+
+    bool AddTickToCandle(OHLCV_BidAsk& candle, const Tick& tick) {
+        if (std::numeric_limits<std::uint32_t>::max() - candle.BidVolume < tick.BidVolume ||
+            std::numeric_limits<std::uint32_t>::max() - candle.AskVolume < tick.AskVolume) {
+            return false;
+        }
+
         candle.HighBid = std::max(candle.HighBid, tick.Bid);
         candle.LowBid = std::min(candle.LowBid, tick.Bid);
         candle.CloseBid = tick.Bid;
@@ -198,45 +282,79 @@ namespace Dukascopy {
         candle.AskVolume += tick.AskVolume;
 
         candle.Multiplier = tick.Multiplier;
+        return true;
     }
 
-    /**
-     * @brief Builds exactly one candle per second of the regular session, so record N is always
-     * N seconds after the open. Seconds without ticks repeat the previous close with zero volume.
-     * 
-     * @param tickResponses Hourly responses for the day.
-     * @param sessionOpen Session open as a Unix timestamp in seconds.
-     * @param sessionClose Session close as a Unix timestamp in seconds (exclusive).
-     * @return One candle per session second, or empty if no ticks fall inside the session.
-     */
-    std::vector<OHLCV_BidAsk>
-    ExtractOneSecondCandlesticks(
-        const std::vector<ApiTickResponse>& tickResponses,
-        const Common::UnixTimestamp sessionOpen,
-        const Common::UnixTimestamp sessionClose)
-    {
-        const std::vector<Tick> ticks = DecodeTicks(tickResponses);
 
+    /**
+    * @brief Builds exactly one candle per second of the regular session, so record N is always
+    * N seconds after the open. Seconds without ticks repeat the previous close with zero volume.
+    *
+    * @param ticks Decoded and validated ticks for the day.
+    * @param sessionOpen Session open as a Unix timestamp in seconds.
+    * @param sessionClose Session close as a Unix timestamp in seconds (exclusive).
+    * @return One candle per session second, or empty if no ticks fall inside the session.
+    */
+    std::optional<std::vector<OHLCV_BidAsk>>
+    ExtractOneSecondCandlesticks(
+        const std::vector<Tick>& ticks,
+        const Common::UnixTimestamp sessionOpen,
+        const Common::UnixTimestamp sessionClose) {
         const auto toMs = [](const Common::UnixTimestamp seconds) {
             return static_cast<std::int64_t>(seconds) * 1000;
         };
 
-        auto next = std::ranges::lower_bound(ticks, toMs(sessionOpen), {}, &Tick::TimeMs);
-        const auto sessionEnd = std::ranges::lower_bound(ticks, toMs(sessionClose), {}, &Tick::TimeMs);
+        const std::int64_t sessionOpenMs = toMs(sessionOpen);
+        const std::int64_t sessionCloseMs = toMs(sessionClose);
+
+        auto next = std::ranges::lower_bound(ticks, sessionOpenMs, {}, &Tick::TimeMs);
+        const auto sessionEnd = std::ranges::lower_bound(ticks, sessionCloseMs, {}, &Tick::TimeMs);
 
         if (next == sessionEnd) {
-            return {};
+            return std::nullopt;
         }
 
-        // Opening seconds without ticks carry the last pre-open quote,
-        // or the first session quote when nothing was quoted before the open.
-        const Tick* previous = next == ticks.begin() ? &*next : &*std::prev(next);
+        // Reject long gaps in actual session activity. Shorter quiet periods are
+        // still represented by zero-volume candles carrying forward the last quote.
+        std::int64_t previousTickMs = sessionOpenMs;
+        for (auto tick = next; tick != sessionEnd; ++tick) {
+            if (tick->TimeMs - previousTickMs > MAX_IN_SESSION_TICK_GAP_MS) {
+                return std::nullopt;
+            }
+
+            previousTickMs = tick->TimeMs;
+        }
+
+        if (sessionCloseMs - previousTickMs > MAX_IN_SESSION_TICK_GAP_MS) {
+            return std::nullopt;
+        }
+
+        // Use the last quote before the open whenever one is available.
+        // If there is no pre-open quote, an in-session quote must arrive during
+        // the first second. Never backfill earlier seconds from a later quote.
+        const Tick* previous = nullptr;
+
+        if (next != ticks.begin()) {
+            previous = &*std::prev(next);
+        }
+        else if (next->TimeMs < sessionOpenMs + 1000) {
+            previous = &*next;
+        }
+        else {
+            return std::nullopt;
+        }
 
         std::vector<OHLCV_BidAsk> result;
         result.reserve(static_cast<std::size_t>(sessionClose - sessionOpen));
 
         for (Common::UnixTimestamp second = sessionOpen; second < sessionClose; ++second) {
-            OHLCV_BidAsk candle = FlatCandle(second, *previous);
+            OHLCV_BidAsk candle{};
+            bool hasCandle = false;
+
+            if (previous != nullptr) {
+                candle = FlatCandle(second, *previous);
+                hasCandle = true;
+            }
 
             const std::int64_t secondEndMs = toMs(second + 1);
             bool firstTick = true;
@@ -245,47 +363,585 @@ namespace Dukascopy {
                 if (firstTick) {
                     candle = FlatCandle(second, *next);
                     firstTick = false;
+                    hasCandle = true;
                 }
 
-                AddTickToCandle(candle, *next);
+                if (AddTickToCandle(candle, *next) == false) {
+                    return std::nullopt;
+                }
+
                 previous = &*next;
+            }
+
+            // This can only happen when there is no known quote to carry forward.
+            if (hasCandle == false) {
+                return std::nullopt;
             }
 
             result.push_back(candle);
         }
 
+        if (result.size() != static_cast<std::size_t>(sessionLengthSeconds)) {
+            return std::nullopt;
+        }
+
         return result;
     }
 
+
+    std::filesystem::path BuildTemporaryPath(const std::filesystem::path& path) {
+        std::filesystem::path temporaryPath = path;
+        temporaryPath += ".tmp";
+        return temporaryPath;
+    }
+
+
+    std::filesystem::path BuildBackupPath(const std::filesystem::path& path) {
+        std::filesystem::path backupPath = path;
+        backupPath += ".bak";
+        return backupPath;
+    }
+
+
+    std::filesystem::path BuildValidationPath(const std::filesystem::path& corpusPath) {
+        std::filesystem::path validationPath = corpusPath;
+        validationPath += ".validated";
+        return validationPath;
+    }
+
+
+    std::optional<std::pair<std::uintmax_t, std::uint64_t>> CalculateFileFingerprint(
+        const std::filesystem::path& path)
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (file.is_open() == false) {
+            return std::nullopt;
+        }
+
+        // FNV-1a detects accidental file corruption; it is not cryptographic.
+        constexpr std::uint64_t FNV_OFFSET_BASIS = 14695981039346656037ull;
+        constexpr std::uint64_t FNV_PRIME = 1099511628211ull;
+
+        std::uint64_t hash = FNV_OFFSET_BASIS;
+        std::uintmax_t fileSize = 0;
+        char buffer[64 * 1024];
+
+        while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0) {
+            const std::streamsize bytesRead = file.gcount();
+            fileSize += static_cast<std::uintmax_t>(bytesRead);
+
+            for (std::streamsize i = 0; i < bytesRead; ++i) {
+                hash ^= static_cast<unsigned char>(buffer[i]);
+                hash *= FNV_PRIME;
+            }
+        }
+
+        if (file.eof() == false || file.bad()) {
+            return std::nullopt;
+        }
+
+        return std::pair{ fileSize, hash };
+    }
+
+
+    bool RemoveFileIfExists(const std::filesystem::path& path) {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+
+        if (error) {
+            Logger::Error(std::format("Could not remove file {}: {}", path.string(), error.message()), true);
+            return false;
+        }
+
+        return true;
+    }
+
+
+    std::filesystem::path BuildTransactionPath(const std::filesystem::path& path) {
+        std::filesystem::path transactionPath = path;
+        transactionPath += ".txn";
+        return transactionPath;
+    }
+
+
+    std::filesystem::path BuildCommitPath(const std::filesystem::path& path) {
+        std::filesystem::path commitPath = path;
+        commitPath += ".commit";
+        return commitPath;
+    }
+
+
+    bool RecoverInterruptedDayCommit(
+        const std::filesystem::path& corpusPath,
+        const std::filesystem::path& recordsPath) {
+        const std::filesystem::path corpusBackup = BuildBackupPath(corpusPath);
+        const std::filesystem::path recordsBackup = BuildBackupPath(recordsPath);
+        const std::filesystem::path corpusTemporary = BuildTemporaryPath(corpusPath);
+        const std::filesystem::path recordsTemporary = BuildTemporaryPath(recordsPath);
+        const std::filesystem::path validationTemporary =
+            BuildTemporaryPath(BuildValidationPath(corpusPath));
+        const std::filesystem::path transactionPath = BuildTransactionPath(corpusPath);
+        const std::filesystem::path commitPath = BuildCommitPath(corpusPath);
+
+        std::error_code error;
+        const bool hasTransaction = std::filesystem::exists(transactionPath, error);
+        if (error) {
+            Logger::Error(std::format("Could not inspect {}: {}", transactionPath.string(), error.message()), true);
+            return false;
+        }
+
+        const bool hasCommit = std::filesystem::exists(commitPath, error);
+        if (error) {
+            Logger::Error(std::format("Could not inspect {}: {}", commitPath.string(), error.message()), true);
+            return false;
+        }
+
+        const bool hasCorpusBackup = std::filesystem::exists(corpusBackup, error);
+        if (error) {
+            Logger::Error(std::format("Could not inspect {}: {}", corpusBackup.string(), error.message()), true);
+            return false;
+        }
+
+        const bool hasRecordsBackup = std::filesystem::exists(recordsBackup, error);
+        if (error) {
+            Logger::Error(std::format("Could not inspect {}: {}", recordsBackup.string(), error.message()), true);
+            return false;
+        }
+
+        if (hasCommit) {
+            // Both new files were installed before the commit marker was written.
+            // Keep them and finish best-effort cleanup after an interrupted cleanup.
+            if (RemoveFileIfExists(corpusBackup) == false ||
+                RemoveFileIfExists(recordsBackup) == false ||
+                RemoveFileIfExists(corpusTemporary) == false ||
+                RemoveFileIfExists(recordsTemporary) == false ||
+                RemoveFileIfExists(validationTemporary) == false ||
+                RemoveFileIfExists(transactionPath) == false) {
+                return false;
+            }
+
+            return RemoveFileIfExists(commitPath);
+        }
+
+        if (hasTransaction) {
+            bool corpusOriginallyExisted = false;
+            bool recordsOriginallyExisted = false;
+
+            std::ifstream transactionFile(transactionPath);
+            if (transactionFile.is_open() == false ||
+                !(transactionFile >> corpusOriginallyExisted >> recordsOriginallyExisted)) {
+                Logger::Error("Daily export transaction marker is unreadable; refusing to modify the files.", true);
+                return false;
+            }
+
+            if (hasCorpusBackup) {
+                if (RemoveFileIfExists(corpusPath) == false) {
+                    return false;
+                }
+
+                std::filesystem::rename(corpusBackup, corpusPath, error);
+                if (error) {
+                    Logger::Error(std::format("Could not restore {}: {}", corpusPath.string(), error.message()), true);
+                    return false;
+                }
+            }
+            else if (corpusOriginallyExisted == false && RemoveFileIfExists(corpusPath) == false) {
+                return false;
+            }
+
+            if (hasRecordsBackup) {
+                if (RemoveFileIfExists(recordsPath) == false) {
+                    return false;
+                }
+
+                std::filesystem::rename(recordsBackup, recordsPath, error);
+                if (error) {
+                    Logger::Error(std::format("Could not restore {}: {}", recordsPath.string(), error.message()), true);
+                    return false;
+                }
+            }
+            else if (recordsOriginallyExisted == false && RemoveFileIfExists(recordsPath) == false) {
+                return false;
+            }
+
+            if (RemoveFileIfExists(corpusTemporary) == false ||
+                RemoveFileIfExists(recordsTemporary) == false ||
+                RemoveFileIfExists(validationTemporary) == false ||
+                RemoveFileIfExists(transactionPath) == false) {
+                return false;
+            }
+
+            Logger::Warning(
+                "Recovered an interrupted daily corpus replacement; the previous files were restored where available.",
+                true
+            );
+        }
+        else if (hasCorpusBackup || hasRecordsBackup) {
+            Logger::Error(
+                "Found a daily backup without its transaction marker; refusing to guess which files should be retained.",
+                true
+            );
+            return false;
+        }
+
+        return RemoveFileIfExists(corpusTemporary) &&
+            RemoveFileIfExists(recordsTemporary) &&
+            RemoveFileIfExists(validationTemporary);
+    }
+
+
+    bool HasCompleteDayStructure(
+        const std::filesystem::path& corpusPath,
+        const std::filesystem::path& recordsPath)
+    {
+        static_assert(sizeof(Core::MLRecord) == 12);
+
+        std::error_code error;
+
+        if (std::filesystem::exists(corpusPath, error) == false || error) {
+            return false;
+        }
+
+        if (std::filesystem::exists(recordsPath, error) == false || error) {
+            return false;
+        }
+
+        const std::uintmax_t expectedRecordBytes =
+            static_cast<std::uintmax_t>(sessionLengthSeconds) * sizeof(Core::MLRecord);
+
+        const std::uintmax_t actualRecordBytes = std::filesystem::file_size(recordsPath, error);
+        if (error || actualRecordBytes != expectedRecordBytes) {
+            return false;
+        }
+
+        std::ifstream corpusFileStream(corpusPath);
+        if (corpusFileStream.is_open() == false) {
+            return false;
+        }
+
+        std::string line;
+        if (!std::getline(corpusFileStream, line) ||
+            line.starts_with("multiplier=") == false) {
+            return false;
+        }
+
+        const std::string multiplierText = line.substr(std::string("multiplier=").size());
+        float multiplier = 0.0f;
+        const auto [multiplierEnd, multiplierError] = std::from_chars(
+            multiplierText.data(),
+            multiplierText.data() + multiplierText.size(),
+            multiplier
+        );
+
+        if (multiplierError != std::errc{} ||
+            multiplierEnd != multiplierText.data() + multiplierText.size() ||
+            std::isfinite(multiplier) == false || multiplier <= 0.0f) {
+            return false;
+        }
+
+        std::size_t candleCount = 0;
+        while (std::getline(corpusFileStream, line)) {
+            std::array<std::int64_t, 8> values{};
+            std::size_t valueStart = 0;
+
+            for (std::size_t i = 0; i < values.size(); ++i) {
+                const std::size_t comma = line.find(',', valueStart);
+                const std::size_t valueEnd =
+                    i == values.size() - 1 ? line.size() : comma;
+
+                if ((i == values.size() - 1 && comma != std::string::npos) ||
+                    (i != values.size() - 1 && comma == std::string::npos) ||
+                    valueEnd <= valueStart) {
+                    return false;
+                }
+
+                const auto [parsedEnd, parseError] = std::from_chars(
+                    line.data() + valueStart,
+                    line.data() + valueEnd,
+                    values[i]
+                );
+
+                if (parseError != std::errc{} || parsedEnd != line.data() + valueEnd || values[i] <= 0) {
+                    return false;
+                }
+
+                valueStart = valueEnd + 1;
+            }
+
+            const auto validOhlc = [](const std::int64_t open,
+                                      const std::int64_t high,
+                                      const std::int64_t low,
+                                      const std::int64_t close) {
+                return high >= open && high >= close &&
+                    low <= open && low <= close && high >= low;
+            };
+
+            if (validOhlc(values[0], values[1], values[2], values[3]) == false ||
+                validOhlc(values[4], values[5], values[6], values[7]) == false ||
+                values[4] < values[0] || values[5] < values[1] ||
+                values[6] < values[2] || values[7] < values[3]) {
+                return false;
+            }
+
+            ++candleCount;
+        }
+
+        if (corpusFileStream.eof() == false ||
+            candleCount != static_cast<std::size_t>(sessionLengthSeconds)) {
+            return false;
+        }
+
+        std::ifstream recordsFileStream(recordsPath, std::ios::binary);
+        if (recordsFileStream.is_open() == false) {
+            return false;
+        }
+
+        Core::MLRecord record{};
+        std::size_t recordCount = 0;
+
+        while (recordsFileStream.read(reinterpret_cast<char*>(&record), sizeof(record))) {
+            if (std::isfinite(record.mid_delta) == false ||
+                std::isfinite(record.spread_delta) == false ||
+                std::isfinite(record.volume) == false ||
+                record.volume < 0.0f) {
+                return false;
+            }
+
+            ++recordCount;
+        }
+
+        return recordsFileStream.eof() &&
+            recordCount == static_cast<std::size_t>(sessionLengthSeconds);
+    }
+
+
+    bool IsCompleteDayOnDisk(
+        const std::filesystem::path& corpusPath,
+        const std::filesystem::path& recordsPath)
+    {
+        if (HasCompleteDayStructure(corpusPath, recordsPath) == false) {
+            return false;
+        }
+
+        const auto corpusFingerprint = CalculateFileFingerprint(corpusPath);
+        const auto recordsFingerprint = CalculateFileFingerprint(recordsPath);
+
+        if (corpusFingerprint.has_value() == false || recordsFingerprint.has_value() == false) {
+            return false;
+        }
+
+        std::ifstream validationFile(BuildValidationPath(corpusPath));
+        std::string validationLabel;
+        std::uintmax_t expectedCorpusSize = 0;
+        std::uint64_t expectedCorpusHash = 0;
+        std::uintmax_t expectedRecordsSize = 0;
+        std::uint64_t expectedRecordsHash = 0;
+
+        if (validationFile.is_open() == false ||
+            !std::getline(validationFile, validationLabel) ||
+            validationLabel != "sonny-dukascopy-full-session-v1" ||
+            !(validationFile >> expectedCorpusSize >> expectedCorpusHash) ||
+            !(validationFile >> expectedRecordsSize >> expectedRecordsHash)) {
+            return false;
+        }
+
+        return corpusFingerprint->first == expectedCorpusSize &&
+            corpusFingerprint->second == expectedCorpusHash &&
+            recordsFingerprint->first == expectedRecordsSize &&
+            recordsFingerprint->second == expectedRecordsHash;
+    }
+
+
+    bool WriteDayValidationMarker(
+        const std::filesystem::path& corpusPath,
+        const std::filesystem::path& recordsPath)
+    {
+        const auto corpusFingerprint = CalculateFileFingerprint(corpusPath);
+        const auto recordsFingerprint = CalculateFileFingerprint(recordsPath);
+
+        if (corpusFingerprint.has_value() == false || recordsFingerprint.has_value() == false) {
+            Logger::Error("Could not fingerprint committed daily files.", true);
+            return false;
+        }
+
+        const std::filesystem::path validationPath = BuildValidationPath(corpusPath);
+        std::filesystem::path temporaryPath = validationPath;
+        temporaryPath += ".tmp";
+
+        if (RemoveFileIfExists(temporaryPath) == false) {
+            return false;
+        }
+
+        {
+            std::ofstream validationFile(temporaryPath, std::ios::out | std::ios::trunc);
+            if (validationFile.is_open() == false) {
+                Logger::Error("Could not create the daily validation marker.", true);
+                return false;
+            }
+
+            validationFile
+                << "sonny-dukascopy-full-session-v1\n"
+                << corpusFingerprint->first << ' ' << corpusFingerprint->second << '\n'
+                << recordsFingerprint->first << ' ' << recordsFingerprint->second << '\n';
+            validationFile.flush();
+            if (validationFile.fail()) {
+                Logger::Error("Could not write the daily validation marker.", true);
+                return false;
+            }
+
+            validationFile.close();
+            if (validationFile.fail()) {
+                Logger::Error("Could not close the daily validation marker.", true);
+                return false;
+            }
+        }
+
+        std::error_code error;
+        std::filesystem::remove(validationPath, error);
+        if (error) {
+            Logger::Error(std::format("Could not replace validation marker: {}", error.message()), true);
+            return false;
+        }
+
+        std::filesystem::rename(temporaryPath, validationPath, error);
+        if (error) {
+            Logger::Error(std::format("Could not install validation marker: {}", error.message()), true);
+            return false;
+        }
+
+        return true;
+    }
+
+
+    bool CommitDayFiles(
+        const std::filesystem::path& corpusTemporary,
+        const std::filesystem::path& recordsTemporary,
+        const std::filesystem::path& corpusPath,
+        const std::filesystem::path& recordsPath)
+    {
+        const std::filesystem::path corpusBackup = BuildBackupPath(corpusPath);
+        const std::filesystem::path recordsBackup = BuildBackupPath(recordsPath);
+        const std::filesystem::path transactionPath = BuildTransactionPath(corpusPath);
+        const std::filesystem::path commitPath = BuildCommitPath(corpusPath);
+
+        std::error_code error;
+        const bool corpusOriginallyExisted = std::filesystem::exists(corpusPath, error);
+        if (error) {
+            Logger::Error(std::format("Could not inspect {}: {}", corpusPath.string(), error.message()), true);
+            return false;
+        }
+
+        const bool recordsOriginallyExisted = std::filesystem::exists(recordsPath, error);
+        if (error) {
+            Logger::Error(std::format("Could not inspect {}: {}", recordsPath.string(), error.message()), true);
+            return false;
+        }
+
+        if (std::filesystem::exists(corpusBackup, error) ||
+            std::filesystem::exists(recordsBackup, error) ||
+            std::filesystem::exists(transactionPath, error) ||
+            std::filesystem::exists(commitPath, error) || error) {
+            Logger::Error("A daily export transaction artifact already exists; refusing to overwrite it.", true);
+            return false;
+        }
+
+        {
+            std::ofstream transactionFile(transactionPath, std::ios::out | std::ios::trunc);
+            if (transactionFile.is_open() == false) {
+                Logger::Error("Could not create daily export transaction marker.", true);
+                return false;
+            }
+
+            transactionFile << corpusOriginallyExisted << ' ' << recordsOriginallyExisted << '\n';
+            transactionFile.flush();
+            if (transactionFile.fail()) {
+                Logger::Error("Could not write daily export transaction marker.", true);
+                return false;
+            }
+        }
+
+        if (corpusOriginallyExisted) {
+            std::filesystem::rename(corpusPath, corpusBackup, error);
+            if (error) {
+                Logger::Error(std::format("Could not back up {}: {}", corpusPath.string(), error.message()), true);
+                RecoverInterruptedDayCommit(corpusPath, recordsPath);
+                return false;
+            }
+        }
+
+        if (recordsOriginallyExisted) {
+            std::filesystem::rename(recordsPath, recordsBackup, error);
+            if (error) {
+                Logger::Error(std::format("Could not back up {}: {}", recordsPath.string(), error.message()), true);
+                RecoverInterruptedDayCommit(corpusPath, recordsPath);
+                return false;
+            }
+        }
+
+        std::filesystem::rename(corpusTemporary, corpusPath, error);
+        if (!error) {
+            std::filesystem::rename(recordsTemporary, recordsPath, error);
+        }
+
+        if (error) {
+            Logger::Error(std::format("Could not install validated daily files: {}", error.message()), true);
+            RecoverInterruptedDayCommit(corpusPath, recordsPath);
+            return false;
+        }
+
+        {
+            std::ofstream commitFile(commitPath, std::ios::out | std::ios::trunc);
+            if (commitFile.is_open() == false) {
+                Logger::Error("Could not create daily export commit marker.", true);
+                RecoverInterruptedDayCommit(corpusPath, recordsPath);
+                return false;
+            }
+
+            commitFile << "committed\n";
+            commitFile.flush();
+            if (commitFile.fail()) {
+                Logger::Error("Could not write daily export commit marker.", true);
+                RecoverInterruptedDayCommit(corpusPath, recordsPath);
+                return false;
+            }
+        }
+
+        // The commit marker tells recovery that both new files are installed.
+        // Remove backups first and the marker last so cleanup can resume safely.
+        if (RemoveFileIfExists(corpusBackup) == false ||
+            RemoveFileIfExists(recordsBackup) == false ||
+            RemoveFileIfExists(transactionPath) == false) {
+            return false;
+        }
+
+        return RemoveFileIfExists(commitPath);
+    }
+
+
     bool SaveDayCorpusToDisk(
         const std::vector<OHLCV_BidAsk>& candleSticks,
-        const Common::DateTime& dt)
+        const std::filesystem::path& outputPath)
     {
-        using namespace Common::Storage;
-
-        if (FileExists(CORPUS_BASE_PATH) == false &&
-            CreateDirectory(CORPUS_BASE_PATH) == false) {
-
-            Logger::Error("Could not create corpus directory");
-            throw std::runtime_error(
-                "Could not create corpus directory"
-            );
+        if (candleSticks.size() != static_cast<std::size_t>(sessionLengthSeconds)) {
+            Logger::Error("Refusing to write a corpus that does not contain a complete regular session.", true);
+            return false;
         }
 
-        const std::string corpusFile = (dt.ToString_Date() + ".corpus");
+        std::error_code error;
+        std::filesystem::create_directories(outputPath.parent_path(), error);
+        if (error) {
+            Logger::Error(std::format("Could not create corpus directory: {}", error.message()), true);
+            return false;
+        }
 
-        std::ofstream corpusFileStream(CORPUS_BASE_PATH / corpusFile, std::ios::app);
-        
+        std::ofstream corpusFileStream(outputPath, std::ios::out | std::ios::trunc);
+
         if (corpusFileStream.is_open() == false) {
-            Logger::Error("Could not open corpus file");
-
-            throw std::runtime_error(
-                "Could not open corpus file"
-            );
+            Logger::Error(std::format("Could not open corpus file: {}", outputPath.string()), true);
+            return false;
         }
 
-        // The multiplier is metadata for the entire file,
-        // so write it once rather than once per candle.
+        // The multiplier is metadata for the entire file, so write it once.
         corpusFileStream
             << "multiplier="
             << candleSticks.front().Multiplier
@@ -303,98 +959,80 @@ namespace Dukascopy {
                 << bidAsk.CloseAsk
                 << '\n';
         }
+
+        corpusFileStream.flush();
+        if (corpusFileStream.fail()) {
+            Logger::Error(std::format("Failed writing corpus file: {}", outputPath.string()), true);
+            return false;
+        }
+
         corpusFileStream.close();
+        if (corpusFileStream.fail()) {
+            Logger::Error(std::format("Failed closing corpus file: {}", outputPath.string()), true);
+            return false;
+        }
+
         return true;
     }
 
+
     bool SaveDayRecordsToDisk(
         const std::vector<OHLCV_BidAsk>& candleSticks,
-        const Common::DateTime& dt)
+        const std::filesystem::path& outputPath)
     {
-        using namespace Common::Storage;
-
-        if (FileExists(Common::Storage::RECORDS_BASE_PATH) == false &&
-            CreateDirectory(Common::Storage::RECORDS_BASE_PATH) == false) {
-
-            Logger::Error("Could not create records directory");
-
-            throw std::runtime_error(
-                "Could not create records directory"
-            );
+        if (candleSticks.size() != static_cast<std::size_t>(sessionLengthSeconds)) {
+            Logger::Error("Refusing to write records that do not contain a complete regular session.", true);
+            return false;
         }
 
-        std::string recFile = (dt.ToString_Date() + ".rec");
+        std::error_code error;
+        std::filesystem::create_directories(outputPath.parent_path(), error);
+        if (error) {
+            Logger::Error(std::format("Could not create records directory: {}", error.message()), true);
+            return false;
+        }
+
         std::ofstream recFileStream(
-            Common::Storage::RECORDS_BASE_PATH / recFile,
-            std::ios::binary | std::ios::trunc
+            outputPath,
+            std::ios::binary | std::ios::out | std::ios::trunc
         );
 
         if (recFileStream.is_open() == false) {
-            Logger::Error(
-                std::format(
-                    "Could not open record file: {}",
-                    recFile
-                )
-            );
-
-            throw std::runtime_error(
-                "Could not open record file"
-            );
+            Logger::Error(std::format("Could not open record file: {}", outputPath.string()), true);
+            return false;
         }
 
         static_assert(sizeof(Core::MLRecord) == 12);
 
-        const float multiplier =
-            candleSticks.front().Multiplier;
+        const float multiplier = candleSticks.front().Multiplier;
 
         const auto getMid =
             [multiplier](const OHLCV_BidAsk& candle) -> float {
-                const float bid =
-                    static_cast<float>(candle.CloseBid) * multiplier;
-
-                const float ask =
-                    static_cast<float>(candle.CloseAsk) * multiplier;
-
+                const float bid = static_cast<float>(candle.CloseBid) * multiplier;
+                const float ask = static_cast<float>(candle.CloseAsk) * multiplier;
                 return (bid + ask) * 0.5f;
             };
 
         const auto getSpread =
             [multiplier](const OHLCV_BidAsk& candle) -> float {
-                const float bid =
-                    static_cast<float>(candle.CloseBid) * multiplier;
-
-                const float ask =
-                    static_cast<float>(candle.CloseAsk) * multiplier;
-
+                const float bid = static_cast<float>(candle.CloseBid) * multiplier;
+                const float ask = static_cast<float>(candle.CloseAsk) * multiplier;
                 return ask - bid;
             };
 
-        float previousMid =
-            getMid(candleSticks.front());
-
-        float previousSpread =
-            getSpread(candleSticks.front());
+        float previousMid = getMid(candleSticks.front());
+        float previousSpread = getSpread(candleSticks.front());
 
         for (std::size_t i = 0; i < candleSticks.size(); ++i) {
             constexpr float firstDeltaSentinel = 0.0f;
 
-            const OHLCV_BidAsk& candle =
-                candleSticks[i];
-
+            const OHLCV_BidAsk& candle = candleSticks[i];
             const float mid = getMid(candle);
             const float spread = getSpread(candle);
 
             const Core::MLRecord record{
-                .mid_delta =
-                    i == 0
-                        ? firstDeltaSentinel
-                        : mid - previousMid,
-
-                .spread_delta =
-                    i == 0
-                        ? firstDeltaSentinel
-                        : spread - previousSpread,
-
+                .mid_delta = i == 0 ? firstDeltaSentinel : mid - previousMid,
+                .spread_delta = i == 0 ? firstDeltaSentinel : spread - previousSpread,
                 .volume = static_cast<float>(candle.BidVolume)
             };
 
@@ -404,276 +1042,516 @@ namespace Dukascopy {
             );
 
             if (!recFileStream) {
-                Logger::Error("Failed writing ML record");
-
-                throw std::runtime_error(
-                    "Failed writing ML record"
-                );
+                Logger::Error(std::format("Failed writing ML record to {}", outputPath.string()), true);
+                return false;
             }
 
             previousMid = mid;
             previousSpread = spread;
         }
+
+        recFileStream.flush();
+        if (recFileStream.fail()) {
+            Logger::Error(std::format("Failed flushing record file: {}", outputPath.string()), true);
+            return false;
+        }
+
         recFileStream.close();
+        if (recFileStream.fail()) {
+            Logger::Error(std::format("Failed closing record file: {}", outputPath.string()), true);
+            return false;
+        }
+
         return true;
     }
 
-    /**
-     * @brief Executes a GET request and parses the body as JSON.
-     * 
-     * @param curlWrapper 
-     * @param request 
-     * @return The parsed body, or nothing if the request failed, returned a non-2xx status, or was not valid JSON.
-     */
-    std::optional<Common::JsonUtility> FetchJson(Client::SimpleCurlWrapper &curlWrapper, Client::CurlRequest &request) {
+
+    std::optional<Common::JsonUtility> FetchJson(
+        Client::SimpleCurlWrapper& curlWrapper,
+        Client::CurlRequest& request)
+    {
+
         std::string body;
+
         request.SetCallback([&body](std::string response) {
+
             body = std::move(response);
+
         });
+
+
 
         const Client::CurlRequestEnum result = curlWrapper.ExecuteHttpRequest(request);
+
         const std::string& uri = request.GetFormattedUri();
 
+
+
         if (result != Client::CurlRequestEnum::SUCCESS) {
+
             Logger::Warning(std::format("Request failed: {} ({})", uri, request.GetErrorMessage()), true);
+
             return std::nullopt;
+
         }
+
+
 
         // The browser path does not report a status, so 0 is accepted.
+
         const long status = request.GetResponseCode();
+
         if (status != 0 && (status < 200 || status >= 300)) {
+
             Logger::Warning(std::format("Request returned HTTP {}: {}", status, uri), true);
+
             return std::nullopt;
+
         }
+
+
 
         if (body.empty()) {
+
             return std::nullopt;
+
         }
+
+
 
         try {
+
             return Common::JsonUtility(body);
+
         }
-        catch (const std::invalid_argument &) {
-            Logger::Warning(std::format("Response was not valid JSON: {}", uri), true);
+
+        catch (const std::exception& exception) {
+
+            Logger::Warning(
+                std::format("Response could not be parsed as JSON: {} ({})", uri, exception.what()),
+                true
+            );
+
             return std::nullopt;
+
         }
+
     }
+
+
 
     /**
-     * @brief Reads one hour of tick data from its JSON response.
-     * 
-     * @param hourJson 
-     * @return The tick data, or nothing if any required field is missing or invalid.
-     */
-    std::optional<ApiTickResponse> ParseTickResponse(const Common::JsonUtility &hourJson) {
+
+    * @brief Reads one hour of tick data from its JSON response.
+
+    *
+
+    * @param hourJson
+
+    * @return The tick data, or nothing if any required field is missing or invalid.
+
+    */
+
+    std::optional<ApiTickResponse> ParseTickResponse(const Common::JsonUtility& hourJson) {
         ApiTickResponse res{};
 
-        hourJson.TryGet<Common::UnixTimestamp>("timestamp", res.Timestamp);
-        hourJson.TryGet<float>("multiplier", res.Multiplier);
-        hourJson.TryGet<float>("bid", res.Bid);
-        hourJson.TryGet<float>("ask", res.Ask);
-        hourJson.TryGet<std::vector<std::int32_t>>("times", res.Times);
-        hourJson.TryGet<std::vector<std::int16_t>>("asks", res.Asks);
-        hourJson.TryGet<std::vector<std::int16_t>>("bids", res.Bids);
-        hourJson.TryGet<std::vector<std::int32_t>>("askVolumes", res.AskVolumes);
-        hourJson.TryGet<std::vector<std::int32_t>>("bidVolumes", res.BidVolumes);
-
-        if (res.Timestamp > 0 &&
-            res.Multiplier > 0 &&
-            res.Bid > 0 &&
-            res.Ask > 0 &&
-            res.Times.empty() == false &&
-            res.Asks.empty() == false &&
-            res.Bids.empty() == false &&
-            res.AskVolumes.empty() == false &&
-            res.BidVolumes.empty() == false) {
-            return res;
+        try {
+            hourJson.TryGet<Common::UnixTimestamp>("timestamp", res.Timestamp);
+            hourJson.TryGet<float>("multiplier", res.Multiplier);
+            hourJson.TryGet<float>("bid", res.Bid);
+            hourJson.TryGet<float>("ask", res.Ask);
+            hourJson.TryGet<std::vector<std::int32_t>>("times", res.Times);
+            hourJson.TryGet<std::vector<std::int16_t>>("asks", res.Asks);
+            hourJson.TryGet<std::vector<std::int16_t>>("bids", res.Bids);
+            hourJson.TryGet<std::vector<std::int32_t>>("askVolumes", res.AskVolumes);
+            hourJson.TryGet<std::vector<std::int32_t>>("bidVolumes", res.BidVolumes);
+        }
+        catch (const std::exception& exception) {
+            Logger::Warning(
+                std::format("Hourly response could not be decoded: {}", exception.what()),
+                true
+            );
+            return std::nullopt;
         }
 
-        return std::nullopt;
+        if (res.Timestamp <= 0 ||
+            std::isfinite(res.Multiplier) == false || res.Multiplier <= 0.0f ||
+            std::isfinite(res.Bid) == false || res.Bid <= 0.0f ||
+            std::isfinite(res.Ask) == false || res.Ask < res.Bid) {
+            Logger::Warning("Hourly response contains invalid timestamp, multiplier, bid, or ask values.", true);
+            return std::nullopt;
+        }
+
+        const std::size_t tickCount = res.Times.size();
+        if (tickCount == 0 ||
+            res.Asks.size() != tickCount ||
+            res.Bids.size() != tickCount ||
+            res.AskVolumes.size() != tickCount ||
+            res.BidVolumes.size() != tickCount) {
+            Logger::Warning("Hourly response arrays are empty or have different lengths; rejecting the response.", true);
+            return std::nullopt;
+        }
+
+        if (std::ranges::any_of(res.Times, [](const std::int32_t value) { return value < 0; }) ||
+            std::ranges::any_of(res.AskVolumes, [](const std::int32_t value) { return value < 0; }) ||
+            std::ranges::any_of(res.BidVolumes, [](const std::int32_t value) { return value < 0; })) {
+            Logger::Warning("Hourly response contains negative time deltas or volumes.", true);
+            return std::nullopt;
+        }
+
+        return res;
     }
 
-    void ExportFullDay(const Common::DateTime& dt, Client::SimpleCurlWrapper &curlWrapper) {
-        std::vector<OHLCV_BidAsk> candleSticks;
 
-        {
-            const std::string ticksUrl = BuildTicksUrl(dt);
+    bool ExportFullDay(const Common::DateTime& dt, Client::SimpleCurlWrapper& curlWrapper) {
+        const std::filesystem::path corpusPath =
+            Common::Storage::CORPUS_BASE_PATH / (dt.ToString_Date() + ".corpus");
+        const std::filesystem::path recordsPath =
+            Common::Storage::RECORDS_BASE_PATH / (dt.ToString_Date() + ".rec");
 
-            std::vector<ApiTickResponse> tickResponses;
+        const std::filesystem::path corpusTemporary = BuildTemporaryPath(corpusPath);
+        const std::filesystem::path recordsTemporary = BuildTemporaryPath(recordsPath);
+        const std::filesystem::path validationTemporary =
+            BuildTemporaryPath(BuildValidationPath(corpusPath));
 
-            Client::CurlRequest hourRequest("");
-            hourRequest.AddHeader(headers);
-
-            // Dukascopy hours for the regular US trading session.
-            for (std::size_t hour = 13; hour < 20; ++hour) {
-                hourRequest.ReassignUri(
-                    ticksUrl + std::to_string(hour)
-                );
-
-                const std::optional<Common::JsonUtility> hourJson = FetchJson(curlWrapper, hourRequest);
-                if (hourJson) {
-                    std::optional<ApiTickResponse> response = ParseTickResponse(*hourJson);
-                    if (response) {
-                        tickResponses.push_back(std::move(*response));
-                    }
-                }
-            }
-
-            // The session open is computed in New York time, so it follows daylight saving changes.
-            const Common::UnixTimestamp sessionOpen = Common::DateTime(
-                dt.GetYear(), dt.GetMonth(), dt.GetDay(), 9, 30, 0, true
-            ).GetTimestamp();
-
-            candleSticks = ExtractOneSecondCandlesticks(
-                tickResponses,
-                sessionOpen,
-                sessionOpen + sessionLengthSeconds
-            );
+        if (RecoverInterruptedDayCommit(corpusPath, recordsPath) == false) {
+            Logger::Error(std::format("Could not recover existing files for {}. Day was not modified.", dt.ToString_Date()), true);
+            return false;
         }
 
-        if (candleSticks.empty() == false) {
-            if (SaveDayCorpusToDisk(candleSticks, dt)
-                && SaveDayRecordsToDisk(candleSticks, dt)) {
-                Logger::Info(
+        // New York time is used here so the session follows US daylight-saving changes.
+        const Common::UnixTimestamp sessionOpen = Common::DateTime(
+            dt.GetYear(), dt.GetMonth(), dt.GetDay(), 9, 30, 0, true
+        ).GetTimestamp();
+
+        const Common::UnixTimestamp sessionClose = sessionOpen + sessionLengthSeconds;
+        const std::int64_t sessionOpenMs = static_cast<std::int64_t>(sessionOpen) * 1000;
+        const std::int64_t sessionCloseMs = static_cast<std::int64_t>(sessionClose) * 1000;
+
+        // Dukascopy's endpoint is addressed by UTC hour. Derive the exact hours
+        // intersecting this New York session instead of assuming a fixed DST offset.
+        const std::int64_t firstUtcHour = static_cast<std::int64_t>(sessionOpen) / 3600;
+        const std::int64_t lastUtcHour = (static_cast<std::int64_t>(sessionClose) - 1) / 3600;
+
+        const std::string ticksUrl = BuildTicksUrl(dt);
+        std::vector<HourlyTickResponse> tickResponses;
+        tickResponses.reserve(static_cast<std::size_t>(lastUtcHour - firstUtcHour + 1));
+
+        Client::CurlRequest hourRequest("");
+        hourRequest.AddHeader(headers);
+
+        for (std::int64_t utcHour = firstUtcHour; utcHour <= lastUtcHour; ++utcHour) {
+            const int hourOfDay = static_cast<int>(utcHour % 24);
+
+            hourRequest.ReassignUri(ticksUrl + std::to_string(hourOfDay));
+
+            const std::optional<Common::JsonUtility> hourJson = FetchJson(curlWrapper, hourRequest);
+            if (hourJson.has_value() == false) {
+                Logger::Warning(
                     std::format(
-                        "Day processed: {} ({} candles)",
+                        "Day rejected: {} (no usable response for UTC hour {}).",
                         dt.ToString_Date(),
-                        candleSticks.size()
-                    ), true
+                        hourOfDay
+                    ),
+                    true
                 );
+                return false;
             }
+
+            std::optional<ApiTickResponse> response = ParseTickResponse(*hourJson);
+            if (response.has_value() == false) {
+                Logger::Warning(
+                    std::format(
+                        "Day rejected: {} (invalid data for UTC hour {}).",
+                        dt.ToString_Date(),
+                        hourOfDay
+                    ),
+                    true
+                );
+                return false;
+            }
+
+            tickResponses.push_back(HourlyTickResponse{
+                .UtcHour = utcHour,
+                .Data = std::move(*response)
+            });
         }
-        else {
+
+        const std::optional<std::vector<Tick>> ticks =
+            DecodeTicks(tickResponses, sessionOpenMs, sessionCloseMs);
+
+        if (ticks.has_value() == false) {
             Logger::Warning(
                 std::format(
-                    "Day skipped: {}",
+                    "Day rejected: {} (tick data failed hourly coverage, timestamp, price, volume, or multiplier validation).",
                     dt.ToString_Date()
-                ), true
+                ),
+                true
             );
+            return false;
         }
+
+        const std::optional<std::vector<OHLCV_BidAsk>> candleSticks =
+            ExtractOneSecondCandlesticks(*ticks, sessionOpen, sessionClose);
+
+        if (candleSticks.has_value() == false ||
+            candleSticks->size() != static_cast<std::size_t>(sessionLengthSeconds)) {
+            Logger::Warning(
+                std::format(
+                    "Day rejected: {} (could not construct a complete, correctly anchored session).",
+                    dt.ToString_Date()
+                ),
+                true
+            );
+            return false;
+        }
+
+        if (RemoveFileIfExists(corpusTemporary) == false ||
+            RemoveFileIfExists(recordsTemporary) == false ||
+            RemoveFileIfExists(validationTemporary) == false) {
+            return false;
+        }
+
+        if (SaveDayCorpusToDisk(*candleSticks, corpusTemporary) == false ||
+            SaveDayRecordsToDisk(*candleSticks, recordsTemporary) == false) {
+            RemoveFileIfExists(corpusTemporary);
+            RemoveFileIfExists(recordsTemporary);
+            Logger::Warning(
+                std::format("Day rejected: {} (could not write both staged output files).", dt.ToString_Date()),
+                true
+            );
+            return false;
+        }
+
+        if (HasCompleteDayStructure(corpusTemporary, recordsTemporary) == false) {
+            RemoveFileIfExists(corpusTemporary);
+            RemoveFileIfExists(recordsTemporary);
+            Logger::Warning(
+                std::format("Day rejected: {} (staged files failed post-write integrity checks).", dt.ToString_Date()),
+                true
+            );
+            return false;
+        }
+
+        if (CommitDayFiles(corpusTemporary, recordsTemporary, corpusPath, recordsPath) == false) {
+            RemoveFileIfExists(corpusTemporary);
+            RemoveFileIfExists(recordsTemporary);
+            Logger::Error(
+                std::format("Day export failed: {} (validated files could not be committed).", dt.ToString_Date()),
+                true
+            );
+            return false;
+        }
+
+        if (WriteDayValidationMarker(corpusPath, recordsPath) == false) {
+            Logger::Warning(
+                std::format("Day files were installed, but their validation marker could not be written: {}", dt.ToString_Date()),
+                true
+            );
+            return false;
+        }
+
+        Logger::Info(
+            std::format(
+                "Day processed: {} ({} candles; all required UTC hours validated)",
+                dt.ToString_Date(),
+                candleSticks->size()
+            ),
+            true
+        );
+
+        return true;
     }
 
+
     void BeginCorpusExport(bool replaceExisting) {
+
         {
-            std::string headerMessage = replaceExisting ? 
-            "      Beginning full corpus export" : "     Beginning missing records export";
+
+            std::string headerMessage = replaceExisting ?
+
+            "   Beginning full corpus export" : "   Beginning missing records export";
+
             Logger::Info("========================================", true);
+
             Logger::Info(headerMessage, true);
+
             Logger::Info("========================================", true);
+
         }
 
+
+
         std::string status{};
+
         std::string currentDate{};
+
         std::size_t daysElapsed = 0;
 
+
+
         auto view = UI::Get().PushView([&] {
+
             const float progress =
+
                 Core::Setup::TOTAL_DAYS == 0
+
                 ? 0.0f
+
                 : static_cast<float>(daysElapsed) /
+
                 static_cast<float>(Core::Setup::TOTAL_DAYS);
 
+
+
             return ftxui::window(
+
                 ftxui::text("Downloading Historical Records") | ftxui::bold,
+
                 ftxui::vbox({
+
                     ftxui::text(status),
+
                     ftxui::separator(),
+
                     ftxui::hbox({
+
                         ftxui::text("Current date: "),
+
                         ftxui::text(currentDate) | ftxui::bold,
+
                     }),
+
                     ftxui::gauge(progress),
+
                     ftxui::text(
+
                         std::format(
+
                             "{} / {} days",
+
                             daysElapsed,
+
                             Core::Setup::TOTAL_DAYS
+
                         )
+
                     )
+
                 }) |
+
                 ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, 55)
+
             );
+
         });
+
+
 
         UI::Get().Refresh();
 
+
+
         // Wrapper running browser instance. Will be sharing this object throughout the full corpus run.
+
         Client::SimpleCurlWrapper curlWrapper;
+
+
 
         std::string description{};
 
+
+
         {
+
             Client::CurlRequest infoRequest(infoUrl);
+
             infoRequest.AddHeader(headers);
 
+
+
             const std::optional<Common::JsonUtility> spyData = FetchJson(curlWrapper, infoRequest);
+
             if (spyData) {
+
                 spyData->TryGet<std::string>("description", description);
+
             }
+
             else {
+
                 Logger::Error(
-                    "Unable to access info URI. Terminating process.", 
+
+                    "Unable to access info URI. Terminating process.",
+
                     true
+
                 );
+
             }
+
         }
 
+
+
         if (description.empty() == false) {
+
             Logger::Info(
+
                 std::format(
+
                     "Description: {}",
+
                     description
+
                 ), true
+
             );
 
+
+
             using namespace Common::Storage;
+
             Common::DateTime exportDate = Core::Setup::BEGIN_DATE;
 
             for (; exportDate <= Core::Setup::END_DATE; exportDate.NextDay()) {
-
                 UI::Get().Update([&] {
                     currentDate = exportDate.ToString_Date();
                     status = std::format("Processing {}", currentDate);
                 });
 
-                const std::filesystem::path corpusPath = CORPUS_BASE_PATH / (exportDate.ToString_Date() + ".corpus");
-                const std::filesystem::path recordsPath = RECORDS_BASE_PATH / (exportDate.ToString_Date() + ".rec");
+                const std::filesystem::path corpusPath =
+                    CORPUS_BASE_PATH / (exportDate.ToString_Date() + ".corpus");
+                const std::filesystem::path recordsPath =
+                    RECORDS_BASE_PATH / (exportDate.ToString_Date() + ".rec");
 
-                if (replaceExisting) {
-                    // Ensure that the record file does not exist, or is empty,
-                    // then run the export for that day.
+                if (exportDate.IsWeekday() == false) {
+                    Logger::Warning(
+                        std::format("Weekend skipped: {}", exportDate.ToString_Date()),
+                        true
+                    );
+                }
+                else {
+                    const bool filesRecovered = RecoverInterruptedDayCommit(corpusPath, recordsPath);
 
-                    if (FileExists(corpusPath)) {
-                        DeleteFile(corpusPath);
-                    }
-                    if (FileExists(recordsPath)) {
-                        DeleteFile(recordsPath);
-                    }
-
-                    if (exportDate.IsWeekday()) {
-                        ExportFullDay(exportDate, curlWrapper);
-                    }
-                    else {
-                        Logger::Warning(std::format(
-                            "Weekend skipped: {}",
-                            exportDate.ToString_Date()),
+                    if (filesRecovered == false) {
+                        Logger::Error(
+                            std::format(
+                                "Existing files could not be safely recovered: {}. Day skipped.",
+                                exportDate.ToString_Date()
+                            ),
                             true
                         );
                     }
-                }
-                else {
-                    // Check first if the record file exists and skip it if so.
-                    // If one exists but not the other, delete and run export.
-                    if (FileExists(corpusPath) == false || FileExists(recordsPath) == false) {
-                        DeleteFile(corpusPath);
-                        DeleteFile(recordsPath);
-                        if (exportDate.IsWeekday()) {
+                    else {
+                        const bool existingFilesAreComplete = IsCompleteDayOnDisk(corpusPath, recordsPath);
+
+                        if (replaceExisting || existingFilesAreComplete == false) {
                             ExportFullDay(exportDate, curlWrapper);
                         }
                         else {
-                            Logger::Warning(std::format(
-                                "Weekend skipped: {}",
-                                exportDate.ToString_Date()),
+                            Logger::Info(
+                                std::format("Existing complete day skipped: {}", exportDate.ToString_Date()),
                                 true
                             );
                         }
@@ -684,8 +1562,13 @@ namespace Dukascopy {
             }
         }
         else {
+
             Logger::Error("Description empty. Terminating process.", true);
+
         }
+
     }
+
+
 
 }
