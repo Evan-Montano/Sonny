@@ -5,10 +5,12 @@
 #include "client/webullstream.hpp"
 #include "../ui/ui.hpp"
 #include "../core/transformer.hpp"
+#include "common/datetime.hpp"
 #include "core/engine.hpp"
 #include "core/structures.hpp"
 #include "../common/storage.hpp"
 
+#include <format>
 #include <ftxui/dom/elements.hpp>
 
 #include <deque>
@@ -16,6 +18,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
 
 namespace Runtime {
 
@@ -23,7 +26,7 @@ namespace Runtime {
 
     std::optional<std::size_t> GetSecondsSinceMarketOpen(const std::int64_t timestampMs) {
         // TODO
-        return 1;
+        return 23000;
     }
 
     std::string GetHalfHourIndexName(const std::size_t segment) {
@@ -44,10 +47,13 @@ namespace Runtime {
         const std::string name = GetHalfHourIndexName(segment);
         const auto indexPath = Common::Storage::INDEXES_BASE_PATH / (name + ".index");
         const auto metadataPath = Common::Storage::METADATA_BASE_PATH / (name + ".meta");
+        const auto normalizationPath = Common::Storage::METADATA_BASE_PATH / (name + ".normalization.json");
 
         // HalfHourIndex creates an empty index when its file is missing. Avoid
         // accidentally creating/saving an empty index during live prediction.
-        return std::filesystem::exists(indexPath) && std::filesystem::exists(metadataPath);
+        return std::filesystem::exists(indexPath) && 
+            std::filesystem::exists(metadataPath) &&
+            std::filesystem::exists(normalizationPath);
     }
 
     // === CONSTRUCTOR === //
@@ -124,6 +130,15 @@ namespace Runtime {
             if (quoteQueue.size() >= 30) quoteQueue.pop_front();
             quoteQueue.push_back(std::move(record));
             ++quoteQueueRevision;
+
+            Logger::Info(
+                std::format(
+                    "Quote: {}     Mid: ${}",
+                    Common::DateTime(static_cast<Common::UnixTimestamp>(record.timestamp_ms/1000)).ToString_Time(),
+                    std::to_string(record.record.mid_delta)
+                ),
+                true
+            );
         };
 
         // Finalize the last snapshot received during a completed second.
@@ -249,6 +264,94 @@ namespace Runtime {
         std::optional<std::size_t> activeSegment{};
         std::unique_ptr<Core::HalfHourIndex> activeIndex{};
 
+        constexpr std::size_t INPUT_WINDOW_LENGTH = 30;
+        constexpr std::size_t PREDICTION_HORIZON = 30;
+        constexpr std::size_t MAX_PREDICTION_MATCHES = 32;
+        constexpr std::size_t MAX_CACHED_RECORD_FILES = 128;
+
+        std::unordered_map<std::string, std::vector<Core::MLRecord>> historicalRecordCache{};
+
+        auto LoadHistoricalRecords = [&](const std::array<char, 8> &tradingDayId)
+            -> const std::vector<Core::MLRecord>& {
+
+            // Convert YYYYMMDD into YYYY-MM-DD.
+            std::string date(tradingDayId.data(), tradingDayId.size());
+            date.insert(4, "-");
+            date.insert(7, "-");
+
+            // Return cached records if this day has already been loaded.
+            auto cached = historicalRecordCache.find(date);
+
+            if (cached != historicalRecordCache.end()) {
+                return cached->second;
+            }
+
+            // Keep the cache bounded.
+            if (historicalRecordCache.size() >= MAX_CACHED_RECORD_FILES) {
+                historicalRecordCache.clear();
+            }
+
+            const std::filesystem::path recordPath =
+                Common::Storage::RECORDS_BASE_PATH / (date + ".rec");
+
+            std::ifstream file(recordPath, std::ios::binary | std::ios::ate);
+
+            if (!file.is_open()) {
+                throw std::runtime_error(
+                    "Unable to open historical record file: " + recordPath.string()
+                );
+            }
+
+            const std::streamoff fileSize = file.tellg();
+            const std::streamoff recordSize =
+                static_cast<std::streamoff>(sizeof(Core::MLRecord));
+
+            if (fileSize < 0 || fileSize % recordSize != 0) {
+                throw std::runtime_error(
+                    "Invalid historical record file size: " + recordPath.string()
+                );
+            }
+
+            const std::size_t recordCount =
+                static_cast<std::size_t>(fileSize / recordSize);
+
+            std::vector<Core::MLRecord> records(recordCount);
+
+            file.seekg(0, std::ios::beg);
+
+            if (fileSize > 0) {
+                const std::streamsize bytesToRead =
+                    static_cast<std::streamsize>(fileSize);
+
+                file.read(
+                    reinterpret_cast<char*>(records.data()),
+                    bytesToRead
+                );
+
+                if (file.gcount() != bytesToRead) {
+                    throw std::runtime_error(
+                        "Failed reading historical record file: " + recordPath.string()
+                    );
+                }
+            }
+
+            file.close();
+
+            Logger::Info(
+                std::format(
+                    "Loaded {} historical records from {}",
+                    records.size(),
+                    recordPath.filename().string()
+                ),
+                true
+            );
+
+            return historicalRecordCache.emplace(
+                date,
+                std::move(records)
+            ).first->second;
+        };
+
         while (this->Running.load()) {
             std::vector<Core::MLRecord> queryRecords{};
             std::int64_t queryTimestampMs = 0;
@@ -286,39 +389,167 @@ namespace Runtime {
                     }
 
                     if (activeIndex != nullptr) {
-                        std::vector<float> queryVector = activeIndex->NormalizeQuery(queryRecords);
-                        [[maybe_unused]] const std::vector<Core::HalfHourIndex::QueryResult> queryResults = 
+
+                        Logger::Info(
+                            std::format(
+                                "Starting prediction at: {}",
+                                Common::DateTime::GetCurrentDateTime().ToString_Time()
+                            ),
+                            true
+                        );
+
+                        // ======================================== //
+                        // STEP 1: NORMALIZE AND QUERY FAISS
+                        // ======================================== //
+
+                        const std::vector<float> queryVector = activeIndex->NormalizeQuery(queryRecords);
+
+                        const std::vector<Core::HalfHourIndex::QueryResult> queryResults =
                             activeIndex->Query(queryVector, MAX_QUERY_RESULTS);
-                        
-                        const Core::HalfHourIndex::QueryResult &result = queryResults[0];
 
-                        // Convert YYYYMMDD into YYYY-MM-DD.
-                        std::string date(result.tradingDayId.data(), result.tradingDayId.size());
-                        date.insert(4, "-");
-                        date.insert(7, "-");
+                        if (queryResults.empty() == false) {
 
-                        const std::filesystem::path recordPath = Common::Storage::RECORDS_BASE_PATH / (date + ".rec");
+                            // ======================================== //
+                            // STEP 2: RETRIEVE HISTORICAL FUTURES
+                            // ======================================== //
 
-                        // Open the historical record file.
-                        std::ifstream file(recordPath, std::ios::binary);
-                        if (!file) {
-                            throw std::runtime_error("Unable to open historical record file.");
-                        }
+                            struct HistoricalFuture {
+                                double weight;
+                                std::array<Core::MLRecord, PREDICTION_HORIZON> records;
+                            };
 
-                        // Navigate to the beginning of the matching 30-record window.
-                        const std::streamoff byteOffset = static_cast<std::streamoff>(result.recordIndex) * sizeof(Core::MLRecord);
-                        file.seekg(byteOffset);
+                            std::vector<HistoricalFuture> historicalFutures{};
+                            historicalFutures.reserve(MAX_PREDICTION_MATCHES);
 
-                        // Read the original 30 records.
-                        std::array<Core::MLRecord, 30> historicalWindow{};
-                        file.read(reinterpret_cast<char*>(historicalWindow.data()), sizeof(historicalWindow));
+                            constexpr double DISTANCE_EPSILON = 1e-6;
 
-                        if (!file) {
-                            throw std::runtime_error("Failed to read historical window.");
+                            // Query results are ordered from nearest to furthest.
+                            // Select the first 32 matches with valid future records.
+                            for (const Core::HalfHourIndex::QueryResult& result : queryResults) {
+
+                                if (historicalFutures.size() >= MAX_PREDICTION_MATCHES) {
+                                    break;
+                                }
+
+                                if (std::isfinite(result.distance) == false ||
+                                    result.distance < 0.0f) {
+                                    continue;
+                                }
+
+                                // Load the original, unnormalized records for this trading day.
+                                const std::vector<Core::MLRecord> &historicalRecords = LoadHistoricalRecords(result.tradingDayId);
+
+                                // The matched pattern occupies:
+                                // recordIndex ... recordIndex + 29
+                                //
+                                // Its future begins immediately afterward.
+                                const std::size_t futureStart = 
+                                    static_cast<std::size_t>(result.recordIndex) +
+                                    INPUT_WINDOW_LENGTH;
+
+                                // Ensure the complete prediction horizon exists.
+                                if (futureStart > historicalRecords.size() ||
+                                    PREDICTION_HORIZON >
+                                        historicalRecords.size() - futureStart) {
+                                    continue;
+                                }
+
+                                HistoricalFuture future{};
+
+                                // Inverse-distance weighting.
+                                future.weight =
+                                    1.0 / (static_cast<double>(result.distance) +
+                                        DISTANCE_EPSILON);
+
+                                // Copy the next 30 original MLRecords.
+                                for (std::size_t i = 0; i < PREDICTION_HORIZON; ++i) {
+                                    future.records[i] = historicalRecords[futureStart + i];
+                                }
+
+                                historicalFutures.push_back(std::move(future));
+                            }
+
+                            // ======================================== //
+                            // STEP 3: CALCULATE WEIGHTED FUTURES
+                            // ======================================== //
+
+                            if (historicalFutures.empty() == false) {
+
+                                std::array<double, PREDICTION_HORIZON> expectedMidDelta{};
+
+                                double totalWeight = 0.0;
+
+                                // Calculate the weighted average midpoint change
+                                // for each second in the prediction horizon.
+                                for (const HistoricalFuture& future : historicalFutures) {
+
+                                    totalWeight += future.weight;
+
+                                    for (std::size_t i = 0; i < PREDICTION_HORIZON; ++i) {
+                                        expectedMidDelta[i] +=
+                                            future.weight * future.records[i].mid_delta;
+                                    }
+                                }
+
+                                // Normalize the weighted averages.
+                                for (double &delta : expectedMidDelta) {
+                                    delta /= totalWeight;
+                                }
+
+                                // ======================================== //
+                                // STEP 4: CALCULATE CUMULATIVE FUTURES
+                                // ======================================== //
+
+                                std::array<double, PREDICTION_HORIZON> expectedCumulativeMidDelta{};
+
+                                double cumulativeDelta = 0.0;
+
+                                for (std::size_t i = 0; i < PREDICTION_HORIZON; ++i) {
+
+                                    cumulativeDelta += expectedMidDelta[i];
+
+                                    expectedCumulativeMidDelta[i] = cumulativeDelta;
+                                }
+
+                                // ======================================== //
+                                // STEP 5: EXTRACT FORECAST HORIZONS
+                                // ======================================== //
+
+                                const double expectedChange1s = expectedCumulativeMidDelta[0];
+                                const double expectedChange5s = expectedCumulativeMidDelta[4];
+                                const double expectedChange10s = expectedCumulativeMidDelta[9];
+                                const double expectedChange30s = expectedCumulativeMidDelta[29];
+
+                                Logger::Info(
+                                    std::format(
+                                        "Historical prediction | "
+                                        "Time: {}  | "
+                                        "Matches: {} | "
+                                        "1s: ${:+.6f} | "
+                                        "5s: ${:+.6f} | "
+                                        "10s: ${:+.6f} | "
+                                        "30s: ${:+.6f}",
+                                        Common::DateTime::GetCurrentDateTime().ToString_Time(),
+                                        historicalFutures.size(),
+                                        expectedChange1s,
+                                        expectedChange5s,
+                                        expectedChange10s,
+                                        expectedChange30s
+                                    ),
+                                    true
+                                );
+                            }
+                            else {
+                                Logger::Warning(
+                                    "No historical matches had sufficient future records."
+                                );
+                            }
                         }
                     }
                 }
             }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(30 * 1000));
         }
         // ========== END PREDICTION LOOP ========== //
 

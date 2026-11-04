@@ -611,9 +611,6 @@ namespace Client {
             MqttWrapper mqtt(uri, session);
             mqtt.SetMessageHandler(
                 [this](const std::string &topic, const std::string &payload) {
-                    const std::string stamp = Common::DateTime::GetCurrentDateTime().ToString_DT();
-                    Logger::Info(std::format("Webull message received at {} topic={} payload_bytes={}", stamp, topic, payload.size()), true);
-
                     if (topic == "quote" && this->QuoteStreamCallback) {
                         std::optional<WebullQuote> quote = ParseWebullQuote(payload);
                         if (quote) {
