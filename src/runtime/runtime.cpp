@@ -11,6 +11,9 @@
 #include "../common/storage.hpp"
 #include "predictionanalytics.hpp"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <format>
 #include <ftxui/dom/elements.hpp>
 
@@ -106,17 +109,154 @@ namespace Runtime {
     void Orchestrator::Run() {
         this->Running.store(true);
 
+        struct QuoteStreamViewState {
+            std::string status = "Waiting for market data";
+            std::string symbol = "SPY";
+            bool has_quote = false;
+            bool has_delta = false;
+            double best_bid = 0.0;
+            double best_ask = 0.0;
+            double mid_price = 0.0;
+            double spread = 0.0;
+            double latest_delta = 0.0;
+            double session_delta = 0.0;
+            std::int64_t latest_timestamp_ms = 0;
+            std::uint64_t quote_count = 0;
+            std::size_t queue_size = 0;
+            std::deque<std::pair<std::int64_t, double>> recent_deltas;
+        } quoteViewState;
+
         auto view = UI::Get().PushView(
             ftxui::CatchEvent(
-                ftxui::Renderer([] {
-                    return ftxui::window(
-                        ftxui::text("Sandbox Webull Quote Stream") | ftxui::bold,
+                ftxui::Renderer([&quoteViewState] {
+                    const ftxui::Color deltaColor = quoteViewState.latest_delta > 0.0005
+                        ? ftxui::Color::Green
+                        : (quoteViewState.latest_delta < -0.0005
+                            ? ftxui::Color::Red : ftxui::Color::GrayDark);
+                    const ftxui::Color sessionColor = quoteViewState.session_delta > 0.0005
+                        ? ftxui::Color::Green
+                        : (quoteViewState.session_delta < -0.0005
+                            ? ftxui::Color::Red : ftxui::Color::GrayDark);
+
+                    const std::string quoteTime = quoteViewState.has_quote
+                        ? Common::DateTime(static_cast<Common::UnixTimestamp>(quoteViewState.latest_timestamp_ms / 1000)).ToString_Time()
+                        : "--:--:--";
+
+                    std::string queueBar = "[";
+                    for (std::size_t i = 0; i < 30; ++i) {
+                        queueBar += i < quoteViewState.queue_size ? "█" : "·";
+                    }
+                    queueBar += "]";
+
+                    static constexpr std::array<const char*, 8> SparkLevels{
+                        "·", "▁", "▂", "▃", "▄", "▅", "▆", "█"
+                    };
+                    double maxDelta = 0.0;
+                    for (const auto& [timestamp, delta] : quoteViewState.recent_deltas) {
+                        (void)timestamp;
+                        maxDelta = std::max(maxDelta, std::abs(delta));
+                    }
+
+                    ftxui::Elements sparkline;
+                    for (const auto& [timestamp, delta] : quoteViewState.recent_deltas) {
+                        (void)timestamp;
+                        const std::size_t level = maxDelta < 0.0005
+                            ? 0
+                            : std::min<std::size_t>(7, static_cast<std::size_t>(std::ceil(std::abs(delta) / maxDelta * 7.0)));
+                        const ftxui::Color pointColor = delta > 0.0005
+                            ? ftxui::Color::Green
+                            : (delta < -0.0005 ? ftxui::Color::Red : ftxui::Color::GrayDark);
+                        sparkline.push_back(ftxui::text(SparkLevels[level]) | ftxui::color(pointColor));
+                    }
+                    if (sparkline.empty()) {
+                        sparkline.push_back(ftxui::text("Waiting for completed one-second quotes…") | ftxui::color(ftxui::Color::GrayDark));
+                    }
+
+                    double rollingDelta = 0.0;
+                    for (const auto& [timestamp, delta] : quoteViewState.recent_deltas) {
+                        (void)timestamp;
+                        rollingDelta += delta;
+                    }
+                    const ftxui::Color rollingColor = rollingDelta > 0.0005
+                        ? ftxui::Color::Green
+                        : (rollingDelta < -0.0005
+                            ? ftxui::Color::Red : ftxui::Color::GrayDark);
+
+                    const std::string deltaText = quoteViewState.has_delta
+                        ? std::format("${:+.4f}", quoteViewState.latest_delta)
+                        : "waiting";
+                    const std::string sessionText = quoteViewState.has_delta
+                        ? std::format("${:+.4f}", quoteViewState.session_delta)
+                        : "waiting";
+                    const std::string rollingText = quoteViewState.has_delta
+                        ? std::format("${:+.4f}", rollingDelta)
+                        : "waiting";
+                    const std::string bidText = quoteViewState.has_quote
+                        ? std::format("${:.4f}", quoteViewState.best_bid) : "--";
+                    const std::string askText = quoteViewState.has_quote
+                        ? std::format("${:.4f}", quoteViewState.best_ask) : "--";
+                    const std::string midText = quoteViewState.has_quote
+                        ? std::format("${:.4f}", quoteViewState.mid_price) : "--";
+                    const std::string spreadText = quoteViewState.has_quote
+                        ? std::format("${:.4f}", quoteViewState.spread) : "--";
+
+                    const ftxui::Element bookPanel = ftxui::window(
+                        ftxui::text("TOP OF BOOK") | ftxui::bold,
                         ftxui::vbox({
-                            ftxui::text("Environment: Sandbox"),
-                            ftxui::text("Status: Running"),
-                            ftxui::text("Press Escape to return.")
+                            ftxui::text(std::format("Bid     {}", bidText)),
+                            ftxui::text(std::format("Ask     {}", askText)),
+                            ftxui::text(std::format("Mid     {}", midText)) | ftxui::bold,
+                            ftxui::text(std::format("Spread  {}", spreadText)),
+                            ftxui::text(quoteViewState.has_quote
+                                ? std::format("Last quote  {}", quoteTime)
+                                : "Last quote  --:--:--")
                         })
-                    );
+                    ) | ftxui::flex;
+
+                    const ftxui::Element movementPanel = ftxui::window(
+                        ftxui::text("PRICE MOVEMENT") | ftxui::bold,
+                        ftxui::vbox({
+                            ftxui::text(std::format("Last 1s Δ   {}", deltaText)) | ftxui::color(deltaColor) | ftxui::bold,
+                            ftxui::text(std::format("Session Δ  {}", sessionText)) | ftxui::color(sessionColor),
+                            ftxui::text(std::format("Last 30s Δ {}  ({} obs)", rollingText, quoteViewState.recent_deltas.size())) | ftxui::color(rollingColor),
+                            ftxui::text("Green = up   Red = down") | ftxui::color(ftxui::Color::GrayDark)
+                        })
+                    ) | ftxui::flex;
+
+                    return ftxui::window(
+                        ftxui::text("WEBULL  /  " + quoteViewState.symbol + "  /  SANDBOX") | ftxui::bold,
+                        ftxui::vbox({
+                            ftxui::hbox({
+                                ftxui::text("●  " + quoteViewState.status) |
+                                    ftxui::color(quoteViewState.has_quote ? ftxui::Color::Green : ftxui::Color::Yellow) |
+                                    ftxui::bold,
+                                ftxui::filler(),
+                                ftxui::text(std::format("{} quote updates", quoteViewState.quote_count))
+                            }),
+                            ftxui::separator(),
+                            ftxui::hbox({bookPanel, movementPanel}),
+                            ftxui::window(
+                                ftxui::text("RECENT ONE-SECOND MIDPOINT CHANGES  (oldest → newest)"),
+                                ftxui::vbox({
+                                    ftxui::hbox(std::move(sparkline)),
+                                    ftxui::hbox({
+                                        ftxui::text("−") | ftxui::color(ftxui::Color::Red),
+                                        ftxui::text(" down   "),
+                                        ftxui::text("+") | ftxui::color(ftxui::Color::Green),
+                                        ftxui::text(" up")
+                                    })
+                                })
+                            ) | ftxui::flex,
+                            ftxui::window(
+                                ftxui::text("ROLLING INPUT QUEUE") | ftxui::bold,
+                                ftxui::vbox({
+                                    ftxui::text(queueBar),
+                                    ftxui::text(std::format("{} / 30 one-second records ready for prediction", quoteViewState.queue_size)),
+                                    ftxui::text("Press Escape to return to the menu.") | ftxui::color(ftxui::Color::GrayDark)
+                                })
+                            )
+                        })
+                    ) | ftxui::flex;
                 }),
                 [this](ftxui::Event event) {
                     if (event == ftxui::Event::Escape) {
@@ -179,20 +319,40 @@ namespace Runtime {
                 predictionAnalytics.ObserveRecord(timestamp_ms, mid_delta, observed)
             );
 
-            std::lock_guard<std::mutex> lock(m_quote);
+            std::size_t queueSize = 0;
+            {
+                std::lock_guard<std::mutex> lock(m_quote);
 
-            if (quoteQueue.size() >= 30) quoteQueue.pop_front();
-            quoteQueue.push_back(std::move(record));
-            ++quoteQueueRevision;
+                if (quoteQueue.size() >= 30) quoteQueue.pop_front();
+                quoteQueue.push_back(std::move(record));
+                ++quoteQueueRevision;
+                queueSize = quoteQueue.size();
+            }
 
-            Logger::Info(
-                std::format(
-                    "Quote: {}     Mid: ${}",
-                    Common::DateTime(static_cast<Common::UnixTimestamp>(timestamp_ms/1000)).ToString_Time(),
-                    std::to_string(mid_delta)
-                ),
-                true
-            );
+            UI::Get().Update([&] {
+                quoteViewState.queue_size = queueSize;
+                if (observed) {
+                    quoteViewState.has_delta = true;
+                    quoteViewState.latest_delta = mid_delta;
+                    quoteViewState.session_delta += mid_delta;
+
+                    const std::int64_t second = timestamp_ms / 1000;
+                    while (quoteViewState.recent_deltas.empty() == false &&
+                        second - quoteViewState.recent_deltas.front().first >= 30) {
+                        quoteViewState.recent_deltas.pop_front();
+                    }
+                    quoteViewState.recent_deltas.emplace_back(second, mid_delta);
+                }
+            });
+
+            // Logger::Info(
+            //     std::format(
+            //         "Quote: {}     Mid: ${}",
+            //         Common::DateTime(static_cast<Common::UnixTimestamp>(timestamp_ms/1000)).ToString_Time(),
+            //         std::to_string(mid_delta)
+            //     ),
+            //     true
+            // );
         };
 
         // Finalize the last snapshot received during a completed second.
@@ -241,7 +401,35 @@ namespace Runtime {
             }
         };
 
+        std::uint64_t rawQuoteCount = 0;
+        auto lastQuoteViewRefresh = std::chrono::steady_clock::now() - std::chrono::seconds(1);
         this->QuoteClient.SetQuoteStreamCallback([&](Client::WebullQuote quote) {
+            ++rawQuoteCount;
+
+            const auto now = std::chrono::steady_clock::now();
+            if (now - lastQuoteViewRefresh >= std::chrono::milliseconds(200)) {
+                lastQuoteViewRefresh = now;
+                const bool hasTopOfBook = quote.asks.empty() == false && quote.bids.empty() == false;
+                const double bestAsk = hasTopOfBook ? quote.asks.front().Price : 0.0;
+                const double bestBid = hasTopOfBook ? quote.bids.front().Price : 0.0;
+                const double midPrice = hasTopOfBook ? (bestAsk + bestBid) / 2.0 : 0.0;
+                const std::string symbol = quote.symbol;
+                const std::int64_t quoteTimestamp = quote.timestamp_ms;
+                const std::uint64_t quoteCount = rawQuoteCount;
+
+                UI::Get().Update([&] {
+                    quoteViewState.status = hasTopOfBook ? "Live data receiving" : "Receiving quote updates";
+                    quoteViewState.symbol = symbol.empty() ? "SPY" : symbol;
+                    quoteViewState.has_quote = hasTopOfBook;
+                    quoteViewState.best_bid = bestBid;
+                    quoteViewState.best_ask = bestAsk;
+                    quoteViewState.mid_price = midPrice;
+                    quoteViewState.spread = bestAsk - bestBid;
+                    quoteViewState.latest_timestamp_ms = quoteTimestamp;
+                    quoteViewState.quote_count = quoteCount;
+                });
+            }
+
             const std::int64_t quoteSecond = quote.timestamp_ms / 1000;
 
             if (activeSecond.has_value() == false) {
@@ -570,20 +758,15 @@ namespace Runtime {
                                 // STEP 5: EXTRACT FORECAST HORIZONS
                                 // ======================================== //
 
-                                const double expectedChange1s = expectedCumulativeMidDelta[0];
-                                const double expectedChange5s = expectedCumulativeMidDelta[4];
-                                const double expectedChange10s = expectedCumulativeMidDelta[9];
-                                const double expectedChange30s = expectedCumulativeMidDelta[29];
+                                std::array<double, PredictionEvaluationHorizons.size()> expectedChanges{};
+                                for (std::size_t i = 0; i < PredictionEvaluationHorizons.size(); ++i) {
+                                    expectedChanges[i] = expectedCumulativeMidDelta[PredictionEvaluationHorizons[i] - 1];
+                                }
 
                                 LogEvaluationReports(predictionAnalytics.SubmitForecast({
                                     .as_of_timestamp_ms = queryTimestampMs,
                                     .historical_matches = historicalFutures.size(),
-                                    .cumulative_changes = {
-                                        expectedChange1s,
-                                        expectedChange5s,
-                                        expectedChange10s,
-                                        expectedChange30s
-                                    }
+                                    .cumulative_changes = expectedChanges
                                 }));
                             }
                             else {

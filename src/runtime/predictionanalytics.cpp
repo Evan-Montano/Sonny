@@ -158,37 +158,45 @@ namespace Runtime {
 
         std::string message = std::format(
             "Prediction evaluation @{} | {} matches | {} window | observed {}/{}\n"
-            "  Horizon   Forecast         Actual           Error       Abs error   Zero baseline   Direction",
+            "  {:<8}{:>14}{:>14}{:>14}{:>14}{:>16}{:>10}",
             timestamp,
             report.forecast.historical_matches,
             report.window_elapsed ? "complete" : "incomplete",
             report.observed_seconds,
-            PredictionEvaluationWindow
+            PredictionEvaluationWindow,
+            "Horizon",
+            "Forecast",
+            "Actual",
+            "Error",
+            "Abs error",
+            "Zero baseline",
+            "Direction"
         );
 
         for (const PredictionHorizonEvaluation& horizon : report.horizons) {
-            message += std::format("\n  {:>2}s", horizon.horizon_seconds);
+            const std::string label = std::format("{}s", horizon.horizon_seconds);
             if (horizon.actual_change.has_value()) {
                 const double error = horizon.predicted_change - *horizon.actual_change;
                 message += std::format(
-                    "   ${:>+11.6f}   ${:>+11.6f}   ${:>+11.6f}   ${:>10.6f}   ${:>10.6f}   {}",
-                    horizon.predicted_change,
-                    *horizon.actual_change,
-                    error,
-                    std::abs(error),
-                    std::abs(*horizon.actual_change),
+                    "\n  {:<8}{:>14}{:>14}{:>14}{:>14}{:>16}{:>10}",
+                    label,
+                    std::format("${:+.6f}", horizon.predicted_change),
+                    std::format("${:+.6f}", *horizon.actual_change),
+                    std::format("${:+.6f}", error),
+                    std::format("${:.6f}", std::abs(error)),
+                    std::format("${:.6f}", std::abs(*horizon.actual_change)),
                     DirectionResult(horizon.predicted_change, *horizon.actual_change)
                 );
             } else {
                 message += std::format(
-                    "   ${:>+11.6f}   {:>12}   {:>12}   {:>10}   {:>13}   N/A ({}/{})",
-                    horizon.predicted_change,
+                    "\n  {:<8}{:>14}{:>14}{:>14}{:>14}{:>16}{:>10}",
+                    label,
+                    std::format("${:+.6f}", horizon.predicted_change),
                     "INCOMPLETE",
                     "N/A",
                     "N/A",
                     "N/A",
-                    horizon.observed_seconds,
-                    horizon.horizon_seconds
+                    std::format("N/A ({}/{})", horizon.observed_seconds, horizon.horizon_seconds)
                 );
             }
         }

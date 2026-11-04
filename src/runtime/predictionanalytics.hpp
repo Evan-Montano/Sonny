@@ -11,7 +11,9 @@
 
 namespace Runtime {
 
-    inline constexpr std::array<std::size_t, 4> PredictionEvaluationHorizons{1, 5, 10, 30};
+    inline constexpr std::array<std::size_t, 11> PredictionEvaluationHorizons{
+        1, 2, 3, 4, 5, 8, 10, 15, 20, 25, 30
+    };
     inline constexpr std::size_t PredictionEvaluationWindow = 30;
 
     struct PredictionForecast {
