@@ -33,6 +33,9 @@ private:
     int main_selected = 0;
     int sandbox_selected = 0;
     int setup_selected = 0;
+    bool clear_log_confirmation_visible = false;
+    int clear_log_confirmation_selected = 1;
+    std::string clear_log_status;
 
     // Main menu
     std::vector<std::string> main_entries = {
@@ -53,6 +56,7 @@ private:
         "Download Historical Records (Clears Existing)",
         "Download Missing Records (Keeps Existing)",
         "Update Indexes",
+        "Clear Log File",
         "Back"
     };
 
@@ -264,6 +268,12 @@ public:
                     break;
 
                 case 4:
+                    this->clear_log_confirmation_selected = 1;
+                    this->clear_log_status.clear();
+                    this->clear_log_confirmation_visible = true;
+                    break;
+
+                case 5:
                     // Back to main menu
                     this->current_menu = 0;
                     break;
@@ -327,6 +337,22 @@ public:
             if (this->current_menu == 3) {
                 main_view = temporary_view->Render();
             }
+            else if (this->current_menu == 2 && this->clear_log_confirmation_visible) {
+                main_view = window(
+                    text("Clear Current Log File?") | bold,
+                    vbox({
+                        text("This will erase today's Sonny log file."),
+                        text("The action cannot be undone."),
+                        text(this->clear_log_confirmation_selected == 0
+                            ? "> Clear log file"
+                            : "  Clear log file"),
+                        text(this->clear_log_confirmation_selected == 1
+                            ? "> Cancel"
+                            : "  Cancel"),
+                        text("Use Up/Down to choose, Enter to confirm, Esc to cancel.")
+                    })
+                ) | center;
+            }
             else {
                 std::string title;
                 switch (this->current_menu) {
@@ -335,12 +361,11 @@ public:
                     case 2: title = "Setup"; break;
                     default: title = "Sonny"; break;
                 }
-                main_view = window(
-                    text(title) | bold,
-                    vbox({
-                        menus->Render()
-                    })
-                );
+                Elements menu_content{menus->Render()};
+                if (this->current_menu == 2 && this->clear_log_status.empty() == false) {
+                    menu_content.push_back(text(this->clear_log_status));
+                }
+                main_view = window(text(title) | bold, vbox(std::move(menu_content)));
             }
 
             return vbox({
@@ -354,6 +379,23 @@ public:
 
         // Global keyboard handling
         auto app = CatchEvent(renderer, [&](Event event) {
+            if (this->current_menu == 2 && this->clear_log_confirmation_visible) {
+                if (event == Event::Escape) {
+                    this->clear_log_confirmation_visible = false;
+                } else if (event == Event::ArrowUp || event == Event::ArrowDown) {
+                    this->clear_log_confirmation_selected =
+                        1 - this->clear_log_confirmation_selected;
+                } else if (event == Event::Return) {
+                    if (this->clear_log_confirmation_selected == 0) {
+                        this->clear_log_status = Logger::ClearCurrentLogFile()
+                            ? "Today's log file was cleared."
+                            : "Could not clear today's log file.";
+                    }
+                    this->clear_log_confirmation_visible = false;
+                }
+                return true;
+            }
+
             // Forward events to the active temporary component first.
             if (this->current_menu == 3 && this->temporary_component) {
                 if (this->temporary_component->OnEvent(event)) {

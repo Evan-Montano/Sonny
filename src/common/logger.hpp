@@ -15,6 +15,7 @@
 #include <deque>
 #include <vector>
 #include <functional>
+#include <cstdint>
 
 class Logger{
 public:
@@ -29,6 +30,7 @@ public:
         Level Level;
         std::string Message;
         bool LogToConsole = false;
+        std::uint64_t Generation = 0;
     };
 
     // CONSTRUCTOR
@@ -37,6 +39,7 @@ public:
     // METHODS
     static void Start();
     static void Stop();
+    static bool ClearCurrentLogFile();
 
     static void Debug(const std::string& message, const bool &logToConsole = false);
     static void Info(const std::string& message, const bool& logToConsole = false);
@@ -56,12 +59,14 @@ private:
     static inline std::filesystem::path log_dir = "storage/logs";
 
     static inline std::mutex Mutex;
+    static inline std::mutex FileMutex;
     static inline std::condition_variable Cv;
     static inline std::queue<LogStruct> MessageQueue;
     static inline std::deque<std::string> ConsoleMessages;
     static inline std::thread WorkerThread;
     static inline std::ofstream LogFile;
     static inline bool running = false;
+    static inline std::uint64_t LogGeneration = 0;
 
     // METHODS
     static void SetConsoleRefreshCallback(std::function<void()> callback);

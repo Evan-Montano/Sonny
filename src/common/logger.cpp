@@ -49,8 +49,37 @@ void Logger::Stop() {
         WorkerThread.join();
     }
 
-    LogFile.flush();
-    LogFile.close();
+    {
+        std::lock_guard lock(FileMutex);
+        LogFile.flush();
+        LogFile.close();
+    }
+}
+
+bool Logger::ClearCurrentLogFile() {
+    const fs::path log_file = log_dir / (Common::DateTime::GetCurrentDateTime().ToString_Date() + ".log");
+    std::scoped_lock lock(Mutex, FileMutex);
+
+    // Discard messages queued before the user's clear action so they cannot
+    // be written back into the newly emptied file afterward.
+    while (MessageQueue.empty() == false) MessageQueue.pop();
+    ++LogGeneration;
+
+    if (LogFile.is_open()) {
+        LogFile.flush();
+        LogFile.close();
+    }
+
+    std::ofstream cleared(log_file, std::ios::out | std::ios::trunc);
+    if (cleared.is_open() == false) return false;
+    cleared.close();
+
+    if (running) {
+        LogFile.open(log_file, std::ios::out | std::ios::app);
+        if (LogFile.is_open() == false) return false;
+    }
+
+    return true;
 }
 
 void Logger::Observer() {
@@ -93,7 +122,11 @@ void Logger::Observer() {
             "[" + level_string + "] "
             + log.Message;
         
-        LogFile << formatted << '\n';
+        {
+            std::scoped_lock lock(Mutex, FileMutex);
+            if (log.Generation != LogGeneration) continue;
+            if (LogFile.is_open()) LogFile << formatted << '\n';
+        }
 
         if (log.LogToConsole) {
             std::lock_guard lock(Mutex);
@@ -129,13 +162,13 @@ void Logger::Error(const std::string& message, const bool& logToConsole) {
 
 void Logger::Log(const Level level, const std::string& message, const bool& logToConsole) {
     {
+        std::lock_guard lock(Mutex);
         const LogStruct log {
             .Level = level,
             .Message = message,
-            .LogToConsole = logToConsole
+            .LogToConsole = logToConsole,
+            .Generation = LogGeneration
         };
-
-        std::lock_guard lock(Mutex);
         MessageQueue.push(log);
     }
 

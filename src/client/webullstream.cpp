@@ -5,7 +5,6 @@
 
 #include "mqttwrapper.hpp"
 #include "simplecurlwrapper.hpp"
-#include "../common/datetime.hpp"
 #include "../common/jsonutil.hpp"
 #include "../common/logger.hpp"
 #include "../common/secretstore.hpp"

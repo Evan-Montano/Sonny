@@ -13,7 +13,8 @@ namespace Common {
         // Stable attributes let secret-tool provision entries without storing them in Sonny settings.
         constexpr SecretSchema WebullSchema = {
             "org.freedesktop.Secret.Generic",
-            SECRET_SCHEMA_NONE,
+            // secret-tool stores entries without a libsecret schema name, so match by attributes only.
+            SECRET_SCHEMA_DONT_MATCH_NAME,
             {
                 {"application", SECRET_SCHEMA_ATTRIBUTE_STRING},
                 {"provider", SECRET_SCHEMA_ATTRIBUTE_STRING},

@@ -9,6 +9,7 @@
 #include "core/engine.hpp"
 #include "core/structures.hpp"
 #include "../common/storage.hpp"
+#include "predictionanalytics.hpp"
 
 #include <format>
 #include <ftxui/dom/elements.hpp>
@@ -25,8 +26,44 @@ namespace Runtime {
     // ========== ORCHESTRATOR IMPLEMENTATION ========== //
 
     std::optional<std::size_t> GetSecondsSinceMarketOpen(const std::int64_t timestampMs) {
-        // TODO
-        return 23000;
+        using namespace std::chrono;
+
+        const sys_time<milliseconds> timestamp{
+            milliseconds{timestampMs}
+        };
+
+        const auto* zone = locate_zone("America/New_York");
+
+        const zoned_time<milliseconds> easternTime{
+            zone,
+            timestamp
+        };
+
+        const local_time<milliseconds> localTime = easternTime.get_local_time();
+        const auto localDay = floor<days>(localTime);
+        const year_month_day date{localDay};
+        const weekday dayOfWeek{sys_days{date}};
+
+        // Regular trading sessions occur Monday through Friday.
+        if (dayOfWeek == Saturday || dayOfWeek == Sunday) {
+            return std::nullopt;
+        }
+
+        constexpr std::int64_t MARKET_OPEN_SECONDS = 9 * 60 * 60 + 30 * 60;
+        constexpr std::int64_t MARKET_CLOSE_SECONDS = 16 * 60 * 60;
+
+        const std::int64_t secondsSinceMidnight = duration_cast<seconds>(localTime - localDay).count();
+
+        // Outside regular trading hours.
+        if (secondsSinceMidnight < MARKET_OPEN_SECONDS ||
+            secondsSinceMidnight >= MARKET_CLOSE_SECONDS)
+        {
+            return std::nullopt;
+        }
+
+        return static_cast<std::size_t>(
+            secondsSinceMidnight - MARKET_OPEN_SECONDS
+        );
     }
 
     std::string GetHalfHourIndexName(const std::size_t segment) {
@@ -105,6 +142,15 @@ namespace Runtime {
         struct QueuedMLRecord {
             Core::MLRecord record;
             std::int64_t timestamp_ms;
+            bool observed = true;
+        };
+
+        PredictionAnalytics predictionAnalytics;
+
+        auto LogEvaluationReports = [](std::vector<PredictionEvaluationReport> reports) {
+            for (const PredictionEvaluationReport& report : reports) {
+                Logger::Info(PredictionAnalytics::FormatReport(report), true);
+            }
         };
 
         std::mutex m_quote;
@@ -125,6 +171,14 @@ namespace Runtime {
         // ========== QUOTE STREAM QUEUE ========== //
 
         auto EnqueueRecord = [&](QueuedMLRecord record) {
+            const std::int64_t timestamp_ms = record.timestamp_ms;
+            const double mid_delta = record.record.mid_delta;
+            const bool observed = record.observed;
+
+            LogEvaluationReports(
+                predictionAnalytics.ObserveRecord(timestamp_ms, mid_delta, observed)
+            );
+
             std::lock_guard<std::mutex> lock(m_quote);
 
             if (quoteQueue.size() >= 30) quoteQueue.pop_front();
@@ -134,8 +188,8 @@ namespace Runtime {
             Logger::Info(
                 std::format(
                     "Quote: {}     Mid: ${}",
-                    Common::DateTime(static_cast<Common::UnixTimestamp>(record.timestamp_ms/1000)).ToString_Time(),
-                    std::to_string(record.record.mid_delta)
+                    Common::DateTime(static_cast<Common::UnixTimestamp>(timestamp_ms/1000)).ToString_Time(),
+                    std::to_string(mid_delta)
                 ),
                 true
             );
@@ -180,6 +234,7 @@ namespace Runtime {
                 for (std::int64_t i = 0; i < missingSeconds; ++i) {
                     QueuedMLRecord duplicate = *previousSecondRecord;
                     duplicate.timestamp_ms += (i + 1) * 1000;
+                    duplicate.observed = false;
 
                     EnqueueRecord(std::move(duplicate));
                 }
@@ -520,24 +575,16 @@ namespace Runtime {
                                 const double expectedChange10s = expectedCumulativeMidDelta[9];
                                 const double expectedChange30s = expectedCumulativeMidDelta[29];
 
-                                Logger::Info(
-                                    std::format(
-                                        "Historical prediction | "
-                                        "Time: {}  | "
-                                        "Matches: {} | "
-                                        "1s: ${:+.6f} | "
-                                        "5s: ${:+.6f} | "
-                                        "10s: ${:+.6f} | "
-                                        "30s: ${:+.6f}",
-                                        Common::DateTime::GetCurrentDateTime().ToString_Time(),
-                                        historicalFutures.size(),
+                                LogEvaluationReports(predictionAnalytics.SubmitForecast({
+                                    .as_of_timestamp_ms = queryTimestampMs,
+                                    .historical_matches = historicalFutures.size(),
+                                    .cumulative_changes = {
                                         expectedChange1s,
                                         expectedChange5s,
                                         expectedChange10s,
                                         expectedChange30s
-                                    ),
-                                    true
-                                );
+                                    }
+                                }));
                             }
                             else {
                                 Logger::Warning(
@@ -553,7 +600,8 @@ namespace Runtime {
         }
         // ========== END PREDICTION LOOP ========== //
 
-        this->QuoteClient.RequestStop();
+        this->QuoteClient.Stop();
+        LogEvaluationReports(predictionAnalytics.FlushIncomplete());
     }
 
     // ========== END ORCHESTRATOR IMPLEMENTATION ========== //
