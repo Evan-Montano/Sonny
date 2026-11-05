@@ -1,3 +1,6 @@
+// predictionanalytics.cpp
+// Implementation of forecast scoring against live one-second records.
+
 #include "predictionanalytics.hpp"
 
 #include "common/datetime.hpp"
@@ -10,7 +13,10 @@
 namespace Runtime {
     namespace {
         constexpr std::int64_t MillisecondsPerSecond = 1000;
+        // Long enough that a slow prediction cycle can still look up every second of its future.
         constexpr std::int64_t HistoryWindowSeconds = 180;
+
+        // Moves smaller than this count as flat when comparing predicted and actual direction.
         constexpr double DirectionEpsilon = 0.0005;
 
         int Direction(double value) {
@@ -23,6 +29,8 @@ namespace Runtime {
             return Direction(predicted) == Direction(actual) ? "HIT" : "MISS";
         }
     }
+
+    // ========== PREDICTION ANALYTICS ========== //
 
     std::int64_t PredictionAnalytics::ToSecond(const std::int64_t timestamp_ms) {
         return timestamp_ms / MillisecondsPerSecond;
@@ -79,6 +87,7 @@ namespace Runtime {
         const std::int64_t anchor_second = ToSecond(pending.forecast.as_of_timestamp_ms);
         const std::int64_t end_second = anchor_second + static_cast<std::int64_t>(PredictionEvaluationWindow);
 
+        // The prediction cycle takes time, so some of this forecast's future may already have arrived.
         for (const Observation& observation : history_) {
             const std::int64_t offset = observation.second - anchor_second;
             if (offset < 1 || offset > static_cast<std::int64_t>(PredictionEvaluationWindow)) continue;
@@ -203,4 +212,6 @@ namespace Runtime {
 
         return message;
     }
+
+    // ========== END PREDICTION ANALYTICS ========== //
 }

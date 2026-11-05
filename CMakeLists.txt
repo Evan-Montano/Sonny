@@ -149,7 +149,14 @@ target_link_libraries(sonny_webull
 
 add_library(sonny_runtime STATIC
     src/runtime/runtime.cpp
+    src/runtime/marketclock.cpp
+    src/runtime/onesecondaggregator.cpp
+    src/runtime/liveinputwindow.cpp
+    src/runtime/historicalrecordstore.cpp
+    src/runtime/forecast.cpp
+    src/runtime/predictionexperiment.cpp
     src/runtime/predictionanalytics.cpp
+    src/runtime/quoteview.cpp
 )
 
 target_include_directories(sonny_runtime

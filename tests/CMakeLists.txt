@@ -5,6 +5,7 @@ add_executable(sonny_common_tests
     core/transformer_tests.cpp
     client/webullstream_tests.cpp
     client/webull_proto_tests.cpp
+    runtime/runtime_pipeline_tests.cpp
 )
 
 target_include_directories(sonny_common_tests
@@ -20,6 +21,7 @@ target_compile_definitions(sonny_common_tests
 target_link_libraries(sonny_common_tests
     PRIVATE
         sonny_core
+        sonny_runtime
         sonny_webull
         protobuf::libprotobuf
         GTest::gtest_main

@@ -73,6 +73,15 @@ namespace Core {
         return metadataPath.parent_path() / (metadataPath.stem().string() + ".normalization.json");
     }
 
+    bool HalfHourIndex::FilesExist(
+        const std::size_t numOfSeconds,
+        const std::size_t inputWindowSeconds
+    ) {
+        return Common::Storage::FileExists(GetIndexPath(numOfSeconds, inputWindowSeconds)) &&
+            Common::Storage::FileExists(GetMetadataPath(numOfSeconds, inputWindowSeconds)) &&
+            Common::Storage::FileExists(GetNormalizationPath(numOfSeconds, inputWindowSeconds));
+    }
+
     std::filesystem::path HalfHourIndex::GetRecordFilePathFromWindowLocation(const std::array<char,8> &yyyymmdd) {
         const std::string date(yyyymmdd.data(), yyyymmdd.size());
         const std::string formattedDate = 
@@ -585,8 +594,6 @@ namespace Core {
                 "Cannot add vectors before normalization parameters are set."
             );
         }
-
-        // A complete search window contains 30 MLRecords.
 
         if (normalizedMLSpan.size() >= _inputWindowSeconds) {
             // Number of complete configured input windows that can be created.

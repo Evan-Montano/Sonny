@@ -47,10 +47,15 @@ namespace Core {
         static constexpr std::size_t TOTAL_HALF_HOURS = 13;
 
         /**
-         * @brief Underlying faiss index.
+         * @brief Number of one-second records in each indexed window.
          * 
          */
         std::size_t _inputWindowSeconds{INPUT_WINDOW_SECONDS};
+
+        /**
+         * @brief Length of each FAISS vector (features per record × window length).
+         * 
+         */
         int _dimension{static_cast<int>(InputVectorDimension(_inputWindowSeconds))};
 
         /**
@@ -279,6 +284,17 @@ namespace Core {
         ) const;
 
         /**
+         * @brief Checks that the index, metadata, and normalization files for a segment all exist.
+         * Constructing a HalfHourIndex without them creates a new, empty index, so read-only
+         * callers (like the live runtime) should check first.
+         *
+         * @param numOfSeconds Any second inside the segment, measured from the market open.
+         * @param inputWindowSeconds Input window configuration the index was built for.
+         * @return true if all three files are present.
+         */
+        static bool FilesExist(std::size_t numOfSeconds, std::size_t inputWindowSeconds);
+
+        /**
         * @brief Sets the normalization parameters associated with this index.
         *
         * Used during historical index construction.
@@ -286,9 +302,9 @@ namespace Core {
         void SetNormalizationParameters(const NormalizationParameters& parameters);
 
         /**
-        * @brief Normalizes a query with INPUT_WINDOW_SECONDS records using this index's parameters.
+        * @brief Normalizes a query of exactly this index's input-window length using its parameters.
         *
-        * Returns a flattened 60-element FAISS-compatible vector.
+        * Returns a flattened FAISS-compatible vector of InputVectorDimension(inputWindowSeconds) floats.
         */
         std::vector<float> NormalizeQuery(std::span<const MLRecord> records) const;
 

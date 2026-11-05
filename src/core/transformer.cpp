@@ -213,17 +213,6 @@ namespace Core {
             // Experimental volume proxy: average displayed size
             // at the best bid and ask.
             const double volume = (currentAsk.size + currentBid.size) / 2.0;
-
-            {
-                Common::DateTime dt = Common::DateTime::GetCurrentDateTime();
-                if (dt.GetHour() == 7 && dt.GetMinute() < 35) {
-                    Logger::Info(
-                        std::format("BidV: {} | AskV: {} | DerivedV: {}",
-                        currentBid.size, currentAsk.size, volume)
-                    );
-                }
-            }
-
             const double midDelta = currentMid - previousMid;
             const double spreadDelta = currentSpread - previousSpread;
 

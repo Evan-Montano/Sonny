@@ -1,4 +1,5 @@
-// Shared configuration for the historical input window.
+// inputconfig.hpp
+// Shared configuration for the historical input window: how many one-second records make up a query.
 
 #pragma once
 
@@ -11,12 +12,26 @@
 
 namespace Core {
 
+    /**
+     * @brief Every input-window length (in seconds) the runtime compares side by side.
+     * Each length has its own set of indexes under storage/indexes/<N>s/.
+     */
     inline constexpr std::array<std::size_t, 4> INPUT_WINDOW_CONFIGURATIONS{
         10, 15, 20, 30
     };
+
+    /**
+     * @brief Longest configured window. The live rolling window keeps this many records so
+     * every shorter configuration can be cut from the same snapshot.
+     */
     inline constexpr std::size_t MAX_INPUT_WINDOW_SECONDS =
         INPUT_WINDOW_CONFIGURATIONS.back();
 
+    /**
+     * @brief The window length that "Update Indexes" builds, and the HalfHourIndex default.
+     * To build indexes for another configuration, change this value and rerun Update Indexes;
+     * existing indexes for other window lengths are left untouched.
+     */
     inline constexpr std::size_t INPUT_WINDOW_SECONDS = 30;
 
     constexpr bool IsSupportedInputWindow(const std::size_t inputWindowSeconds) {
@@ -32,10 +47,18 @@ namespace Core {
         "INPUT_WINDOW_SECONDS must be 10, 15, 20, or 30."
     );
 
+    /**
+     * @brief Number of floats in a FAISS vector: two features (mid_delta, spread_delta) per second.
+     */
     constexpr std::size_t InputVectorDimension(const std::size_t inputWindowSeconds) {
         return inputWindowSeconds * 2;
     }
 
+    /**
+     * @brief Index of the first .rec record after a matched window.
+     * A window stored at recordIndex covers [recordIndex, recordIndex + inputWindowSeconds),
+     * so the "future" of that match starts immediately after its last second.
+     */
     constexpr std::size_t HistoricalFutureStart(
         const std::size_t recordIndex,
         const std::size_t inputWindowSeconds
@@ -43,6 +66,11 @@ namespace Core {
         return recordIndex + inputWindowSeconds;
     }
 
+    /**
+     * @brief Returns the newest inputWindowSeconds records from an oldest-to-newest span.
+     *
+     * @throws std::invalid_argument If the window is unsupported or there are too few records.
+     */
     template<typename T>
     std::span<const T> LatestInputWindow(
         const std::span<const T> records,
@@ -56,6 +84,9 @@ namespace Core {
         return records.last(inputWindowSeconds);
     }
 
+    /**
+     * @brief Appends a record, dropping the oldest one once MAX_INPUT_WINDOW_SECONDS are held.
+     */
     template<typename T>
     void AppendInputWindowRecord(std::deque<T>& records, T record) {
         if (records.size() >= MAX_INPUT_WINDOW_SECONDS) {
