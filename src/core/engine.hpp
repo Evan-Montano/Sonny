@@ -4,6 +4,7 @@
 #pragma once
 
 #include "structures.hpp"
+#include "inputconfig.hpp"
 
 #include <array>
 #include <cstddef>
@@ -28,14 +29,6 @@ namespace Core {
         // MEMBERS
 
         /**
-         * @brief Dimension of index vectors. This is calculated by multiplying the
-         * number of parameters in MLRecord struct(3): mid_delta, spread_delta, and volume
-         * by the target number of seconds we are using as a context window for
-         * market future predictions, which is 30s.
-         */
-        static constexpr int DIMENSION = 90;
-
-        /**
          * @brief Static variable to easily identify num of seconds per half-hour.
          * 
          */
@@ -56,6 +49,12 @@ namespace Core {
         /**
          * @brief Underlying faiss index.
          * 
+         */
+        std::size_t _inputWindowSeconds{INPUT_WINDOW_SECONDS};
+        int _dimension{static_cast<int>(InputVectorDimension(_inputWindowSeconds))};
+
+        /**
+         * @brief Underlying FAISS index, sized for this input window.
          */
         faiss::IndexFlatL2 _index;
 
@@ -128,7 +127,10 @@ namespace Core {
          * @param numOfSeconds Number of seconds that have elapsed since the market opened.
          * @return std::filesystem::path 
          */
-        static std::filesystem::path GetIndexPath(std::size_t numOfSeconds);
+        static std::filesystem::path GetIndexPath(
+            std::size_t numOfSeconds,
+            std::size_t inputWindowSeconds = INPUT_WINDOW_SECONDS
+        );
 
         /**
          * @brief Gets the file path of the appropraite metadata file based on the number of minutes passed since market start.
@@ -136,7 +138,10 @@ namespace Core {
          * @param numOfSeconds Number of seconds that have elapsed since the market opened.
          * @return std::filesystem::path 
          */
-        static std::filesystem::path GetMetadataPath(std::size_t numOfSeconds);
+        static std::filesystem::path GetMetadataPath(
+            std::size_t numOfSeconds,
+            std::size_t inputWindowSeconds = INPUT_WINDOW_SECONDS
+        );
 
         /**
          * @brief Gets the file path of the "yyyy-mm-dd.rec" file based on the shortened "yyyymmdd" array.
@@ -178,7 +183,10 @@ namespace Core {
          * @param numOfSeconds 
          * @return std::filesystem::path 
          */
-        static std::filesystem::path GetNormalizationPath(std::size_t numOfSeconds);
+        static std::filesystem::path GetNormalizationPath(
+            std::size_t numOfSeconds,
+            std::size_t inputWindowSeconds = INPUT_WINDOW_SECONDS
+        );
 
         /**
          * @brief Loads normalization json into struct.
@@ -201,7 +209,11 @@ namespace Core {
          * @param indexPath 
          * @param metadataPath 
          */
-        HalfHourIndex(const std::filesystem::path indexPath, const std::filesystem::path metadataPath);
+        HalfHourIndex(
+            const std::filesystem::path indexPath,
+            const std::filesystem::path metadataPath,
+            std::size_t inputWindowSeconds = INPUT_WINDOW_SECONDS
+        );
 
     public:
         // CONSTRUCTOR
@@ -211,7 +223,7 @@ namespace Core {
          * Calling an empty constructor will initialize an empty faiss index.
          */
         HalfHourIndex()
-            : _index(DIMENSION) {}
+            : _index(_dimension) {}
 
         /**
          * @brief Construct a new Half Hour Index object.
@@ -220,6 +232,11 @@ namespace Core {
          * @param numOfSeconds Number of seconds that have elapsed since the market opened.
          */
         HalfHourIndex(const std::size_t &numOfSeconds);
+
+        /**
+         * @brief Loads a half-hour index for a specific input-window configuration.
+         */
+        HalfHourIndex(const std::size_t &numOfSeconds, std::size_t inputWindowSeconds);
 
         // DESTRUCTOR
         ~HalfHourIndex();
@@ -269,10 +286,11 @@ namespace Core {
         void SetNormalizationParameters(const NormalizationParameters& parameters);
 
         /**
-        * @brief Normalizes a 30-record query using this index's parameters.
+        * @brief Normalizes a query with INPUT_WINDOW_SECONDS records using this index's parameters.
         *
-        * Returns a flattened 90-element FAISS-compatible vector.
+        * Returns a flattened 60-element FAISS-compatible vector.
         */
         std::vector<float> NormalizeQuery(std::span<const MLRecord> records) const;
+
     };
 }

@@ -40,9 +40,7 @@ namespace Core {
     void NormalizationAccumulator::AddRecord(const MLRecord& record) {
         const bool valid =
             std::isfinite(record.mid_delta) &&
-            std::isfinite(record.spread_delta) &&
-            std::isfinite(record.volume) &&
-            record.volume >= 0.0f;
+            std::isfinite(record.spread_delta);
 
         if (valid == false) {
             throw std::invalid_argument(
@@ -52,7 +50,7 @@ namespace Core {
 
         midDelta.Add(record.mid_delta);
         spreadDelta.Add(record.spread_delta);
-        volume.Add(std::log1p(static_cast<double>(record.volume)));
+        // volume.Add(std::log1p(static_cast<double>(record.volume)));
     }
 
     void NormalizationAccumulator::AddRecords(std::span<const MLRecord> records) {
@@ -77,8 +75,8 @@ namespace Core {
             .spread_delta_mean = spreadDelta.mean,
             .spread_delta_stddev = spreadDelta.PopulationStdDev(),
 
-            .volume_mean = volume.mean,
-            .volume_stddev = volume.PopulationStdDev()
+            // .volume_mean = volume.mean,
+            // .volume_stddev = volume.PopulationStdDev()
         };
     }
 
@@ -94,11 +92,8 @@ namespace Core {
             std::isfinite(parameters.mid_delta_stddev) &&
             std::isfinite(parameters.spread_delta_mean) &&
             std::isfinite(parameters.spread_delta_stddev) &&
-            std::isfinite(parameters.volume_mean) &&
-            std::isfinite(parameters.volume_stddev) &&
             parameters.mid_delta_stddev >= 0.0 &&
-            parameters.spread_delta_stddev >= 0.0 &&
-            parameters.volume_stddev >= 0.0;
+            parameters.spread_delta_stddev >= 0.0;
 
         if (valid == false) {
             throw std::invalid_argument(
@@ -138,15 +133,6 @@ namespace Core {
         }
 
         MLRecord NormalizeRecord(const MLRecord& record, const NormalizationParameters& parameters) {
-            if (std::isfinite(record.volume) == false ||
-                record.volume < 0.0f) {
-                throw std::invalid_argument(
-                    "Cannot normalize an invalid volume value."
-                );
-            }
-
-            const double logVolume = std::log1p(static_cast<double>(record.volume));
-
             return MLRecord{
                 .mid_delta = NormalizeFeature(
                     record.mid_delta,
@@ -160,11 +146,12 @@ namespace Core {
                     parameters.spread_delta_stddev
                 ),
 
-                .volume = NormalizeFeature(
-                    logVolume,
-                    parameters.volume_mean,
-                    parameters.volume_stddev
-                )
+                .volume = record.volume
+                // .volume = NormalizeFeature(
+                //     logVolume,
+                //     parameters.volume_mean,
+                //     parameters.volume_stddev
+                // )
             };
         }
 
@@ -182,7 +169,7 @@ namespace Core {
         ValidateNormalizationParameters(parameters);
 
         std::vector<float> result;
-        result.reserve(records.size() * 3);
+        result.reserve(records.size() * 2);
 
         for (const MLRecord& record : records) {
             const MLRecord normalized = NormalizeRecord(
@@ -192,7 +179,7 @@ namespace Core {
 
             result.push_back(normalized.mid_delta);
             result.push_back(normalized.spread_delta);
-            result.push_back(normalized.volume);
+            // result.push_back(normalized.volume);
         }
 
         return result;

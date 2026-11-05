@@ -33,7 +33,7 @@ namespace Core {
 
         RunningStatistics midDelta{};
         RunningStatistics spreadDelta{};
-        RunningStatistics volume{};
+        // RunningStatistics volume{};
 
     public:
         // METHODS
@@ -55,7 +55,7 @@ namespace Core {
     /**
      * @brief Normalizes records in place using supplied parameters.
      *
-     * Volume is log-transformed before normalization.
+     * Only mid_delta and spread_delta are normalized. Volume is preserved as-is.
      */
     void NormalizeRecordsVector(std::span<MLRecord> records, const NormalizationParameters& parameters);
 
@@ -63,7 +63,7 @@ namespace Core {
      * @brief Normalizes records and flattens them into a FAISS-compatible vector.
      *
      * Feature ordering:
-     * mid_delta, spread_delta, volume.
+     * mid_delta, spread_delta.
      */
     std::vector<float> NormalizeRecordsToVector(std::span<const MLRecord> records, const NormalizationParameters& parameters);
 

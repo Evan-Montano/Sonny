@@ -9,6 +9,9 @@
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
+#include <format>
+#include <iterator>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -17,8 +20,8 @@
 
 class HalfHourIndex_Test : public ::testing::Test {
 protected:
-    static constexpr std::size_t WINDOW_LENGTH = 30;
-    static constexpr std::size_t QUERY_DIMENSION = WINDOW_LENGTH * 3;
+    static constexpr std::size_t WINDOW_LENGTH = Core::INPUT_WINDOW_SECONDS;
+    static constexpr std::size_t QUERY_DIMENSION = Core::InputVectorDimension(WINDOW_LENGTH);
 
     std::filesystem::path tempDirectory_;
     std::filesystem::path indexPath_;
@@ -37,10 +40,7 @@ protected:
             .mid_delta_stddev = 1.0,
 
             .spread_delta_mean = 0.0,
-            .spread_delta_stddev = 1.0,
-
-            .volume_mean = 0.0,
-            .volume_stddev = 1.0
+            .spread_delta_stddev = 1.0
         };
     }
 
@@ -85,6 +85,28 @@ protected:
         );
     }
 
+    void OpenIndexForWindow(
+        const std::filesystem::path& indexPath,
+        const std::filesystem::path& metadataPath,
+        const std::size_t inputWindowSeconds
+    ) {
+        testIndex_.reset(
+            new Core::HalfHourIndex(indexPath, metadataPath, inputWindowSeconds)
+        );
+    }
+
+    int IndexDimension() const {
+        return testIndex_->_index.d;
+    }
+
+    static std::filesystem::path CurrentIndexPath() {
+        return Core::HalfHourIndex::GetIndexPath(0);
+    }
+
+    static std::filesystem::path CurrentNormalizationPath() {
+        return Core::HalfHourIndex::GetNormalizationPath(0);
+    }
+
     // Normalize a copy of the records before passing them to FAISS.
     void AddRecords(
         const std::vector<Core::MLRecord>& records,
@@ -112,7 +134,7 @@ protected:
         return testIndex_->Query(query, maxResults);
     }
 
-    // Construct a normalized 90-dimensional query through HalfHourIndex.
+    // Construct a normalized 60-dimensional query through HalfHourIndex.
     // This also verifies that the index's normalization parameters are used.
     std::vector<float> MakeQuery(
         const std::vector<Core::MLRecord>& records,
@@ -162,6 +184,109 @@ TEST_F(HalfHourIndex_Test, CheckedInFixturesExist) {
     EXPECT_TRUE(std::filesystem::is_regular_file(recordFixturePath_));
 }
 
+TEST_F(HalfHourIndex_Test, InputWindowDimensionsMatchSupportedConfigurations) {
+    static_assert(Core::InputVectorDimension(10) == 20);
+    static_assert(Core::InputVectorDimension(15) == 30);
+    static_assert(Core::InputVectorDimension(20) == 40);
+    static_assert(Core::InputVectorDimension(30) == 60);
+
+    EXPECT_EQ(IndexDimension(), QUERY_DIMENSION);
+    EXPECT_EQ(CurrentIndexPath().parent_path().filename(),
+              std::format("{}s", Core::INPUT_WINDOW_SECONDS));
+    EXPECT_EQ(CurrentNormalizationPath().parent_path().filename(),
+              std::format("{}s", Core::INPUT_WINDOW_SECONDS));
+}
+
+TEST_F(HalfHourIndex_Test, BuildsAndQueriesEveryInputWindowConfiguration) {
+    for (const std::size_t inputWindowSeconds : Core::INPUT_WINDOW_CONFIGURATIONS) {
+        const std::filesystem::path windowDirectory =
+            tempDirectory_ / std::format("{}s", inputWindowSeconds);
+        std::filesystem::create_directories(windowDirectory);
+
+        const std::filesystem::path indexPath = windowDirectory / "test.index";
+        const std::filesystem::path metadataPath = windowDirectory / "test.meta";
+        const Core::NormalizationParameters parameters = MakeTestNormalizationParameters();
+        const std::vector<Core::MLRecord> rawRecords = MakeRecords(inputWindowSeconds);
+
+        OpenIndexForWindow(indexPath, metadataPath, inputWindowSeconds);
+        std::unique_ptr<Core::HalfHourIndex> index = std::move(testIndex_);
+        index->SetNormalizationParameters(parameters);
+
+        std::vector<Core::MLRecord> normalizedRecords = rawRecords;
+        std::span<Core::MLRecord> recordSpan(normalizedRecords);
+        Core::NormalizeRecordsVector(recordSpan, parameters);
+        index->AddVectorsToIndex(recordSpan, recordFixturePath_, 50);
+
+        const std::vector<float> query = index->NormalizeQuery(rawRecords);
+        ASSERT_EQ(query.size(), Core::InputVectorDimension(inputWindowSeconds));
+        const auto results = index->Query(query, 1);
+        ASSERT_EQ(results.size(), 1U);
+        EXPECT_NEAR(results.front().distance, 0.0F, 1e-6F);
+        EXPECT_EQ(results.front().recordIndex, 50U);
+
+        index.reset();
+
+        OpenIndexForWindow(indexPath, metadataPath, inputWindowSeconds);
+        std::unique_ptr<Core::HalfHourIndex> reloadedIndex = std::move(testIndex_);
+        EXPECT_EQ(reloadedIndex->NormalizeQuery(rawRecords), query);
+    }
+}
+
+TEST_F(HalfHourIndex_Test, EachQueryUsesTheMostRecentConfiguredRecords) {
+    const std::vector<Core::MLRecord> records = MakeRecords(Core::MAX_INPUT_WINDOW_SECONDS);
+    const std::span<const Core::MLRecord> recordSpan(records);
+
+    for (const std::size_t inputWindowSeconds : Core::INPUT_WINDOW_CONFIGURATIONS) {
+        const std::span<const Core::MLRecord> queryWindow =
+            Core::LatestInputWindow(recordSpan, inputWindowSeconds);
+
+        ASSERT_EQ(queryWindow.size(), inputWindowSeconds);
+        EXPECT_FLOAT_EQ(
+            queryWindow.front().mid_delta,
+            static_cast<float>(Core::MAX_INPUT_WINDOW_SECONDS - inputWindowSeconds + 1)
+        );
+        EXPECT_FLOAT_EQ(queryWindow.back().mid_delta,
+                        static_cast<float>(Core::MAX_INPUT_WINDOW_SECONDS));
+    }
+}
+
+TEST_F(HalfHourIndex_Test, InputQueueKeepsOnlyTheMostRecentConfiguredRecords) {
+    std::deque<int> records;
+
+    for (std::size_t i = 0; i < Core::MAX_INPUT_WINDOW_SECONDS + 2; ++i) {
+        Core::AppendInputWindowRecord(records, static_cast<int>(i));
+    }
+
+    ASSERT_EQ(records.size(), Core::MAX_INPUT_WINDOW_SECONDS);
+    EXPECT_EQ(records.front(), 2);
+    EXPECT_EQ(records.back(), static_cast<int>(Core::MAX_INPUT_WINDOW_SECONDS + 1));
+}
+
+TEST_F(HalfHourIndex_Test, HistoricalFutureBeginsAfterConfiguredInputWindow) {
+    EXPECT_EQ(Core::HistoricalFutureStart(100, WINDOW_LENGTH), 100 + WINDOW_LENGTH);
+}
+
+TEST_F(HalfHourIndex_Test, RejectsIndexWithAnotherInputWindowDimension) {
+    faiss::IndexFlatL2 incompatibleIndex(QUERY_DIMENSION - 2);
+    faiss::write_index(&incompatibleIndex, indexPath_.string().c_str());
+
+    EXPECT_THROW(OpenIndex(), std::runtime_error);
+}
+
+TEST_F(HalfHourIndex_Test, ReadsExistingRecordFixtureWithUnchangedRecordLayout) {
+    ASSERT_EQ(std::filesystem::file_size(recordFixturePath_) % sizeof(Core::MLRecord), 0U);
+
+    std::ifstream file(recordFixturePath_, std::ios::binary);
+    ASSERT_TRUE(file.is_open());
+
+    Core::MLRecord record{};
+    ASSERT_TRUE(file.read(reinterpret_cast<char*>(&record), sizeof(record)));
+
+    EXPECT_TRUE(std::isfinite(record.mid_delta));
+    EXPECT_TRUE(std::isfinite(record.spread_delta));
+    EXPECT_TRUE(std::isfinite(record.volume));
+}
+
 // ============================================================ //
 // QUERY TESTS
 // ============================================================ //
@@ -175,7 +300,7 @@ TEST_F(HalfHourIndex_Test, EmptyIndexReturnsNoResults) {
     EXPECT_TRUE(results.empty());
 }
 
-// Queries must contain exactly 90 floats.
+// Queries must contain exactly 60 floats.
 TEST_F(HalfHourIndex_Test, QueryRejectsIncorrectDimension) {
     const std::vector<float> query(QUERY_DIMENSION - 1, 0.0F);
 
@@ -208,24 +333,19 @@ TEST_F(HalfHourIndex_Test, NormalizeQueryProducesCorrectFeatureOrder) {
     // First record:
     // mid_delta = 1.0
     // spread_delta = 0.25
-    // volume = 0.5
-    //
-    // Mean = 0 and standard deviation = 1 for all features.
-    // Volume is transformed using log1p before normalization.
+    // Volume is preserved in MLRecord but excluded from the query vector.
 
     EXPECT_FLOAT_EQ(query[0], 1.0F);
     EXPECT_FLOAT_EQ(query[1], 0.25F);
-    EXPECT_FLOAT_EQ(
-        query[2],
-        static_cast<float>(std::log1p(0.5))
-    );
+    EXPECT_FLOAT_EQ(query[2], 2.0F);
+    EXPECT_FLOAT_EQ(query[3], 0.5F);
 }
 
 // ============================================================ //
 // INDEXING TESTS
 // ============================================================ //
 
-// Fewer than 30 records cannot produce a complete search window.
+// Fewer than the configured window length cannot produce a complete pattern.
 TEST_F(HalfHourIndex_Test, IgnoresInsufficientRecords) {
     const auto records = MakeRecords(WINDOW_LENGTH - 1);
 
@@ -237,7 +357,7 @@ TEST_F(HalfHourIndex_Test, IgnoresInsufficientRecords) {
     EXPECT_TRUE(results.empty());
 }
 
-// Exactly 30 records should produce exactly one vector.
+// Exactly one configured input window should produce exactly one vector.
 TEST_F(HalfHourIndex_Test, IndexesOneCompleteWindow) {
     const auto records = MakeRecords(WINDOW_LENGTH);
 
@@ -258,9 +378,9 @@ TEST_F(HalfHourIndex_Test, IndexesOneCompleteWindow) {
     EXPECT_EQ(results[0].tradingDayId, expectedTradingDay);
 }
 
-// N records produce N - 29 overlapping 30-record windows.
+// N records produce N - (window length - 1) overlapping windows.
 TEST_F(HalfHourIndex_Test, IndexesOverlappingWindows) {
-    const auto records = MakeRecords(32);
+    const auto records = MakeRecords(WINDOW_LENGTH + 2);
 
     AddRecords(records, 100);
 
@@ -276,7 +396,7 @@ TEST_F(HalfHourIndex_Test, IndexesOverlappingWindows) {
 
 // Query should respect the requested result limit.
 TEST_F(HalfHourIndex_Test, QueryRespectsMaxResults) {
-    const auto records = MakeRecords(35);
+    const auto records = MakeRecords(WINDOW_LENGTH + 5);
 
     AddRecords(records);
 
@@ -303,9 +423,6 @@ TEST_F(HalfHourIndex_Test, PersistsIndexMetadataAndNormalization) {
     parameters.spread_delta_mean = 1.5;
     parameters.spread_delta_stddev = 2.5;
 
-    parameters.volume_mean = 0.75;
-    parameters.volume_stddev = 1.25;
-
     testIndex_->SetNormalizationParameters(parameters);
 
     const auto records = MakeRecords(31);
@@ -315,12 +432,23 @@ TEST_F(HalfHourIndex_Test, PersistsIndexMetadataAndNormalization) {
     // Query the second overlapping window.
     const auto queryBeforeSave = MakeQuery(records, 1);
 
-    // Destroying an updated index saves all three files.
+    // Destroying an updated index saves the index, metadata, and normalization JSON.
     testIndex_.reset();
 
     ASSERT_TRUE(std::filesystem::is_regular_file(indexPath_));
     ASSERT_TRUE(std::filesystem::is_regular_file(metadataPath_));
     ASSERT_TRUE(std::filesystem::is_regular_file(normalizationPath_));
+
+    std::ifstream normalizationFile(normalizationPath_);
+    const std::string normalizationJson(
+        (std::istreambuf_iterator<char>(normalizationFile)),
+        std::istreambuf_iterator<char>()
+    );
+    EXPECT_NE(
+        normalizationJson.find(std::format(
+            "\"input_window_seconds\":{}", Core::INPUT_WINDOW_SECONDS)),
+        std::string::npos
+    );
 
     // Reopen the same files using the test-only constructor.
     // This should load the normalization parameters from JSON.
@@ -363,4 +491,33 @@ TEST_F(HalfHourIndex_Test, RejectsIndexWithoutNormalizationParameters) {
         OpenIndex(),
         std::runtime_error
     );
+}
+
+TEST_F(HalfHourIndex_Test, RejectsNormalizationFromAnotherInputWindow) {
+    testIndex_.reset();
+
+    std::ifstream input(normalizationPath_);
+    std::string normalizationJson(
+        (std::istreambuf_iterator<char>(input)),
+        std::istreambuf_iterator<char>()
+    );
+    const std::string configuredWindow = std::format(
+        "\"input_window_seconds\":{}", Core::INPUT_WINDOW_SECONDS
+    );
+    const std::size_t configuredWindowPosition = normalizationJson.find(configuredWindow);
+    ASSERT_NE(configuredWindowPosition, std::string::npos);
+
+    const std::size_t incompatibleWindow = Core::INPUT_WINDOW_SECONDS == 10 ? 15 : 10;
+    normalizationJson.replace(
+        configuredWindowPosition,
+        configuredWindow.size(),
+        std::format("\"input_window_seconds\":{}", incompatibleWindow)
+    );
+
+    std::ofstream output(normalizationPath_, std::ios::trunc);
+    ASSERT_TRUE(output.is_open());
+    output << normalizationJson;
+    output.close();
+
+    EXPECT_THROW(OpenIndex(), std::runtime_error);
 }

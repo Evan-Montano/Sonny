@@ -1,9 +1,16 @@
 #include <gtest/gtest.h>
 
 #include "core/transformer.hpp"
+#include "core/inputconfig.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <vector>
+
+static_assert(sizeof(Core::MLRecord) == 12);
+static_assert(offsetof(Core::MLRecord, mid_delta) == 0);
+static_assert(offsetof(Core::MLRecord, spread_delta) == 4);
+static_assert(offsetof(Core::MLRecord, volume) == 8);
 
 TEST(NormalizationTests, CalculatesPooledPopulationStatistics) {
     Core::NormalizationAccumulator accumulator{};
@@ -29,19 +36,9 @@ TEST(NormalizationTests, CalculatesPooledPopulationStatistics) {
         1e-10
     );
 
-    const double logVolumeMean =
-        (std::log1p(0.0) +
-         std::log1p(3.0) +
-         std::log1p(8.0)) / 3.0;
-
-    EXPECT_NEAR(
-        parameters.volume_mean,
-        logVolumeMean,
-        1e-10
-    );
 }
 
-TEST(NormalizationTests, FlattensThirtyRecordsIntoNinetyFeatures) {
+TEST(NormalizationTests, FlattensConfiguredWindowIntoPriceFeatures) {
     Core::NormalizationParameters parameters{
         .sample_count = 100,
 
@@ -49,25 +46,23 @@ TEST(NormalizationTests, FlattensThirtyRecordsIntoNinetyFeatures) {
         .mid_delta_stddev = 1.0,
 
         .spread_delta_mean = 0.0,
-        .spread_delta_stddev = 1.0,
-
-        .volume_mean = 0.0,
-        .volume_stddev = 1.0
+        .spread_delta_stddev = 1.0
     };
 
     const std::vector<Core::MLRecord> records(
-        30,
+        Core::INPUT_WINDOW_SECONDS,
         Core::MLRecord{1.0f, 2.0f, 3.0f}
     );
 
     const std::vector<float> query =
         Core::NormalizeRecordsToVector(records, parameters);
 
-    ASSERT_EQ(query.size(), 90);
+    ASSERT_EQ(query.size(), Core::InputVectorDimension(Core::INPUT_WINDOW_SECONDS));
 
     EXPECT_FLOAT_EQ(query[0], 1.0f);
     EXPECT_FLOAT_EQ(query[1], 2.0f);
-    EXPECT_FLOAT_EQ(query[2], std::log1p(3.0f));
+    EXPECT_FLOAT_EQ(query[2], 1.0f);
+    EXPECT_FLOAT_EQ(query[3], 2.0f);
 }
 
 TEST(NormalizationTests, HandlesZeroStandardDeviation) {
@@ -78,10 +73,7 @@ TEST(NormalizationTests, HandlesZeroStandardDeviation) {
         .mid_delta_stddev = 0.0,
 
         .spread_delta_mean = 2.0,
-        .spread_delta_stddev = 0.0,
-
-        .volume_mean = 1.0,
-        .volume_stddev = 0.0
+        .spread_delta_stddev = 0.0
     };
 
     std::vector<Core::MLRecord> records{
@@ -92,14 +84,20 @@ TEST(NormalizationTests, HandlesZeroStandardDeviation) {
 
     EXPECT_FLOAT_EQ(records[0].mid_delta, 0.0f);
     EXPECT_FLOAT_EQ(records[0].spread_delta, 0.0f);
-    EXPECT_FLOAT_EQ(records[0].volume, 0.0f);
+    EXPECT_FLOAT_EQ(records[0].volume, 30.0f);
 }
 
-TEST(NormalizationTests, RejectsNegativeVolume) {
+TEST(NormalizationTests, IgnoresVolumeDuringStatisticsAndVectorConstruction) {
     Core::NormalizationAccumulator accumulator{};
 
-    EXPECT_THROW(
-        accumulator.AddRecord({1.0f, 2.0f, -1.0f}),
-        std::invalid_argument
-    );
+    accumulator.AddRecord({1.0f, 2.0f, -1.0f});
+    const auto parameters = accumulator.GetParameters();
+
+    const std::vector<Core::MLRecord> records{
+        {1.0f, 2.0f, -1.0f},
+        {1.0f, 2.0f, 9000.0f}
+    };
+    const auto vector = Core::NormalizeRecordsToVector(records, parameters);
+
+    EXPECT_EQ(vector, (std::vector<float>{0.0f, 0.0f, 0.0f, 0.0f}));
 }

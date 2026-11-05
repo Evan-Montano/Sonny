@@ -41,24 +41,35 @@ namespace Core {
         );
     }
 
-    std::filesystem::path HalfHourIndex::GetIndexPath(const std::size_t numOfSeconds) {
+    std::filesystem::path HalfHourIndex::GetIndexPath(
+        const std::size_t numOfSeconds,
+        const std::size_t inputWindowSeconds
+    ) {
         return Common::Storage::INDEXES_BASE_PATH /
+            std::format("{}s", inputWindowSeconds) /
             std::format(
                 "{}.index",
                 GetHalfHourName(numOfSeconds)
             );
     }
 
-    std::filesystem::path HalfHourIndex::GetMetadataPath(const std::size_t numOfSeconds) {
+    std::filesystem::path HalfHourIndex::GetMetadataPath(
+        const std::size_t numOfSeconds,
+        const std::size_t inputWindowSeconds
+    ) {
         return Common::Storage::METADATA_BASE_PATH /
+            std::format("{}s", inputWindowSeconds) /
             std::format(
                 "{}.meta",
                 GetHalfHourName(numOfSeconds)
             );
     }
 
-    std::filesystem::path HalfHourIndex::GetNormalizationPath(const std::size_t numOfSeconds) {
-        const std::filesystem::path metadataPath = GetMetadataPath(numOfSeconds);
+    std::filesystem::path HalfHourIndex::GetNormalizationPath(
+        const std::size_t numOfSeconds,
+        const std::size_t inputWindowSeconds
+    ) {
+        const std::filesystem::path metadataPath = GetMetadataPath(numOfSeconds, inputWindowSeconds);
         return metadataPath.parent_path() / (metadataPath.stem().string() + ".normalization.json");
     }
 
@@ -88,18 +99,27 @@ namespace Core {
 
     HalfHourIndex::HalfHourIndex(
         const std::filesystem::path indexPath,
-        const std::filesystem::path metadataPath
+        const std::filesystem::path metadataPath,
+        const std::size_t inputWindowSeconds
     )
-        : _index(DIMENSION),
+        : _inputWindowSeconds(inputWindowSeconds),
+        _dimension(static_cast<int>(InputVectorDimension(inputWindowSeconds))),
+        _index(_dimension),
         _indexPath(indexPath),
         _metadataPath(metadataPath)
     {
+        if (IsSupportedInputWindow(inputWindowSeconds) == false) {
+            throw std::invalid_argument(
+                std::format("Unsupported input window length: {}", inputWindowSeconds)
+            );
+        }
+
         if (_indexPath.empty()) {
-            _indexPath = GetIndexPath(1);
+            _indexPath = GetIndexPath(1, _inputWindowSeconds);
         }
 
         if (_metadataPath.empty()) {
-            _metadataPath = GetMetadataPath(1);
+            _metadataPath = GetMetadataPath(1, _inputWindowSeconds);
         }
 
         _normalizationPath = _metadataPath.parent_path() / (_metadataPath.stem().string() + ".normalization.json");
@@ -108,11 +128,25 @@ namespace Core {
     }
 
     HalfHourIndex::HalfHourIndex(const std::size_t& numOfSeconds)
-        : _index(DIMENSION),
-        _indexPath(GetIndexPath(numOfSeconds)),
-        _metadataPath(GetMetadataPath(numOfSeconds)),
-        _normalizationPath(GetNormalizationPath(numOfSeconds))
+        : HalfHourIndex(numOfSeconds, INPUT_WINDOW_SECONDS) {}
+
+    HalfHourIndex::HalfHourIndex(
+        const std::size_t& numOfSeconds,
+        const std::size_t inputWindowSeconds
+    )
+        : _inputWindowSeconds(inputWindowSeconds),
+        _dimension(static_cast<int>(InputVectorDimension(inputWindowSeconds))),
+        _index(_dimension),
+        _indexPath(GetIndexPath(numOfSeconds, inputWindowSeconds)),
+        _metadataPath(GetMetadataPath(numOfSeconds, inputWindowSeconds)),
+        _normalizationPath(GetNormalizationPath(numOfSeconds, inputWindowSeconds))
     {
+        if (IsSupportedInputWindow(inputWindowSeconds) == false) {
+            throw std::invalid_argument(
+                std::format("Unsupported input window length: {}", inputWindowSeconds)
+            );
+        }
+
         Initialize();
     }
 
@@ -150,7 +184,7 @@ namespace Core {
                 );
             }
 
-            if (flatIndex->d != DIMENSION) {
+            if (flatIndex->d != _dimension) {
                 const int actualDimension = flatIndex->d;
 
                 delete loadedIndex;
@@ -160,7 +194,7 @@ namespace Core {
                         "Index at {} has dimension {}, expected {}",
                         this->_indexPath.string(),
                         actualDimension,
-                        DIMENSION
+                        _dimension
                     )
                 );
             }
@@ -338,10 +372,11 @@ namespace Core {
 
         const int schemaVersion = json.Get<int>("schema_version");
 
-        if (schemaVersion != 1) {
+        if (schemaVersion != 3) {
             throw std::runtime_error(
                 std::format(
-                    "Unsupported normalization schema version: {}",
+                    "Unsupported normalization schema version: {}. "
+                    "The indexes for the configured input window must be rebuilt.",
                     schemaVersion
                 )
             );
@@ -349,8 +384,7 @@ namespace Core {
 
         const std::vector<std::string> expectedFeatureOrder{
             "mid_delta",
-            "spread_delta",
-            "volume"
+            "spread_delta"
         };
 
         const auto featureOrder = json.Get<std::vector<std::string>>("feature_order");
@@ -361,9 +395,17 @@ namespace Core {
             );
         }
 
-        if (json.Get<std::string>("volume_transform") != "log1p") {
+        const std::size_t inputWindowSeconds =
+            json.Get<std::size_t>("input_window_seconds");
+
+        if (inputWindowSeconds != _inputWindowSeconds) {
             throw std::runtime_error(
-                "Unsupported normalization volume transformation."
+                std::format(
+                    "Normalization parameters use a {}-second input window; "
+                    "the configured input window is {} seconds.",
+                    inputWindowSeconds,
+                    _inputWindowSeconds
+                )
             );
         }
 
@@ -380,10 +422,7 @@ namespace Core {
             .mid_delta_stddev = json.Get<double>("mid_delta_stddev"),
 
             .spread_delta_mean = json.Get<double>("spread_delta_mean"),
-            .spread_delta_stddev = json.Get<double>("spread_delta_stddev"),
-
-            .volume_mean = json.Get<double>("volume_mean"),
-            .volume_stddev = json.Get<double>("volume_stddev")
+            .spread_delta_stddev = json.Get<double>("spread_delta_stddev")
         };
 
         ValidateNormalizationParameters(parameters);
@@ -410,18 +449,17 @@ namespace Core {
 
         Common::JsonUtility json{};
 
-        json.Set("schema_version", 1);
+        json.Set("schema_version", 3);
+        json.Set("input_window_seconds", _inputWindowSeconds);
 
         json.Set(
             "feature_order",
             std::vector<std::string>{
                 "mid_delta",
-                "spread_delta",
-                "volume"
+                "spread_delta"
             }
         );
 
-        json.Set("volume_transform", "log1p");
         json.Set("standard_deviation", "population");
 
         json.Set("sample_count", _normalizationParameters.sample_count);
@@ -431,9 +469,6 @@ namespace Core {
 
         json.Set("spread_delta_mean", _normalizationParameters.spread_delta_mean);
         json.Set("spread_delta_stddev", _normalizationParameters.spread_delta_stddev);
-
-        json.Set("volume_mean", _normalizationParameters.volume_mean);
-        json.Set("volume_stddev", _normalizationParameters.volume_stddev);
 
         std::filesystem::create_directories(_normalizationPath.parent_path());
 
@@ -531,12 +566,12 @@ namespace Core {
             );
         }
 
-        if (records.size() != DIMENSION / 3) {
+        if (records.size() != _inputWindowSeconds) {
             throw std::invalid_argument(
                 std::format(
                     "Query contains {} records; expected {}.",
                     records.size(),
-                    DIMENSION / 3
+                    _inputWindowSeconds
                 )
             );
         }
@@ -551,12 +586,11 @@ namespace Core {
             );
         }
 
-        // A complete search window contins 30 MLRecords.
-        constexpr std::size_t SEARCH_WINDOW_LENGTH = DIMENSION / 3;
+        // A complete search window contains 30 MLRecords.
 
-        if (normalizedMLSpan.size() >= SEARCH_WINDOW_LENGTH) {
-            // Number of complete 30-second windows that can be created.
-            const std::size_t numVectors = normalizedMLSpan.size() - SEARCH_WINDOW_LENGTH + 1;
+        if (normalizedMLSpan.size() >= _inputWindowSeconds) {
+            // Number of complete configured input windows that can be created.
+            const std::size_t numVectors = normalizedMLSpan.size() - _inputWindowSeconds + 1;
 
             Logger::Info(
                 std::format(
@@ -568,19 +602,19 @@ namespace Core {
                 true
             );
 
-            // Each vector contains DIMENSION (90) floats.
+            // Each vector contains _dimension floats.
             std::vector<float> vectors{};
-            vectors.reserve(numVectors * DIMENSION);
+            vectors.reserve(numVectors * static_cast<std::size_t>(_dimension));
 
             const std::array<char, 8> tradingDay = ToShortLocationArray(recFilePath);
 
             for (std::size_t offset = 0; offset < numVectors; ++offset) {
-                for (std::size_t windowIndex = 0; windowIndex < SEARCH_WINDOW_LENGTH; ++windowIndex) {
+                for (std::size_t windowIndex = 0; windowIndex < _inputWindowSeconds; ++windowIndex) {
                     const MLRecord &record = normalizedMLSpan[offset + windowIndex];
 
                     vectors.push_back(record.mid_delta);
                     vectors.push_back(record.spread_delta);
-                    vectors.push_back(record.volume);
+                    // vectors.push_back(record.volume);
                 }
 
                 WindowLocation location{};
@@ -627,7 +661,7 @@ namespace Core {
         
         std::vector<QueryResult> res{};
 
-        if (normalizedQuery.size() == DIMENSION) {
+        if (normalizedQuery.size() == static_cast<std::size_t>(_dimension)) {
             if (maxResults > 0 && this->_index.ntotal > 0) {
                 const faiss::idx_t resultCount = static_cast<faiss::idx_t>(
                     std::min(maxResults, static_cast<std::size_t>(this->_index.ntotal))
@@ -672,14 +706,14 @@ namespace Core {
                 std::format(
                     "Query dimension is {}, expected {}",
                     normalizedQuery.size(),
-                    DIMENSION
+                    _dimension
                 )
             );
             throw std::invalid_argument(
                 std::format(
                     "Query dimension is {}, expected {}",
                     normalizedQuery.size(),
-                    DIMENSION
+                    _dimension
                 )
             );
         }

@@ -7,6 +7,7 @@
 #include "../common/logger.hpp"
 #include "engine.hpp"
 #include "transformer.hpp"
+#include "inputconfig.hpp"
 #include "../ui/ui.hpp"
 
 #include <cstddef>
@@ -47,7 +48,7 @@ namespace Core {
             using namespace Common::Storage;
 
             constexpr std::size_t RECORDS_PER_HALF_HOUR = 1800;
-            constexpr std::size_t SEARCH_WINDOW_LENGTH = 30;
+            constexpr std::size_t SEARCH_WINDOW_LENGTH = Core::INPUT_WINDOW_SECONDS;
             constexpr std::size_t SEARCH_WINDOW_PADDING = SEARCH_WINDOW_LENGTH - 1;
             constexpr std::size_t TOTAL_SEGMENTS = 13;
 
@@ -142,8 +143,13 @@ namespace Core {
                 // Rebuild all indexes and associated metadata from scratch.
                 Logger::Info("Deleting existing indexes and metadata..", true);
 
-                DeleteDirectory(INDEXES_BASE_PATH);
-                DeleteDirectory(METADATA_BASE_PATH);
+                const std::filesystem::path indexDirectory =
+                    INDEXES_BASE_PATH / std::format("{}s", Core::INPUT_WINDOW_SECONDS);
+                const std::filesystem::path metadataDirectory =
+                    METADATA_BASE_PATH / std::format("{}s", Core::INPUT_WINDOW_SECONDS);
+
+                DeleteDirectory(indexDirectory);
+                DeleteDirectory(metadataDirectory);
 
                 // Process one half-hour index at a time.
                 for (
@@ -202,7 +208,7 @@ namespace Core {
                                     const std::size_t segmentSize = end - segmentOffset;
 
                                     // A segment must contain at least one complete
-                                    // 30-record search window to contribute statistics.
+                                    // One complete configured search window contributes statistics.
                                     if (segmentSize >= SEARCH_WINDOW_LENGTH) {
                                         std::span<const Core::MLRecord> segment(
                                             allRecords.data() + segmentOffset,

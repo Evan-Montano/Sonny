@@ -7,6 +7,7 @@
 #include "../core/transformer.hpp"
 #include "common/datetime.hpp"
 #include "core/engine.hpp"
+#include "core/inputconfig.hpp"
 #include "core/structures.hpp"
 #include "../common/storage.hpp"
 #include "predictionanalytics.hpp"
@@ -89,11 +90,15 @@ namespace Runtime {
         );
     }
 
-    bool HalfHourIndexFilesExist(const std::size_t segment) {
+    bool HalfHourIndexFilesExist(
+        const std::size_t segment,
+        const std::size_t inputWindowSeconds
+    ) {
         const std::string name = GetHalfHourIndexName(segment);
-        const auto indexPath = Common::Storage::INDEXES_BASE_PATH / (name + ".index");
-        const auto metadataPath = Common::Storage::METADATA_BASE_PATH / (name + ".meta");
-        const auto normalizationPath = Common::Storage::METADATA_BASE_PATH / (name + ".normalization.json");
+        const std::filesystem::path windowDirectory = std::format("{}s", inputWindowSeconds);
+        const auto indexPath = Common::Storage::INDEXES_BASE_PATH / windowDirectory / (name + ".index");
+        const auto metadataPath = Common::Storage::METADATA_BASE_PATH / windowDirectory / (name + ".meta");
+        const auto normalizationPath = Common::Storage::METADATA_BASE_PATH / windowDirectory / (name + ".normalization.json");
 
         // HalfHourIndex creates an empty index when its file is missing. Avoid
         // accidentally creating/saving an empty index during live prediction.
@@ -149,7 +154,7 @@ namespace Runtime {
                         : "--:--:--";
 
                     std::string queueBar = "[";
-                    for (std::size_t i = 0; i < 30; ++i) {
+                    for (std::size_t i = 0; i < Core::MAX_INPUT_WINDOW_SECONDS; ++i) {
                         queueBar += i < quoteViewState.queue_size ? "█" : "·";
                     }
                     queueBar += "]";
@@ -224,7 +229,7 @@ namespace Runtime {
                         ftxui::vbox({
                             ftxui::text(std::format("Last 1s Δ   {}", deltaText)) | ftxui::color(deltaColor) | ftxui::bold,
                             ftxui::text(std::format("Session Δ  {}", sessionText)) | ftxui::color(sessionColor),
-                            ftxui::text(std::format("Last 30s Δ {}  ({} obs)", rollingText, quoteViewState.recent_deltas.size())) | ftxui::color(rollingColor),
+                            ftxui::text(std::format("Last {}s Δ {}  ({} obs)", Core::MAX_INPUT_WINDOW_SECONDS, rollingText, quoteViewState.recent_deltas.size())) | ftxui::color(rollingColor),
                             ftxui::text("Green = up   Red = down") | ftxui::color(ftxui::Color::GrayDark)
                         })
                     ) | ftxui::flex;
@@ -257,7 +262,7 @@ namespace Runtime {
                                 ftxui::text("ROLLING INPUT QUEUE") | ftxui::bold,
                                 ftxui::vbox({
                                     ftxui::text(queueBar),
-                                    ftxui::text(std::format("{} / 30 one-second records ready for prediction", quoteViewState.queue_size)),
+                                    ftxui::text(std::format("{} / {} one-second records ready for comparison", quoteViewState.queue_size, Core::MAX_INPUT_WINDOW_SECONDS)),
                                     ftxui::text("Press Escape to return to the menu.") | ftxui::color(ftxui::Color::GrayDark)
                                 })
                             )
@@ -280,7 +285,7 @@ namespace Runtime {
         // 1. Read, parse, and queue incoming quote ticks (separate thread to update UI quote stream display)
         // 2. Building one-second quote records
         // 3. Normalizing one-second quote records
-        // 4. When >= 30 size vector is built and normalized, pass as a query vector into the appropriate HalfHourIndex
+        // 4. When the configured input window is full, normalize it and query the appropriate HalfHourIndex.
         // 5. Get results from the index query and pass into separate function for historical record lookup.
         // 6. Get results from historical lookup and calculate futures.
         // 7. Update futures display on UI.
@@ -291,11 +296,30 @@ namespace Runtime {
             bool observed = true;
         };
 
-        PredictionAnalytics predictionAnalytics;
+        constexpr std::array<std::size_t, 3> PREDICTION_MATCH_COUNTS{
+            8, 16, 32
+        };
+        constexpr std::size_t MAX_PREDICTION_MATCHES =
+            PREDICTION_MATCH_COUNTS.back();
+        using MatchPredictionAnalytics =
+            std::array<PredictionAnalytics, PREDICTION_MATCH_COUNTS.size()>;
+        std::array<MatchPredictionAnalytics, Core::INPUT_WINDOW_CONFIGURATIONS.size()> predictionAnalytics{};
 
-        auto LogEvaluationReports = [](std::vector<PredictionEvaluationReport> reports) {
+        auto LogEvaluationReports = [](
+            std::vector<PredictionEvaluationReport> reports,
+            const std::size_t inputWindowSeconds,
+            const std::size_t matchCount
+        ) {
             for (const PredictionEvaluationReport& report : reports) {
-                Logger::Info(PredictionAnalytics::FormatReport(report), true);
+                Logger::Info(
+                    std::format(
+                        "{}s input / {}-match cap\n{}",
+                        inputWindowSeconds,
+                        matchCount,
+                        PredictionAnalytics::FormatReport(report)
+                    ),
+                    true
+                );
             }
         };
 
@@ -321,16 +345,21 @@ namespace Runtime {
             const double mid_delta = record.record.mid_delta;
             const bool observed = record.observed;
 
-            LogEvaluationReports(
-                predictionAnalytics.ObserveRecord(timestamp_ms, mid_delta, observed)
-            );
+            for (std::size_t i = 0; i < predictionAnalytics.size(); ++i) {
+                for (std::size_t j = 0; j < predictionAnalytics[i].size(); ++j) {
+                    LogEvaluationReports(
+                        predictionAnalytics[i][j].ObserveRecord(timestamp_ms, mid_delta, observed),
+                        Core::INPUT_WINDOW_CONFIGURATIONS[i],
+                        PREDICTION_MATCH_COUNTS[j]
+                    );
+                }
+            }
 
             std::size_t queueSize = 0;
             {
                 std::lock_guard<std::mutex> lock(m_quote);
 
-                if (quoteQueue.size() >= 30) quoteQueue.pop_front();
-                quoteQueue.push_back(std::move(record));
+                Core::AppendInputWindowRecord(quoteQueue, std::move(record));
                 ++quoteQueueRevision;
                 queueSize = quoteQueue.size();
             }
@@ -344,7 +373,8 @@ namespace Runtime {
 
                     const std::int64_t second = timestamp_ms / 1000;
                     while (quoteViewState.recent_deltas.empty() == false &&
-                        second - quoteViewState.recent_deltas.front().first >= 30) {
+                        second - quoteViewState.recent_deltas.front().first >=
+                            static_cast<std::int64_t>(Core::MAX_INPUT_WINDOW_SECONDS)) {
                         quoteViewState.recent_deltas.pop_front();
                     }
                     quoteViewState.recent_deltas.emplace_back(second, mid_delta);
@@ -490,7 +520,7 @@ namespace Runtime {
         // The loop is going to be (either periodically or for every single iteration in the loop) 
         // checking if a new index should be loaded in based on the same metric.
 
-        // Checks under a mutex to make sure that the quoteQueue has 30 elements. It can have less, but will never have more.
+        // Checks under a mutex to make sure that quoteQueue has the configured number of records.
 
         // If the above condition passes, we save a snapshot of the MLRecord quoteQueue into a vector.
         // At this stage we release the lock on the queue mutex so we can process without blocking the data stream.
@@ -503,11 +533,9 @@ namespace Runtime {
 
         std::uint64_t lastProcessedRevision = 0;
         std::optional<std::size_t> activeSegment{};
-        std::unique_ptr<Core::HalfHourIndex> activeIndex{};
+        std::array<std::unique_ptr<Core::HalfHourIndex>, Core::INPUT_WINDOW_CONFIGURATIONS.size()> activeIndexes{};
 
-        constexpr std::size_t INPUT_WINDOW_LENGTH = 30;
         constexpr std::size_t PREDICTION_HORIZON = 30;
-        constexpr std::size_t MAX_PREDICTION_MATCHES = 32;
         constexpr std::size_t MAX_CACHED_RECORD_FILES = 128;
 
         std::unordered_map<std::string, std::vector<Core::MLRecord>> historicalRecordCache{};
@@ -578,19 +606,188 @@ namespace Runtime {
 
             file.close();
 
-            Logger::Info(
-                std::format(
-                    "Loaded {} historical records from {}",
-                    records.size(),
-                    recordPath.filename().string()
-                ),
-                true
-            );
-
             return historicalRecordCache.emplace(
                 date,
                 std::move(records)
             ).first->second;
+        };
+
+        auto RunInputWindowPrediction = [&](
+            const std::size_t inputWindowSeconds,
+            Core::HalfHourIndex& index,
+            const std::span<const Core::MLRecord> queryWindow,
+            const std::int64_t queryTimestampMs,
+            MatchPredictionAnalytics& analytics
+        ) {
+            std::array<std::optional<PredictionForecast>, PREDICTION_MATCH_COUNTS.size()> forecasts{};
+
+            Logger::Info(
+                std::format(
+                    "Starting {}s input comparison at {}",
+                    inputWindowSeconds,
+                    Common::DateTime::GetCurrentDateTime().ToString_Time()
+                ),
+                true
+            );
+
+            const std::vector<float> queryVector = index.NormalizeQuery(queryWindow);
+            const std::vector<Core::HalfHourIndex::QueryResult> queryResults =
+                index.Query(queryVector, MAX_QUERY_RESULTS);
+
+            if (queryResults.empty()) return forecasts;
+
+            struct HistoricalFuture {
+                double weight;
+                std::array<Core::MLRecord, PREDICTION_HORIZON> records;
+            };
+
+            std::vector<HistoricalFuture> historicalFutures{};
+            historicalFutures.reserve(MAX_PREDICTION_MATCHES);
+
+            constexpr double DISTANCE_EPSILON = 1e-6;
+
+            for (const Core::HalfHourIndex::QueryResult& result : queryResults) {
+                if (historicalFutures.size() >= MAX_PREDICTION_MATCHES) break;
+
+                Logger::Info(
+                    std::format(
+                        "{}s input: distance from query vector: {}",
+                        inputWindowSeconds,
+                        result.distance
+                    )
+                );
+
+                if (std::isfinite(result.distance) == false || result.distance < 0.0f) {
+                    continue;
+                }
+
+                const std::vector<Core::MLRecord>& historicalRecords =
+                    LoadHistoricalRecords(result.tradingDayId);
+
+                const std::size_t futureStart = Core::HistoricalFutureStart(
+                    static_cast<std::size_t>(result.recordIndex),
+                    inputWindowSeconds
+                );
+
+                if (futureStart > historicalRecords.size() ||
+                    PREDICTION_HORIZON > historicalRecords.size() - futureStart) {
+                    continue;
+                }
+
+                HistoricalFuture future{};
+                constexpr double DISTANCE_POWER = 2.0;
+                future.weight = 1.0 / std::pow(
+                    static_cast<double>(result.distance) + DISTANCE_EPSILON,
+                    DISTANCE_POWER
+                );
+
+                for (std::size_t i = 0; i < PREDICTION_HORIZON; ++i) {
+                    future.records[i] = historicalRecords[futureStart + i];
+                }
+
+                historicalFutures.push_back(std::move(future));
+            }
+
+            if (historicalFutures.empty()) {
+                Logger::Warning(std::format(
+                    "{}s input: no historical matches had sufficient future records.",
+                    inputWindowSeconds
+                ));
+                return forecasts;
+            }
+
+            for (std::size_t matchIndex = 0;
+                 matchIndex < PREDICTION_MATCH_COUNTS.size();
+                 ++matchIndex) {
+                const std::size_t matchLimit = PREDICTION_MATCH_COUNTS[matchIndex];
+                const std::size_t selectedMatchCount = std::min(
+                    matchLimit,
+                    historicalFutures.size()
+                );
+
+                std::array<double, PREDICTION_HORIZON> expectedMidDelta{};
+                std::array<double, PREDICTION_HORIZON> meanAbsoluteCumulativeMidDelta{};
+                double totalWeight = 0.0;
+                double squaredWeightTotal = 0.0;
+
+                for (std::size_t match = 0; match < selectedMatchCount; ++match) {
+                    const HistoricalFuture& future = historicalFutures[match];
+                    totalWeight += future.weight;
+                    squaredWeightTotal += future.weight * future.weight;
+
+                    double historicalCumulativeDelta = 0.0;
+                    for (std::size_t i = 0; i < PREDICTION_HORIZON; ++i) {
+                        const double secondDelta = future.records[i].mid_delta;
+                        historicalCumulativeDelta += secondDelta;
+                        expectedMidDelta[i] += future.weight * secondDelta;
+                        meanAbsoluteCumulativeMidDelta[i] +=
+                            future.weight * std::abs(historicalCumulativeDelta);
+                    }
+                }
+
+                const double effectiveMatches = squaredWeightTotal > 0.0
+                    ? (totalWeight * totalWeight) / squaredWeightTotal
+                    : 0.0;
+                Logger::Info(std::format(
+                    "{}s input / {}-match cap: using {} valid matches, {:.2f} effective matches",
+                    inputWindowSeconds,
+                    matchLimit,
+                    selectedMatchCount,
+                    effectiveMatches
+                ));
+
+                for (std::size_t i = 0; i < PREDICTION_HORIZON; ++i) {
+                    expectedMidDelta[i] /= totalWeight;
+                    meanAbsoluteCumulativeMidDelta[i] /= totalWeight;
+                }
+
+                std::array<double, PREDICTION_HORIZON> expectedCumulativeMidDelta{};
+                double cumulativeDelta = 0.0;
+                for (std::size_t i = 0; i < PREDICTION_HORIZON; ++i) {
+                    cumulativeDelta += expectedMidDelta[i];
+                    expectedCumulativeMidDelta[i] = cumulativeDelta;
+                }
+
+                std::array<double, PredictionEvaluationHorizons.size()> expectedChanges{};
+                for (std::size_t i = 0; i < PredictionEvaluationHorizons.size(); ++i) {
+                    expectedChanges[i] =
+                        expectedCumulativeMidDelta[PredictionEvaluationHorizons[i] - 1];
+                }
+
+                for (const std::size_t horizon : PredictionEvaluationHorizons) {
+                    const double forecast = expectedCumulativeMidDelta[horizon - 1];
+                    const double meanAbsoluteMove = meanAbsoluteCumulativeMidDelta[horizon - 1];
+                    const double directionalConcentration = meanAbsoluteMove > 0.0
+                        ? std::abs(forecast) / meanAbsoluteMove
+                        : 0.0;
+
+                    Logger::Info(std::format(
+                        "{}s input / {}-match cap historical future {:>2}s: "
+                        "forecast=${:+.5f}, mean |move|=${:.5f}, concentration={:.3f}",
+                        inputWindowSeconds,
+                        matchLimit,
+                        horizon,
+                        forecast,
+                        meanAbsoluteMove,
+                        directionalConcentration
+                    ));
+                }
+
+                PredictionForecast forecast{
+                    .as_of_timestamp_ms = queryTimestampMs,
+                    .historical_matches = selectedMatchCount,
+                    .cumulative_changes = expectedChanges
+                };
+
+                LogEvaluationReports(
+                    analytics[matchIndex].SubmitForecast(forecast),
+                    inputWindowSeconds,
+                    matchLimit
+                );
+                forecasts[matchIndex] = forecast;
+            }
+
+            return forecasts;
         };
 
         while (this->Running.load()) {
@@ -601,7 +798,7 @@ namespace Runtime {
             {
                 std::lock_guard<std::mutex> lock(m_quote);
 
-                if (quoteQueue.size() == 30 && quoteQueueRevision != lastProcessedRevision) {
+                if (quoteQueue.size() == Core::MAX_INPUT_WINDOW_SECONDS && quoteQueueRevision != lastProcessedRevision) {
                     queryRecords.reserve(quoteQueue.size());
 
                     for (const QueuedMLRecord &queuedRecord : quoteQueue) {
@@ -613,193 +810,103 @@ namespace Runtime {
                 }
             }
 
-            if (queryRecords.size() == 30) {
+            if (queryRecords.size() == Core::MAX_INPUT_WINDOW_SECONDS) {
                 const std::optional<std::size_t> secondsSinceOpen = GetSecondsSinceMarketOpen(queryTimestampMs);
 
                 if (secondsSinceOpen.has_value()) {
                     const std::size_t segment = *secondsSinceOpen / SECONDS_PER_HALF_HOUR;
 
-                    // Load a new index only when the live quote enters another half-hour segment.
                     if (activeSegment != segment) {
-                        activeIndex.reset();
+                        for (std::unique_ptr<Core::HalfHourIndex>& index : activeIndexes) {
+                            index.reset();
+                        }
                         activeSegment = segment;
 
-                        if (HalfHourIndexFilesExist(segment)) {
-                            activeIndex = std::make_unique<Core::HalfHourIndex>(*secondsSinceOpen);
-                        }
-                    }
+                        for (std::size_t i = 0; i < activeIndexes.size(); ++i) {
+                            const std::size_t inputWindowSeconds =
+                                Core::INPUT_WINDOW_CONFIGURATIONS[i];
 
-                    if (activeIndex != nullptr) {
-
-                        Logger::Info(
-                            std::format(
-                                "Starting prediction at: {}",
-                                Common::DateTime::GetCurrentDateTime().ToString_Time()
-                            ),
-                            true
-                        );
-
-                        // ======================================== //
-                        // STEP 1: NORMALIZE AND QUERY FAISS
-                        // ======================================== //
-
-                        const std::vector<float> queryVector = activeIndex->NormalizeQuery(queryRecords);
-
-                        const std::vector<Core::HalfHourIndex::QueryResult> queryResults =
-                            activeIndex->Query(queryVector, MAX_QUERY_RESULTS);
-
-                        if (queryResults.empty() == false) {
-
-                            // ======================================== //
-                            // STEP 2: RETRIEVE HISTORICAL FUTURES
-                            // ======================================== //
-
-                            struct HistoricalFuture {
-                                double weight;
-                                std::array<Core::MLRecord, PREDICTION_HORIZON> records;
-                            };
-
-                            std::vector<HistoricalFuture> historicalFutures{};
-                            historicalFutures.reserve(MAX_PREDICTION_MATCHES);
-
-                            constexpr double DISTANCE_EPSILON = 1e-6;
-
-                            // Query results are ordered from nearest to furthest.
-                            // Select the first 32 matches with valid future records.
-
-                            Logger::Info(
-                                std::format(
-                                    "Closest distance from query: {}",
-                                    queryResults.front().distance                                )
-                            );  
-
-                            for (const Core::HalfHourIndex::QueryResult& result : queryResults) {
-
-                                if (historicalFutures.size() > MAX_PREDICTION_MATCHES) {
-                                    break;
-                                }
-
-                                if (std::isfinite(result.distance) == false ||
-                                    result.distance < 0.0f) {
-                                    continue;
-                                }
-
-                                // Load the original, unnormalized records for this trading day.
-                                const std::vector<Core::MLRecord> &historicalRecords = LoadHistoricalRecords(result.tradingDayId);
-
-                                // The matched pattern occupies:
-                                // recordIndex ... recordIndex + 29
-                                //
-                                // Its future begins immediately afterward.
-                                const std::size_t futureStart = 
-                                    static_cast<std::size_t>(result.recordIndex) +
-                                    INPUT_WINDOW_LENGTH;
-
-                                // Ensure the complete prediction horizon exists.
-                                if (futureStart > historicalRecords.size() ||
-                                    PREDICTION_HORIZON >
-                                        historicalRecords.size() - futureStart) {
-                                    continue;
-                                }
-
-                                HistoricalFuture future{};
-
-                                // Inverse-distance weighting.
-                                constexpr double DISTANCE_POWER = 2.0;
-
-                                future.weight = 
-                                    1.0 / std::pow(
-                                        static_cast<double>(result.distance) + DISTANCE_EPSILON,
-                                        DISTANCE_POWER
-                                    );
-
-                                // Copy the next 30 original MLRecords.
-                                for (std::size_t i = 0; i < PREDICTION_HORIZON; ++i) {
-                                    future.records[i] = historicalRecords[futureStart + i];
-                                }
-
-                                historicalFutures.push_back(std::move(future));
-                            }
-
-                            // ======================================== //
-                            // STEP 3: CALCULATE WEIGHTED FUTURES
-                            // ======================================== //
-
-                            if (historicalFutures.empty() == false) {
-
-                                std::array<double, PREDICTION_HORIZON> expectedMidDelta{};
-
-                                double totalWeight = 0.0;
-                                double squaredWeightTotal = 0.0;
-
-                                // Calculate the weighted average midpoint change
-                                // for each second in the prediction horizon.
-                                for (const HistoricalFuture& future : historicalFutures) {
-
-                                    totalWeight += future.weight;
-                                    squaredWeightTotal += future.weight * future.weight;
-
-                                    for (std::size_t i = 0; i < PREDICTION_HORIZON; ++i) {
-                                        expectedMidDelta[i] +=
-                                            future.weight * future.records[i].mid_delta;
-                                    }
-                                }
-
-                                const double effectiveMatches =
-                                    squaredWeightTotal > 0.0
-                                        ? (totalWeight * totalWeight) / squaredWeightTotal
-                                        : 0.0;
-
-                                Logger::Info(
-                                    std::format(
-                                        "Prediction weighting: {} matches, {:.2f} effective matches",
-                                        historicalFutures.size(),
-                                        effectiveMatches
-                                    )
+                            if (HalfHourIndexFilesExist(segment, inputWindowSeconds)) {
+                                activeIndexes[i] = std::make_unique<Core::HalfHourIndex>(
+                                    *secondsSinceOpen,
+                                    inputWindowSeconds
                                 );
-
-                                // Normalize the weighted averages.
-                                for (double &delta : expectedMidDelta) {
-                                    delta /= totalWeight;
-                                }
-
-                                // ======================================== //
-                                // STEP 4: CALCULATE CUMULATIVE FUTURES
-                                // ======================================== //
-
-                                std::array<double, PREDICTION_HORIZON> expectedCumulativeMidDelta{};
-
-                                double cumulativeDelta = 0.0;
-
-                                for (std::size_t i = 0; i < PREDICTION_HORIZON; ++i) {
-
-                                    cumulativeDelta += expectedMidDelta[i];
-
-                                    expectedCumulativeMidDelta[i] = cumulativeDelta;
-                                }
-
-                                // ======================================== //
-                                // STEP 5: EXTRACT FORECAST HORIZONS
-                                // ======================================== //
-
-                                std::array<double, PredictionEvaluationHorizons.size()> expectedChanges{};
-                                for (std::size_t i = 0; i < PredictionEvaluationHorizons.size(); ++i) {
-                                    expectedChanges[i] = expectedCumulativeMidDelta[PredictionEvaluationHorizons[i] - 1];
-                                }
-
-                                LogEvaluationReports(predictionAnalytics.SubmitForecast({
-                                    .as_of_timestamp_ms = queryTimestampMs,
-                                    .historical_matches = historicalFutures.size(),
-                                    .cumulative_changes = expectedChanges
-                                }));
                             }
                             else {
-                                Logger::Warning(
-                                    "No historical matches had sufficient future records."
+                                Logger::Warning(std::format(
+                                    "No complete index artifacts found for the {}s input window.",
+                                    inputWindowSeconds
+                                ));
+                            }
+                        }
+                    }
+
+                    std::array<
+                        std::array<std::optional<PredictionForecast>, PREDICTION_MATCH_COUNTS.size()>,
+                        Core::INPUT_WINDOW_CONFIGURATIONS.size()
+                    > pairedForecasts{};
+
+                    for (std::size_t i = 0; i < activeIndexes.size(); ++i) {
+                        if (activeIndexes[i] == nullptr) continue;
+
+                        const std::size_t inputWindowSeconds =
+                            Core::INPUT_WINDOW_CONFIGURATIONS[i];
+                        const std::span<const Core::MLRecord> queryWindow =
+                            Core::LatestInputWindow(
+                                std::span<const Core::MLRecord>(queryRecords),
+                                inputWindowSeconds
+                        );
+
+                        pairedForecasts[i] = RunInputWindowPrediction(
+                            inputWindowSeconds,
+                            *activeIndexes[i],
+                            queryWindow,
+                            queryTimestampMs,
+                            predictionAnalytics[i]
+                        );
+                    }
+
+                    std::string comparison = std::format(
+                        "Paired forecasts @{} (same live snapshot; next 30 seconds)",
+                        Common::DateTime(static_cast<Common::UnixTimestamp>(queryTimestampMs / 1000)).ToString_Time()
+                    );
+
+                    for (std::size_t i = 0; i < pairedForecasts.size(); ++i) {
+                        const std::size_t inputWindowSeconds =
+                            Core::INPUT_WINDOW_CONFIGURATIONS[i];
+                        for (std::size_t matchIndex = 0;
+                             matchIndex < pairedForecasts[i].size();
+                             ++matchIndex) {
+                            const std::size_t matchLimit = PREDICTION_MATCH_COUNTS[matchIndex];
+                            comparison += std::format(
+                                "\n{}s input / {}-match cap",
+                                inputWindowSeconds,
+                                matchLimit
+                            );
+
+                            if (pairedForecasts[i][matchIndex].has_value() == false) {
+                                comparison += " | unavailable";
+                                continue;
+                            }
+
+                            comparison += std::format(
+                                " | {} matches",
+                                pairedForecasts[i][matchIndex]->historical_matches
+                            );
+
+                            for (std::size_t horizonIndex = 0;
+                                 horizonIndex < PredictionEvaluationHorizons.size();
+                                 ++horizonIndex) {
+                                comparison += std::format(
+                                    " | {:>2}s ${:+.5f}",
+                                    PredictionEvaluationHorizons[horizonIndex],
+                                    pairedForecasts[i][matchIndex]->cumulative_changes[horizonIndex]
                                 );
                             }
                         }
                     }
+
+                    Logger::Info(comparison, true);
                 }
             }
 
@@ -808,7 +915,15 @@ namespace Runtime {
         // ========== END PREDICTION LOOP ========== //
 
         this->QuoteClient.Stop();
-        LogEvaluationReports(predictionAnalytics.FlushIncomplete());
+        for (std::size_t i = 0; i < predictionAnalytics.size(); ++i) {
+            for (std::size_t j = 0; j < predictionAnalytics[i].size(); ++j) {
+                LogEvaluationReports(
+                    predictionAnalytics[i][j].FlushIncomplete(),
+                    Core::INPUT_WINDOW_CONFIGURATIONS[i],
+                    PREDICTION_MATCH_COUNTS[j]
+                );
+            }
+        }
     }
 
     // ========== END ORCHESTRATOR IMPLEMENTATION ========== //
