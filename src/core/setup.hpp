@@ -12,13 +12,13 @@ namespace Core {
          * @brief Begin date for export data.
          * 
          */
-        const Common::DateTime BEGIN_DATE(2017, Common::FEB, 16);
+        const Common::DateTime BEGIN_DATE(2017, Common::FEB, 17);
 
         /**
          * @brief End date for export data.
          * 
          */
-        const Common::DateTime END_DATE(2017, Common::MAR, 5);
+        const Common::DateTime END_DATE(2026, Common::NOV, 3);
 
         /**
         * @brief Total number of calendar days in the configured setup range.

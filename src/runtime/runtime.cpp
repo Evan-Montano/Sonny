@@ -57,11 +57,17 @@ namespace Runtime {
 
         const std::int64_t secondsSinceMidnight = duration_cast<seconds>(localTime - localDay).count();
 
-        // Outside regular trading hours.
-        if (secondsSinceMidnight < MARKET_OPEN_SECONDS ||
-            secondsSinceMidnight >= MARKET_CLOSE_SECONDS)
-        {
+        // Keep pre-market quotes out of the prediction path, but use the final
+        // regular-session index for after-hours quotes. The returned offset is
+        // clamped to the last second before close so it resolves to 15:30-16:00.
+        if (secondsSinceMidnight < MARKET_OPEN_SECONDS) {
             return std::nullopt;
+        }
+
+        if (secondsSinceMidnight >= MARKET_CLOSE_SECONDS) {
+            return static_cast<std::size_t>(
+                MARKET_CLOSE_SECONDS - MARKET_OPEN_SECONDS - 1
+            );
         }
 
         return static_cast<std::size_t>(
@@ -660,9 +666,16 @@ namespace Runtime {
 
                             // Query results are ordered from nearest to furthest.
                             // Select the first 32 matches with valid future records.
+
+                            Logger::Info(
+                                std::format(
+                                    "Closest distance from query: {}",
+                                    queryResults.front().distance                                )
+                            );  
+
                             for (const Core::HalfHourIndex::QueryResult& result : queryResults) {
 
-                                if (historicalFutures.size() >= MAX_PREDICTION_MATCHES) {
+                                if (historicalFutures.size() > MAX_PREDICTION_MATCHES) {
                                     break;
                                 }
 
@@ -692,9 +705,13 @@ namespace Runtime {
                                 HistoricalFuture future{};
 
                                 // Inverse-distance weighting.
-                                future.weight =
-                                    1.0 / (static_cast<double>(result.distance) +
-                                        DISTANCE_EPSILON);
+                                constexpr double DISTANCE_POWER = 2.0;
+
+                                future.weight = 
+                                    1.0 / std::pow(
+                                        static_cast<double>(result.distance) + DISTANCE_EPSILON,
+                                        DISTANCE_POWER
+                                    );
 
                                 // Copy the next 30 original MLRecords.
                                 for (std::size_t i = 0; i < PREDICTION_HORIZON; ++i) {
@@ -713,18 +730,33 @@ namespace Runtime {
                                 std::array<double, PREDICTION_HORIZON> expectedMidDelta{};
 
                                 double totalWeight = 0.0;
+                                double squaredWeightTotal = 0.0;
 
                                 // Calculate the weighted average midpoint change
                                 // for each second in the prediction horizon.
                                 for (const HistoricalFuture& future : historicalFutures) {
 
                                     totalWeight += future.weight;
+                                    squaredWeightTotal += future.weight * future.weight;
 
                                     for (std::size_t i = 0; i < PREDICTION_HORIZON; ++i) {
                                         expectedMidDelta[i] +=
                                             future.weight * future.records[i].mid_delta;
                                     }
                                 }
+
+                                const double effectiveMatches =
+                                    squaredWeightTotal > 0.0
+                                        ? (totalWeight * totalWeight) / squaredWeightTotal
+                                        : 0.0;
+
+                                Logger::Info(
+                                    std::format(
+                                        "Prediction weighting: {} matches, {:.2f} effective matches",
+                                        historicalFutures.size(),
+                                        effectiveMatches
+                                    )
+                                );
 
                                 // Normalize the weighted averages.
                                 for (double &delta : expectedMidDelta) {
