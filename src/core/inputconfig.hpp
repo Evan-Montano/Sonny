@@ -16,8 +16,8 @@ namespace Core {
      * @brief Every input-window length (in seconds) the runtime compares side by side.
      * Each length has its own set of indexes under storage/indexes/<N>s/.
      */
-    inline constexpr std::array<std::size_t, 4> INPUT_WINDOW_CONFIGURATIONS{
-        10, 15, 20, 30
+    inline constexpr std::array<std::size_t, 6> INPUT_WINDOW_CONFIGURATIONS{
+        10, 15, 20, 30, 45, 60
     };
 
     /**
@@ -28,9 +28,8 @@ namespace Core {
         INPUT_WINDOW_CONFIGURATIONS.back();
 
     /**
-     * @brief The window length that "Update Indexes" builds, and the HalfHourIndex default.
-     * To build indexes for another configuration, change this value and rerun Update Indexes;
-     * existing indexes for other window lengths are left untouched.
+     * @brief Default window length for HalfHourIndex constructors that omit a size.
+     * "Update Indexes" builds every entry in INPUT_WINDOW_CONFIGURATIONS.
      */
     inline constexpr std::size_t INPUT_WINDOW_SECONDS = 30;
 
@@ -44,7 +43,7 @@ namespace Core {
 
     static_assert(
         IsSupportedInputWindow(INPUT_WINDOW_SECONDS),
-        "INPUT_WINDOW_SECONDS must be 10, 15, 20, or 30."
+        "INPUT_WINDOW_SECONDS must be 30, 45, or 60."
     );
 
     /**

@@ -185,10 +185,9 @@ TEST_F(HalfHourIndex_Test, CheckedInFixturesExist) {
 }
 
 TEST_F(HalfHourIndex_Test, InputWindowDimensionsMatchSupportedConfigurations) {
-    static_assert(Core::InputVectorDimension(10) == 20);
-    static_assert(Core::InputVectorDimension(15) == 30);
-    static_assert(Core::InputVectorDimension(20) == 40);
     static_assert(Core::InputVectorDimension(30) == 60);
+    static_assert(Core::InputVectorDimension(45) == 90);
+    static_assert(Core::InputVectorDimension(60) == 120);
 
     EXPECT_EQ(IndexDimension(), QUERY_DIMENSION);
     EXPECT_EQ(CurrentIndexPath().parent_path().filename(),
@@ -300,7 +299,7 @@ TEST_F(HalfHourIndex_Test, EmptyIndexReturnsNoResults) {
     EXPECT_TRUE(results.empty());
 }
 
-// Queries must contain exactly 60 floats.
+// Queries must contain exactly the dimension configured for this index.
 TEST_F(HalfHourIndex_Test, QueryRejectsIncorrectDimension) {
     const std::vector<float> query(QUERY_DIMENSION - 1, 0.0F);
 
@@ -310,7 +309,7 @@ TEST_F(HalfHourIndex_Test, QueryRejectsIncorrectDimension) {
     );
 }
 
-// Query normalization requires exactly 30 MLRecords.
+// Query normalization requires exactly one configured input window.
 TEST_F(HalfHourIndex_Test, NormalizeQueryRejectsIncorrectRecordCount) {
     const auto records = MakeRecords(WINDOW_LENGTH - 1);
 
@@ -507,7 +506,7 @@ TEST_F(HalfHourIndex_Test, RejectsNormalizationFromAnotherInputWindow) {
     const std::size_t configuredWindowPosition = normalizationJson.find(configuredWindow);
     ASSERT_NE(configuredWindowPosition, std::string::npos);
 
-    const std::size_t incompatibleWindow = Core::INPUT_WINDOW_SECONDS == 10 ? 15 : 10;
+    const std::size_t incompatibleWindow = 10;
     normalizationJson.replace(
         configuredWindowPosition,
         configuredWindow.size(),

@@ -107,7 +107,7 @@ FAISS is kept inside the Sonny directory as a normal Git repository. It is **not
 ```bash
 cd ~/Sonny
 
-git clone https://github.com/facebookresearch/faiss.git faiss
+git clone --depth 1 https://github.com/facebookresearch/faiss.git faiss
 ```
 
 The resulting layout is:
@@ -168,8 +168,7 @@ Unlike FAISS, Protobuf's source, build artifacts, and installation are all kept 
 ```bash
 cd ~/Sonny
 
-git clone --depth 1 --branch v36.2 \
-    https://github.com/protocolbuffers/protobuf.git protobuf
+git clone --depth 1 https://github.com/protocolbuffers/protobuf.git protobuf
 ```
 
 ### Configure Protobuf
