@@ -1,6 +1,23 @@
-Need to update readme build instructions:
-- Add npm as a dependency
-- npm init -y
-- npm install playwright
-- npx playwright install chromium
-- For the build instructions I think we just need to do npm install since I've already got the package-lock files.
+I am going to be updating the indexes as there is a flaw in the current method. Currently, we use a single index.
+The vectors in this index are described by one-second updates in the order book stream.
+Each one-second order book aggregate contains three items:
+1. Mid price delta (signed for going up or down)
+2. Spread delta (between bid/ask)
+3. Volume
+
+My indexes currently use the first two like this: { mid_delta, spread_delta, mid_delta, spread_delta, [...] }.
+
+This is flawed because while making future predictions, the futures have a tendancy to disagree. The weighted averages of those futures
+often average out. This causes the future deltas to consistently under-report the magnitude of the coming changes. And since the
+direction of the movement is coupled with the magnitude, it too cannot be reliably predicted. (The best we got was around 51-56% accuracy).
+
+The future implementation is going to separate these two points into their own indexes and we are also going to predict them separately.
+The first is the magnitude index. We are going to drop the spread_delta and focus only on the mid_delta (midpoint between best bid/ask).
+Additionally, these deltas are going to be their absolute values. In this index, we are not going to be tracking direction, but just
+absolute price movement. When we perform future predictions later, this should theoretically solve the problem of under reporting magnitudes.
+
+The second index is going to be only for the direction with three values: -1.0, 0, 1.0 for down, neutral, or up. 
+It'll be interesting to see how accurate this one can become since there are only three possible values in a given sequence of size k vector.
+
+Using these two indexes together should hopefully produce more accurate futures, and dropping the spread_delta could reduce noise and focus on the metrics
+we actually care about right now.
