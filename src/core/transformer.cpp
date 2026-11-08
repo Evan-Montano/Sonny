@@ -2,8 +2,6 @@
 // Contains method implementations for things pertaining to data manipulation or normalization in bulk.
 
 #include "transformer.hpp"
-#include "common/datetime.hpp"
-#include "common/logger.hpp"
 
 #include <cmath>
 #include <limits>
@@ -38,9 +36,7 @@ namespace Core {
     }
 
     void NormalizationAccumulator::AddRecord(const MLRecord& record) {
-        const bool valid =
-            std::isfinite(record.mid_delta) &&
-            std::isfinite(record.spread_delta);
+        const bool valid = std::isfinite(record.mid_delta);
 
         if (valid == false) {
             throw std::invalid_argument(
@@ -49,8 +45,6 @@ namespace Core {
         }
 
         midDelta.Add(record.mid_delta);
-        spreadDelta.Add(record.spread_delta);
-        // volume.Add(std::log1p(static_cast<double>(record.volume)));
     }
 
     void NormalizationAccumulator::AddRecords(std::span<const MLRecord> records) {
@@ -70,13 +64,7 @@ namespace Core {
             .sample_count = midDelta.count,
 
             .mid_delta_mean = midDelta.mean,
-            .mid_delta_stddev = midDelta.PopulationStdDev(),
-
-            .spread_delta_mean = spreadDelta.mean,
-            .spread_delta_stddev = spreadDelta.PopulationStdDev(),
-
-            // .volume_mean = volume.mean,
-            // .volume_stddev = volume.PopulationStdDev()
+            .mid_delta_stddev = midDelta.PopulationStdDev()
         };
     }
 
@@ -90,10 +78,7 @@ namespace Core {
             parameters.sample_count > 0 &&
             std::isfinite(parameters.mid_delta_mean) &&
             std::isfinite(parameters.mid_delta_stddev) &&
-            std::isfinite(parameters.spread_delta_mean) &&
-            std::isfinite(parameters.spread_delta_stddev) &&
-            parameters.mid_delta_stddev >= 0.0 &&
-            parameters.spread_delta_stddev >= 0.0;
+            parameters.mid_delta_stddev >= 0.0;
 
         if (valid == false) {
             throw std::invalid_argument(
@@ -139,19 +124,8 @@ namespace Core {
                     parameters.mid_delta_mean,
                     parameters.mid_delta_stddev
                 ),
-
-                .spread_delta = NormalizeFeature(
-                    record.spread_delta,
-                    parameters.spread_delta_mean,
-                    parameters.spread_delta_stddev
-                ),
-
+                .spread_delta = record.spread_delta,
                 .volume = record.volume
-                // .volume = NormalizeFeature(
-                //     logVolume,
-                //     parameters.volume_mean,
-                //     parameters.volume_stddev
-                // )
             };
         }
 
@@ -178,8 +152,6 @@ namespace Core {
             );
 
             result.push_back(normalized.mid_delta);
-            result.push_back(normalized.spread_delta);
-            // result.push_back(normalized.volume);
         }
 
         return result;

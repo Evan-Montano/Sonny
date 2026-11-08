@@ -12,7 +12,8 @@ namespace Core {
          * @brief Begin date for export data.
          * 
          */
-        const Common::DateTime BEGIN_DATE(2017, Common::FEB, 17);
+        // const Common::DateTime BEGIN_DATE(2017, Common::FEB, 17);
+        const Common::DateTime BEGIN_DATE(2026, Common::NOV, 3);
 
         /**
          * @brief End date for export data.

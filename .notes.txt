@@ -21,3 +21,6 @@ It'll be interesting to see how accurate this one can become since there are onl
 
 Using these two indexes together should hopefully produce more accurate futures, and dropping the spread_delta could reduce noise and focus on the metrics
 we actually care about right now.
+
+Nov 8:
+I may or may not be able to use the existing HalfHourIndex class to represent both new indexes. An inheritance solution may exist.

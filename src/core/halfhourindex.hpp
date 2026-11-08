@@ -1,4 +1,4 @@
-// engine.hpp
+// halfhourindex.hpp
 // Class and method definitions for all things pertaining to the building and querying of market futures.
 
 #pragma once
@@ -50,7 +50,7 @@ namespace Core {
          * @brief Number of one-second records in each indexed window.
          * 
          */
-        std::size_t _inputWindowSeconds{INPUT_WINDOW_SECONDS};
+        std::size_t _inputWindowSeconds{DEFAULT_INPUT_WINDOW_SECONDS};
 
         /**
          * @brief Length of each FAISS vector (features per record × window length).
@@ -134,7 +134,7 @@ namespace Core {
          */
         static std::filesystem::path GetIndexPath(
             std::size_t numOfSeconds,
-            std::size_t inputWindowSeconds = INPUT_WINDOW_SECONDS
+            std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS
         );
 
         /**
@@ -145,7 +145,7 @@ namespace Core {
          */
         static std::filesystem::path GetMetadataPath(
             std::size_t numOfSeconds,
-            std::size_t inputWindowSeconds = INPUT_WINDOW_SECONDS
+            std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS
         );
 
         /**
@@ -190,7 +190,7 @@ namespace Core {
          */
         static std::filesystem::path GetNormalizationPath(
             std::size_t numOfSeconds,
-            std::size_t inputWindowSeconds = INPUT_WINDOW_SECONDS
+            std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS
         );
 
         /**
@@ -217,7 +217,7 @@ namespace Core {
         HalfHourIndex(
             const std::filesystem::path indexPath,
             const std::filesystem::path metadataPath,
-            std::size_t inputWindowSeconds = INPUT_WINDOW_SECONDS
+            std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS
         );
 
     public:

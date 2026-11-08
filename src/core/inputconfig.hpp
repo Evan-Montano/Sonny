@@ -24,14 +24,13 @@ namespace Core {
      * @brief Longest configured window. The live rolling window keeps this many records so
      * every shorter configuration can be cut from the same snapshot.
      */
-    inline constexpr std::size_t MAX_INPUT_WINDOW_SECONDS =
-        INPUT_WINDOW_CONFIGURATIONS.back();
+    inline constexpr std::size_t MAX_INPUT_WINDOW_SECONDS = INPUT_WINDOW_CONFIGURATIONS.back();
 
     /**
      * @brief Default window length for HalfHourIndex constructors that omit a size.
      * "Update Indexes" builds every entry in INPUT_WINDOW_CONFIGURATIONS.
      */
-    inline constexpr std::size_t INPUT_WINDOW_SECONDS = 30;
+    inline constexpr std::size_t DEFAULT_INPUT_WINDOW_SECONDS = 30;
 
     constexpr bool IsSupportedInputWindow(const std::size_t inputWindowSeconds) {
         for (const std::size_t configuredWindow : INPUT_WINDOW_CONFIGURATIONS) {
@@ -42,15 +41,15 @@ namespace Core {
     }
 
     static_assert(
-        IsSupportedInputWindow(INPUT_WINDOW_SECONDS),
-        "INPUT_WINDOW_SECONDS must be 30, 45, or 60."
+        IsSupportedInputWindow(DEFAULT_INPUT_WINDOW_SECONDS),
+        "INPUT_WINDOW_SECONDS must be 10, 15, 20, 30, 45, or 60."
     );
 
     /**
-     * @brief Number of floats in a FAISS vector: two features (mid_delta, spread_delta) per second.
+     * @brief Number of floats in a FAISS vector: one feature (mid_delta) per second.
      */
     constexpr std::size_t InputVectorDimension(const std::size_t inputWindowSeconds) {
-        return inputWindowSeconds * 2;
+        return inputWindowSeconds;
     }
 
     /**

@@ -27,12 +27,6 @@ namespace Core {
 
         double mid_delta_mean{};
         double mid_delta_stddev{};
-
-        double spread_delta_mean{};
-        double spread_delta_stddev{};
-
-        // double volume_mean{};
-        // double volume_stddev{};
     };
 
 }

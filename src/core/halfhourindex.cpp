@@ -1,7 +1,7 @@
-// engine.cpp
+// halfhourindex.cpp
 // Class and method implementations for all things pertaining to the building and querying of market futures.
 
-#include "engine.hpp"
+#include "halfhourindex.hpp"
 #include "../common/storage.hpp"
 #include "../common/logger.hpp"
 #include "transformer.hpp"
@@ -137,7 +137,7 @@ namespace Core {
     }
 
     HalfHourIndex::HalfHourIndex(const std::size_t& numOfSeconds)
-        : HalfHourIndex(numOfSeconds, INPUT_WINDOW_SECONDS) {}
+        : HalfHourIndex(numOfSeconds, DEFAULT_INPUT_WINDOW_SECONDS) {}
 
     HalfHourIndex::HalfHourIndex(
         const std::size_t& numOfSeconds,
@@ -428,10 +428,7 @@ namespace Core {
             .sample_count = json.Get<std::uint64_t>("sample_count"),
 
             .mid_delta_mean = json.Get<double>("mid_delta_mean"),
-            .mid_delta_stddev = json.Get<double>("mid_delta_stddev"),
-
-            .spread_delta_mean = json.Get<double>("spread_delta_mean"),
-            .spread_delta_stddev = json.Get<double>("spread_delta_stddev")
+            .mid_delta_stddev = json.Get<double>("mid_delta_stddev")
         };
 
         ValidateNormalizationParameters(parameters);
@@ -475,9 +472,6 @@ namespace Core {
 
         json.Set("mid_delta_mean", _normalizationParameters.mid_delta_mean);
         json.Set("mid_delta_stddev", _normalizationParameters.mid_delta_stddev);
-
-        json.Set("spread_delta_mean", _normalizationParameters.spread_delta_mean);
-        json.Set("spread_delta_stddev", _normalizationParameters.spread_delta_stddev);
 
         std::filesystem::create_directories(_normalizationPath.parent_path());
 

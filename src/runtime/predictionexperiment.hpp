@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "core/engine.hpp"
+#include "core/halfhourindex.hpp"
 #include "core/inputconfig.hpp"
 #include "forecast.hpp"
 #include "historicalrecordstore.hpp"

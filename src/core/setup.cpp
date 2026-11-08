@@ -5,7 +5,7 @@
 #include "../common/storage.hpp"
 #include "../dukascopy/dukascopy.hpp"
 #include "../common/logger.hpp"
-#include "engine.hpp"
+#include "halfhourindex.hpp"
 #include "transformer.hpp"
 #include "inputconfig.hpp"
 #include "../ui/ui.hpp"
@@ -162,11 +162,7 @@ namespace Core {
                     });
 
                     // Process one half-hour index at a time.
-                    for (
-                        std::size_t segmentIndex = 0;
-                        segmentIndex < TOTAL_SEGMENTS;
-                        ++segmentIndex
-                    ) {
+                    for (std::size_t segmentIndex = 0; segmentIndex < TOTAL_SEGMENTS; ++segmentIndex) {
                         const std::size_t segmentOffset = segmentIndex * RECORDS_PER_HALF_HOUR;
 
                         UI::Get().Update([&] {

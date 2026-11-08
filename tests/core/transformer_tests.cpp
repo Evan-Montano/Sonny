@@ -50,14 +50,14 @@ TEST(NormalizationTests, FlattensConfiguredWindowIntoPriceFeatures) {
     };
 
     const std::vector<Core::MLRecord> records(
-        Core::INPUT_WINDOW_SECONDS,
+        Core::DEFAULT_INPUT_WINDOW_SECONDS,
         Core::MLRecord{1.0f, 2.0f, 3.0f}
     );
 
     const std::vector<float> query =
         Core::NormalizeRecordsToVector(records, parameters);
 
-    ASSERT_EQ(query.size(), Core::InputVectorDimension(Core::INPUT_WINDOW_SECONDS));
+    ASSERT_EQ(query.size(), Core::InputVectorDimension(Core::DEFAULT_INPUT_WINDOW_SECONDS));
 
     EXPECT_FLOAT_EQ(query[0], 1.0f);
     EXPECT_FLOAT_EQ(query[1], 2.0f);

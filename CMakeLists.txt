@@ -83,7 +83,7 @@ target_link_libraries(sonny_common
 )
 
 add_library(sonny_core STATIC
-    src/core/engine.cpp
+    src/core/halfhourindex.cpp
     src/core/transformer.cpp
 )
 

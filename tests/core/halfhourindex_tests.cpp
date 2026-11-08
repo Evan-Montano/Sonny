@@ -1,5 +1,5 @@
 
-#include "core/engine.hpp"
+#include "core/halfhourindex.hpp"
 #include "core/transformer.hpp"
 
 #include <gtest/gtest.h>
@@ -20,7 +20,7 @@
 
 class HalfHourIndex_Test : public ::testing::Test {
 protected:
-    static constexpr std::size_t WINDOW_LENGTH = Core::INPUT_WINDOW_SECONDS;
+    static constexpr std::size_t WINDOW_LENGTH = Core::DEFAULT_INPUT_WINDOW_SECONDS;
     static constexpr std::size_t QUERY_DIMENSION = Core::InputVectorDimension(WINDOW_LENGTH);
 
     std::filesystem::path tempDirectory_;
@@ -191,9 +191,9 @@ TEST_F(HalfHourIndex_Test, InputWindowDimensionsMatchSupportedConfigurations) {
 
     EXPECT_EQ(IndexDimension(), QUERY_DIMENSION);
     EXPECT_EQ(CurrentIndexPath().parent_path().filename(),
-              std::format("{}s", Core::INPUT_WINDOW_SECONDS));
+              std::format("{}s", Core::DEFAULT_INPUT_WINDOW_SECONDS));
     EXPECT_EQ(CurrentNormalizationPath().parent_path().filename(),
-              std::format("{}s", Core::INPUT_WINDOW_SECONDS));
+              std::format("{}s", Core::DEFAULT_INPUT_WINDOW_SECONDS));
 }
 
 TEST_F(HalfHourIndex_Test, BuildsAndQueriesEveryInputWindowConfiguration) {
@@ -445,7 +445,7 @@ TEST_F(HalfHourIndex_Test, PersistsIndexMetadataAndNormalization) {
     );
     EXPECT_NE(
         normalizationJson.find(std::format(
-            "\"input_window_seconds\":{}", Core::INPUT_WINDOW_SECONDS)),
+            "\"input_window_seconds\":{}", Core::DEFAULT_INPUT_WINDOW_SECONDS)),
         std::string::npos
     );
 
@@ -501,7 +501,7 @@ TEST_F(HalfHourIndex_Test, RejectsNormalizationFromAnotherInputWindow) {
         std::istreambuf_iterator<char>()
     );
     const std::string configuredWindow = std::format(
-        "\"input_window_seconds\":{}", Core::INPUT_WINDOW_SECONDS
+        "\"input_window_seconds\":{}", Core::DEFAULT_INPUT_WINDOW_SECONDS
     );
     const std::size_t configuredWindowPosition = normalizationJson.find(configuredWindow);
     ASSERT_NE(configuredWindowPosition, std::string::npos);

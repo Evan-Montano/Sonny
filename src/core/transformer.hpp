@@ -32,8 +32,6 @@ namespace Core {
         };
 
         RunningStatistics midDelta{};
-        RunningStatistics spreadDelta{};
-        // RunningStatistics volume{};
 
     public:
         // METHODS
