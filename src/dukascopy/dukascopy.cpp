@@ -4,8 +4,6 @@
 
 // data into a binary format used by Sonny's ML architecture.
 
-
-
 #include "dukascopy.hpp"
 #include "../common/jsonutil.hpp"
 #include "../common/logger.hpp"
@@ -33,22 +31,30 @@
 #include <utility>
 #include <vector>
 
-
 namespace Dukascopy {
 
-
-
     inline static const std::string infoUrl =
-
         "https://jetta.dukascopy.com/v1/instruments/SPY.US-USD";
 
-
-
     inline static const std::string ticksUrlBase =
-
         "https://jetta.dukascopy.com/v1/ticks/SPY.US-USD/";
 
-
+    constexpr std::int64_t MILLISECONDS_PER_SECOND = 1000;
+    constexpr std::int64_t SECONDS_PER_MINUTE = 60;
+    constexpr std::int64_t MINUTES_PER_HOUR = 60;
+    constexpr std::int64_t HOURS_PER_DAY = 24;
+    constexpr std::int64_t SECONDS_PER_HOUR = SECONDS_PER_MINUTE * MINUTES_PER_HOUR;
+    constexpr std::int64_t MILLISECONDS_PER_MINUTE = SECONDS_PER_MINUTE * MILLISECONDS_PER_SECOND;
+    constexpr std::int64_t MILLISECONDS_PER_HOUR = SECONDS_PER_HOUR * MILLISECONDS_PER_SECOND;
+    constexpr float MIDPOINT_AVERAGE_FACTOR = 0.5f;
+    constexpr int SESSION_OPEN_HOUR = 9;
+    constexpr int SESSION_OPEN_MINUTE = 30;
+    constexpr std::int64_t MAX_IN_SESSION_TICK_GAP_MINUTES = 5;
+    constexpr std::size_t FINGERPRINT_BUFFER_SIZE_BYTES = 64 * 1024;
+    constexpr std::size_t ML_RECORD_EXPECTED_SIZE_BYTES = 12;
+    constexpr long HTTP_SUCCESS_STATUS_MIN = 200;
+    constexpr long HTTP_SUCCESS_STATUS_MAX_EXCLUSIVE = 300;
+    constexpr int MIN_PROGRESS_WINDOW_WIDTH = 55;
 
     // Regular US session length: 9:30 to 16:00 New York time (6.5 hours).
     // Early closes require an exchange calendar and are not inferred from tick silence.
@@ -57,7 +63,20 @@ namespace Dukascopy {
     // SPY is highly liquid during regular hours. A longer gap may indicate a
     // truncated hourly response or an incomplete session rather than inactivity.
     // This is an integrity heuristic, not proof that every source tick was delivered.
-    constexpr std::int64_t MAX_IN_SESSION_TICK_GAP_MS = 5 * 60 * 1000;
+    constexpr std::int64_t MAX_IN_SESSION_TICK_GAP_MS =
+        MAX_IN_SESSION_TICK_GAP_MINUTES * MILLISECONDS_PER_MINUTE;
+
+    enum CorpusOhlcColumn : std::size_t {
+        OPEN_BID_COLUMN,
+        HIGH_BID_COLUMN,
+        LOW_BID_COLUMN,
+        CLOSE_BID_COLUMN,
+        OPEN_ASK_COLUMN,
+        HIGH_ASK_COLUMN,
+        LOW_ASK_COLUMN,
+        CLOSE_ASK_COLUMN,
+        CORPUS_OHLC_COLUMN_COUNT
+    };
 
     std::unordered_map<std::string, std::string> headers = {
         { "Accept", "*/*" },
@@ -93,8 +112,6 @@ namespace Dukascopy {
         std::vector<std::int32_t> BidVolumes;
     };
 
-
-
     struct HourlyTickResponse {
         std::int64_t UtcHour;
         ApiTickResponse Data;
@@ -118,8 +135,9 @@ namespace Dukascopy {
         float Multiplier;
     };
 
-
-
+    /**
+     * @brief Builds the Dukascopy URL for a trading date.
+     */
     std::string BuildTicksUrl(const Common::DateTime& dt) {
 
         return ticksUrlBase +
@@ -175,8 +193,8 @@ namespace Dukascopy {
                 return std::nullopt;
             }
 
-            const std::int64_t hourStartMs = hourlyResponse.UtcHour * 3'600'000;
-            const std::int64_t hourEndMs = hourStartMs + 3'600'000;
+            const std::int64_t hourStartMs = hourlyResponse.UtcHour * MILLISECONDS_PER_HOUR;
+            const std::int64_t hourEndMs = hourStartMs + MILLISECONDS_PER_HOUR;
 
             auto runningBid = static_cast<std::int64_t>(std::round(response.Bid / multiplier));
             auto runningAsk = static_cast<std::int64_t>(std::round(response.Ask / multiplier));
@@ -239,7 +257,9 @@ namespace Dukascopy {
         return ticks;
     }
 
-
+    /**
+     * @brief Creates a zero-volume candle using one tick for all OHLC values.
+     */
     OHLCV_BidAsk FlatCandle(const Common::UnixTimestamp second, const Tick& tick) {
         return OHLCV_BidAsk{
             .Timestamp = second,
@@ -285,7 +305,6 @@ namespace Dukascopy {
         return true;
     }
 
-
     /**
     * @brief Builds exactly one candle per second of the regular session, so record N is always
     * N seconds after the open. Seconds without ticks repeat the previous close with zero volume.
@@ -301,7 +320,7 @@ namespace Dukascopy {
         const Common::UnixTimestamp sessionOpen,
         const Common::UnixTimestamp sessionClose) {
         const auto toMs = [](const Common::UnixTimestamp seconds) {
-            return static_cast<std::int64_t>(seconds) * 1000;
+            return static_cast<std::int64_t>(seconds) * MILLISECONDS_PER_SECOND;
         };
 
         const std::int64_t sessionOpenMs = toMs(sessionOpen);
@@ -337,7 +356,7 @@ namespace Dukascopy {
         if (next != ticks.begin()) {
             previous = &*std::prev(next);
         }
-        else if (next->TimeMs < sessionOpenMs + 1000) {
+        else if (next->TimeMs < sessionOpenMs + MILLISECONDS_PER_SECOND) {
             previous = &*next;
         }
         else {
@@ -388,28 +407,36 @@ namespace Dukascopy {
         return result;
     }
 
-
+    /**
+     * @brief Returns the staging path used while writing a file.
+     */
     std::filesystem::path BuildTemporaryPath(const std::filesystem::path& path) {
         std::filesystem::path temporaryPath = path;
         temporaryPath += ".tmp";
         return temporaryPath;
     }
 
-
+    /**
+     * @brief Returns the backup path used during file replacement.
+     */
     std::filesystem::path BuildBackupPath(const std::filesystem::path& path) {
         std::filesystem::path backupPath = path;
         backupPath += ".bak";
         return backupPath;
     }
 
-
+    /**
+     * @brief Returns the validation marker path for a corpus file.
+     */
     std::filesystem::path BuildValidationPath(const std::filesystem::path& corpusPath) {
         std::filesystem::path validationPath = corpusPath;
         validationPath += ".validated";
         return validationPath;
     }
 
-
+    /**
+     * @brief Calculates a file size and FNV-1a fingerprint.
+     */
     std::optional<std::pair<std::uintmax_t, std::uint64_t>> CalculateFileFingerprint(
         const std::filesystem::path& path)
     {
@@ -424,7 +451,7 @@ namespace Dukascopy {
 
         std::uint64_t hash = FNV_OFFSET_BASIS;
         std::uintmax_t fileSize = 0;
-        char buffer[64 * 1024];
+        char buffer[FINGERPRINT_BUFFER_SIZE_BYTES];
 
         while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0) {
             const std::streamsize bytesRead = file.gcount();
@@ -443,7 +470,9 @@ namespace Dukascopy {
         return std::pair{ fileSize, hash };
     }
 
-
+    /**
+     * @brief Removes a file if present and reports whether removal succeeded.
+     */
     bool RemoveFileIfExists(const std::filesystem::path& path) {
         std::error_code error;
         std::filesystem::remove(path, error);
@@ -456,24 +485,28 @@ namespace Dukascopy {
         return true;
     }
 
-
+    /**
+     * @brief Returns the transaction marker path for a corpus file.
+     */
     std::filesystem::path BuildTransactionPath(const std::filesystem::path& path) {
         std::filesystem::path transactionPath = path;
         transactionPath += ".txn";
         return transactionPath;
     }
 
-
+    /**
+     * @brief Returns the commit marker path for a corpus file.
+     */
     std::filesystem::path BuildCommitPath(const std::filesystem::path& path) {
         std::filesystem::path commitPath = path;
         commitPath += ".commit";
         return commitPath;
     }
 
-
-    bool RecoverInterruptedDayCommit(
-        const std::filesystem::path& corpusPath,
-        const std::filesystem::path& recordsPath) {
+    /**
+     * @brief Recovers or cleans up artifacts from an interrupted daily file commit.
+     */
+    bool RecoverInterruptedDayCommit(const std::filesystem::path& corpusPath, const std::filesystem::path& recordsPath) {
         const std::filesystem::path corpusBackup = BuildBackupPath(corpusPath);
         const std::filesystem::path recordsBackup = BuildBackupPath(recordsPath);
         const std::filesystem::path corpusTemporary = BuildTemporaryPath(corpusPath);
@@ -589,12 +622,14 @@ namespace Dukascopy {
             RemoveFileIfExists(validationTemporary);
     }
 
-
+    /**
+     * @brief Checks that corpus and record files have a complete valid structure.
+     */
     bool HasCompleteDayStructure(
         const std::filesystem::path& corpusPath,
         const std::filesystem::path& recordsPath)
     {
-        static_assert(sizeof(Core::MLRecord) == 12);
+        static_assert(sizeof(Core::MLRecord) == ML_RECORD_EXPECTED_SIZE_BYTES);
 
         std::error_code error;
 
@@ -641,7 +676,7 @@ namespace Dukascopy {
 
         std::size_t candleCount = 0;
         while (std::getline(corpusFileStream, line)) {
-            std::array<std::int64_t, 8> values{};
+            std::array<std::int64_t, CORPUS_OHLC_COLUMN_COUNT> values{};
             std::size_t valueStart = 0;
 
             for (std::size_t i = 0; i < values.size(); ++i) {
@@ -676,10 +711,10 @@ namespace Dukascopy {
                     low <= open && low <= close && high >= low;
             };
 
-            if (validOhlc(values[0], values[1], values[2], values[3]) == false ||
-                validOhlc(values[4], values[5], values[6], values[7]) == false ||
-                values[4] < values[0] || values[5] < values[1] ||
-                values[6] < values[2] || values[7] < values[3]) {
+            if (validOhlc(values[OPEN_BID_COLUMN], values[HIGH_BID_COLUMN], values[LOW_BID_COLUMN], values[CLOSE_BID_COLUMN]) == false ||
+                validOhlc(values[OPEN_ASK_COLUMN], values[HIGH_ASK_COLUMN], values[LOW_ASK_COLUMN], values[CLOSE_ASK_COLUMN]) == false ||
+                values[OPEN_ASK_COLUMN] < values[OPEN_BID_COLUMN] || values[HIGH_ASK_COLUMN] < values[HIGH_BID_COLUMN] ||
+                values[LOW_ASK_COLUMN] < values[LOW_BID_COLUMN] || values[CLOSE_ASK_COLUMN] < values[CLOSE_BID_COLUMN]) {
                 return false;
             }
 
@@ -714,7 +749,9 @@ namespace Dukascopy {
             recordCount == static_cast<std::size_t>(sessionLengthSeconds);
     }
 
-
+    /**
+     * @brief Checks the daily files against their validation marker and fingerprints.
+     */
     bool IsCompleteDayOnDisk(
         const std::filesystem::path& corpusPath,
         const std::filesystem::path& recordsPath)
@@ -751,7 +788,9 @@ namespace Dukascopy {
             recordsFingerprint->second == expectedRecordsHash;
     }
 
-
+    /**
+     * @brief Writes fingerprints that identify the validated daily files.
+     */
     bool WriteDayValidationMarker(
         const std::filesystem::path& corpusPath,
         const std::filesystem::path& recordsPath)
@@ -812,7 +851,9 @@ namespace Dukascopy {
         return true;
     }
 
-
+    /**
+     * @brief Replaces the daily corpus and record files using a recoverable commit.
+     */
     bool CommitDayFiles(
         const std::filesystem::path& corpusTemporary,
         const std::filesystem::path& recordsTemporary,
@@ -917,7 +958,9 @@ namespace Dukascopy {
         return RemoveFileIfExists(commitPath);
     }
 
-
+    /**
+     * @brief Writes the daily OHLC values to a corpus file.
+     */
     bool SaveDayCorpusToDisk(
         const std::vector<OHLCV_BidAsk>& candleSticks,
         const std::filesystem::path& outputPath)
@@ -975,7 +1018,9 @@ namespace Dukascopy {
         return true;
     }
 
-
+    /**
+     * @brief Writes the daily candle data as binary ML records.
+     */
     bool SaveDayRecordsToDisk(
         const std::vector<OHLCV_BidAsk>& candleSticks,
         const std::filesystem::path& outputPath)
@@ -1002,7 +1047,7 @@ namespace Dukascopy {
             return false;
         }
 
-        static_assert(sizeof(Core::MLRecord) == 12);
+        static_assert(sizeof(Core::MLRecord) == ML_RECORD_EXPECTED_SIZE_BYTES);
 
         const float multiplier = candleSticks.front().Multiplier;
 
@@ -1010,7 +1055,7 @@ namespace Dukascopy {
             [multiplier](const OHLCV_BidAsk& candle) -> float {
                 const float bid = static_cast<float>(candle.CloseBid) * multiplier;
                 const float ask = static_cast<float>(candle.CloseAsk) * multiplier;
-                return (bid + ask) * 0.5f;
+                return (bid + ask) * MIDPOINT_AVERAGE_FACTOR;
             };
 
         const auto getSpread =
@@ -1065,93 +1110,50 @@ namespace Dukascopy {
         return true;
     }
 
-
+    /**
+     * @brief Executes a request and parses a successful response as JSON.
+     */
     std::optional<Common::JsonUtility> FetchJson(
         Client::SimpleCurlWrapper& curlWrapper,
         Client::CurlRequest& request)
     {
-
         std::string body;
-
         request.SetCallback([&body](std::string response) {
-
             body = std::move(response);
-
         });
-
-
-
         const Client::CurlRequestEnum result = curlWrapper.ExecuteHttpRequest(request);
-
         const std::string& uri = request.GetFormattedUri();
-
-
-
         if (result != Client::CurlRequestEnum::SUCCESS) {
-
             Logger::Warning(std::format("Request failed: {} ({})", uri, request.GetErrorMessage()), true);
-
             return std::nullopt;
-
         }
-
-
-
         // The browser path does not report a status, so 0 is accepted.
-
         const long status = request.GetResponseCode();
-
-        if (status != 0 && (status < 200 || status >= 300)) {
-
+        if (status != 0 && (status < HTTP_SUCCESS_STATUS_MIN || status >= HTTP_SUCCESS_STATUS_MAX_EXCLUSIVE)) {
             Logger::Warning(std::format("Request returned HTTP {}: {}", status, uri), true);
-
             return std::nullopt;
-
         }
-
-
-
         if (body.empty()) {
-
             return std::nullopt;
-
         }
-
-
-
         try {
-
             return Common::JsonUtility(body);
-
         }
-
         catch (const std::exception& exception) {
-
             Logger::Warning(
                 std::format("Response could not be parsed as JSON: {} ({})", uri, exception.what()),
                 true
             );
-
             return std::nullopt;
-
         }
-
     }
 
-
-
     /**
-
     * @brief Reads one hour of tick data from its JSON response.
-
     *
-
     * @param hourJson
-
     * @return The tick data, or nothing if any required field is missing or invalid.
-
     */
-
     std::optional<ApiTickResponse> ParseTickResponse(const Common::JsonUtility& hourJson) {
         ApiTickResponse res{};
 
@@ -1202,17 +1204,16 @@ namespace Dukascopy {
         return res;
     }
 
-
+    /**
+     * @brief Fetches, validates, and writes one complete trading day.
+     */
     bool ExportFullDay(const Common::DateTime& dt, Client::SimpleCurlWrapper& curlWrapper) {
-        const std::filesystem::path corpusPath =
-            Common::Storage::CORPUS_BASE_PATH / (dt.ToString_Date() + ".corpus");
-        const std::filesystem::path recordsPath =
-            Common::Storage::RECORDS_BASE_PATH / (dt.ToString_Date() + ".rec");
+        const std::filesystem::path corpusPath = Common::Storage::CORPUS_BASE_PATH / (dt.ToString_Date() + ".corpus");
+        const std::filesystem::path recordsPath = Common::Storage::RECORDS_BASE_PATH / (dt.ToString_Date() + ".rec");
 
         const std::filesystem::path corpusTemporary = BuildTemporaryPath(corpusPath);
         const std::filesystem::path recordsTemporary = BuildTemporaryPath(recordsPath);
-        const std::filesystem::path validationTemporary =
-            BuildTemporaryPath(BuildValidationPath(corpusPath));
+        const std::filesystem::path validationTemporary = BuildTemporaryPath(BuildValidationPath(corpusPath));
 
         if (RecoverInterruptedDayCommit(corpusPath, recordsPath) == false) {
             Logger::Error(std::format("Could not recover existing files for {}. Day was not modified.", dt.ToString_Date()), true);
@@ -1221,17 +1222,17 @@ namespace Dukascopy {
 
         // New York time is used here so the session follows US daylight-saving changes.
         const Common::UnixTimestamp sessionOpen = Common::DateTime(
-            dt.GetYear(), dt.GetMonth(), dt.GetDay(), 9, 30, 0, true
+            dt.GetYear(), dt.GetMonth(), dt.GetDay(), SESSION_OPEN_HOUR, SESSION_OPEN_MINUTE, 0, true
         ).GetTimestamp();
 
         const Common::UnixTimestamp sessionClose = sessionOpen + sessionLengthSeconds;
-        const std::int64_t sessionOpenMs = static_cast<std::int64_t>(sessionOpen) * 1000;
-        const std::int64_t sessionCloseMs = static_cast<std::int64_t>(sessionClose) * 1000;
+        const std::int64_t sessionOpenMs = static_cast<std::int64_t>(sessionOpen) * MILLISECONDS_PER_SECOND;
+        const std::int64_t sessionCloseMs = static_cast<std::int64_t>(sessionClose) * MILLISECONDS_PER_SECOND;
 
         // Dukascopy's endpoint is addressed by UTC hour. Derive the exact hours
         // intersecting this New York session instead of assuming a fixed DST offset.
-        const std::int64_t firstUtcHour = static_cast<std::int64_t>(sessionOpen) / 3600;
-        const std::int64_t lastUtcHour = (static_cast<std::int64_t>(sessionClose) - 1) / 3600;
+        const std::int64_t firstUtcHour = static_cast<std::int64_t>(sessionOpen) / SECONDS_PER_HOUR;
+        const std::int64_t lastUtcHour = (static_cast<std::int64_t>(sessionClose) - 1) / SECONDS_PER_HOUR;
 
         const std::string ticksUrl = BuildTicksUrl(dt);
         std::vector<HourlyTickResponse> tickResponses;
@@ -1241,7 +1242,7 @@ namespace Dukascopy {
         hourRequest.AddHeader(headers);
 
         for (std::int64_t utcHour = firstUtcHour; utcHour <= lastUtcHour; ++utcHour) {
-            const int hourOfDay = static_cast<int>(utcHour % 24);
+            const int hourOfDay = static_cast<int>(utcHour % HOURS_PER_DAY);
 
             hourRequest.ReassignUri(ticksUrl + std::to_string(hourOfDay));
 
@@ -1277,8 +1278,7 @@ namespace Dukascopy {
             });
         }
 
-        const std::optional<std::vector<Tick>> ticks =
-            DecodeTicks(tickResponses, sessionOpenMs, sessionCloseMs);
+        const std::optional<std::vector<Tick>> ticks = DecodeTicks(tickResponses, sessionOpenMs, sessionCloseMs);
 
         if (ticks.has_value() == false) {
             Logger::Warning(
@@ -1291,8 +1291,7 @@ namespace Dukascopy {
             return false;
         }
 
-        const std::optional<std::vector<OHLCV_BidAsk>> candleSticks =
-            ExtractOneSecondCandlesticks(*ticks, sessionOpen, sessionClose);
+        const std::optional<std::vector<OHLCV_BidAsk>> candleSticks = ExtractOneSecondCandlesticks(*ticks, sessionOpen, sessionClose);
 
         if (candleSticks.has_value() == false ||
             candleSticks->size() != static_cast<std::size_t>(sessionLengthSeconds)) {
@@ -1363,167 +1362,82 @@ namespace Dukascopy {
         return true;
     }
 
-
+    /**
+     * @brief Runs the configured historical corpus export and updates progress.
+     */
     void BeginCorpusExport(bool replaceExisting) {
-
         {
-
             std::string headerMessage = replaceExisting ?
-
             "   Beginning full corpus export" : "   Beginning missing records export";
-
             Logger::Info("========================================", true);
-
             Logger::Info(headerMessage, true);
-
             Logger::Info("========================================", true);
-
         }
-
-
-
         std::string status{};
-
         std::string currentDate{};
-
         std::size_t daysElapsed = 0;
-
-
-
         auto view = UI::Get().PushView([&] {
-
             const float progress =
-
                 Core::Setup::TOTAL_DAYS == 0
-
                 ? 0.0f
-
                 : static_cast<float>(daysElapsed) /
-
                 static_cast<float>(Core::Setup::TOTAL_DAYS);
-
-
-
             return ftxui::window(
-
                 ftxui::text("Downloading Historical Records") | ftxui::bold,
-
                 ftxui::vbox({
-
                     ftxui::text(status),
-
                     ftxui::separator(),
-
                     ftxui::hbox({
-
                         ftxui::text("Current date: "),
-
                         ftxui::text(currentDate) | ftxui::bold,
-
                     }),
-
                     ftxui::gauge(progress),
-
                     ftxui::text(
-
                         std::format(
-
                             "{} / {} days",
-
                             daysElapsed,
-
                             Core::Setup::TOTAL_DAYS
-
                         )
-
                     )
-
                 }) |
-
-                ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, 55)
-
+                ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, MIN_PROGRESS_WINDOW_WIDTH)
             );
-
         });
-
-
-
         UI::Get().Refresh();
-
-
-
         // Wrapper running browser instance. Will be sharing this object throughout the full corpus run.
-
         Client::SimpleCurlWrapper curlWrapper;
-
-
-
         std::string description{};
-
-
-
         {
-
             Client::CurlRequest infoRequest(infoUrl);
-
             infoRequest.AddHeader(headers);
-
-
-
             const std::optional<Common::JsonUtility> spyData = FetchJson(curlWrapper, infoRequest);
-
             if (spyData) {
-
                 spyData->TryGet<std::string>("description", description);
-
             }
-
             else {
-
                 Logger::Error(
-
                     "Unable to access info URI. Terminating process.",
-
                     true
-
                 );
-
             }
-
         }
-
-
-
         if (description.empty() == false) {
-
             Logger::Info(
-
                 std::format(
-
                     "Description: {}",
-
                     description
-
                 ), true
-
             );
-
-
-
             using namespace Common::Storage;
-
             Common::DateTime exportDate = Core::Setup::BEGIN_DATE;
-
             for (; exportDate <= Core::Setup::END_DATE; exportDate.NextDay()) {
                 UI::Get().Update([&] {
                     currentDate = exportDate.ToString_Date();
                     status = std::format("Processing {}", currentDate);
                 });
 
-                const std::filesystem::path corpusPath =
-                    CORPUS_BASE_PATH / (exportDate.ToString_Date() + ".corpus");
-                const std::filesystem::path recordsPath =
-                    RECORDS_BASE_PATH / (exportDate.ToString_Date() + ".rec");
+                const std::filesystem::path corpusPath = CORPUS_BASE_PATH / (exportDate.ToString_Date() + ".corpus");
+                const std::filesystem::path recordsPath = RECORDS_BASE_PATH / (exportDate.ToString_Date() + ".rec");
 
                 if (exportDate.IsWeekday() == false) {
                     Logger::Warning(
@@ -1533,7 +1447,6 @@ namespace Dukascopy {
                 }
                 else {
                     const bool filesRecovered = RecoverInterruptedDayCommit(corpusPath, recordsPath);
-
                     if (filesRecovered == false) {
                         Logger::Error(
                             std::format(
@@ -1545,7 +1458,6 @@ namespace Dukascopy {
                     }
                     else {
                         const bool existingFilesAreComplete = IsCompleteDayOnDisk(corpusPath, recordsPath);
-
                         if (replaceExisting || existingFilesAreComplete == false) {
                             ExportFullDay(exportDate, curlWrapper);
                         }
@@ -1557,18 +1469,11 @@ namespace Dukascopy {
                         }
                     }
                 }
-
                 UI::Get().Update([&] { ++daysElapsed; });
             }
         }
         else {
-
             Logger::Error("Description empty. Terminating process.", true);
-
         }
-
     }
-
-
-
 }
