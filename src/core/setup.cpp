@@ -5,7 +5,7 @@
 #include "../common/storage.hpp"
 #include "../dukascopy/dukascopy.hpp"
 #include "../common/logger.hpp"
-#include "halfhourindex.hpp"
+#include "halfhourmultiindex.hpp"
 #include "transformer.hpp"
 #include "inputconfig.hpp"
 #include "../ui/ui.hpp"
@@ -176,7 +176,7 @@ namespace Core {
                         // The index remains alive throughout both passes.
                         // Its destructor persists the index, metadata, and normalization JSON.
                         {
-                            Core::HalfHourIndex indexSegment(segmentOffset, inputWindowSeconds);
+                            Core::HalfHourMultiIndex indexSegment(segmentOffset, inputWindowSeconds);
 
                             // ======================================== //
                             // PASS 1: CALCULATE NORMALIZATION PARAMETERS
@@ -244,7 +244,9 @@ namespace Core {
                             );
 
                             // Associate these parameters with this specific FAISS index.
-                            indexSegment.SetNormalizationParameters(parameters);
+
+                            // TODO: Update with the new multi-index
+                            // indexSegment.SetNormalizationParameters(parameters);
 
                             // ======================================== //
                             // PASS 2: NORMALIZE RECORDS AND BUILD INDEX
@@ -288,7 +290,8 @@ namespace Core {
                                             // Use this index's shared parameters.
                                             Core::NormalizeRecordsVector(segment, parameters);
 
-                                            indexSegment.AddVectorsToIndex(segment, recFilePath, segmentOffset);
+                                            // TODO: Update with the new multi-index
+                                            // indexSegment.AddVectorsToIndex(segment, recFilePath, segmentOffset);
                                         }
                                     }
                                 }
