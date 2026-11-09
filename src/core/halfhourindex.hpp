@@ -13,7 +13,9 @@
 #include <faiss/index_io.h>
 
 #include <filesystem>
+#include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 class HalfHourIndex_Test;
@@ -25,6 +27,55 @@ namespace Core {
      * 
      */
     class HalfHourIndex {
+    protected:
+        // MEMBERS
+
+        /**
+         * @brief Boolean to track if this index has normalization params.
+         * 
+         */
+        bool _hasNormalizationParameters{false};
+
+        /**
+         * @brief Number of one-second records in each indexed window.
+         * 
+         */
+        std::size_t _inputWindowSeconds{DEFAULT_INPUT_WINDOW_SECONDS};
+
+        /**
+         * @brief Length of each FAISS vector (features per record × window length).
+         * 
+         */
+        int _dimension{static_cast<int>(InputVectorDimension(_inputWindowSeconds))};
+
+        /**
+         * @brief Struct to represent the binary-encoded metadata.
+         * 
+         */
+        struct WindowLocation {
+            uint32_t recordIndex;
+            std::array<char, 8> tradingDay; // "yyyymmdd" and will have to translate -> yyyy-mm-dd.rec
+        };
+
+        static_assert(sizeof(WindowLocation) == 12);
+
+        /**
+         * @brief Vector of window metadata. The index represents the faiss ID.
+         * 
+         */
+        std::vector<WindowLocation> _windowLocations{};
+
+        /**
+         * @brief Underlying FAISS index, sized for this input window.
+         */
+        faiss::IndexFlatL2 _index;
+
+        /**
+         * @brief Boolean to track if the caller made any changes to the structure during the object's lifetime.
+         * 
+         */
+        bool Updated = false;
+
     private:
         // MEMBERS
 
@@ -47,23 +98,6 @@ namespace Core {
         static constexpr std::size_t TOTAL_HALF_HOURS = 13;
 
         /**
-         * @brief Number of one-second records in each indexed window.
-         * 
-         */
-        std::size_t _inputWindowSeconds{DEFAULT_INPUT_WINDOW_SECONDS};
-
-        /**
-         * @brief Length of each FAISS vector (features per record × window length).
-         * 
-         */
-        int _dimension{static_cast<int>(InputVectorDimension(_inputWindowSeconds))};
-
-        /**
-         * @brief Underlying FAISS index, sized for this input window.
-         */
-        faiss::IndexFlatL2 _index;
-
-        /**
          * @brief Stored path of the index file.
          * 
          */
@@ -74,29 +108,6 @@ namespace Core {
          * 
          */
         std::filesystem::path _metadataPath;
-
-        /**
-         * @brief Boolean to track if the caller made any changes to the structure during the object's lifetime.
-         * 
-         */
-        bool Updated = false;
-
-        /**
-         * @brief Struct to represent the binary-encoded metadata.
-         * 
-         */
-        struct WindowLocation {
-            uint32_t recordIndex;
-            std::array<char, 8> tradingDay; // "yyyymmdd" and will have to translate -> yyyy-mm-dd.rec
-        };
-
-        static_assert(sizeof(WindowLocation) == 12);
-
-        /**
-         * @brief Vector of window metadata. The index represents the faiss ID.
-         * 
-         */
-        std::vector<WindowLocation> _windowLocations{};
 
         /**
          * @brief Path for normalization json metadata.
@@ -111,10 +122,10 @@ namespace Core {
         NormalizationParameters _normalizationParameters{};
 
         /**
-         * @brief Boolean to track if this index has normalization params.
+         * @brief Optional index type for index sub-types.
          * 
          */
-        bool _hasNormalizationParameters{false};
+        std::optional<std::string_view> _indexType{std::nullopt};
 
         // METHODS
 
@@ -134,7 +145,8 @@ namespace Core {
          */
         static std::filesystem::path GetIndexPath(
             std::size_t numOfSeconds,
-            std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS
+            std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS,
+            std::optional<std::string_view> indexType = std::nullopt
         );
 
         /**
@@ -145,7 +157,8 @@ namespace Core {
          */
         static std::filesystem::path GetMetadataPath(
             std::size_t numOfSeconds,
-            std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS
+            std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS,
+            std::optional<std::string_view> indexType = std::nullopt
         );
 
         /**
@@ -155,14 +168,6 @@ namespace Core {
          * @return std::filesystem::path 
          */
         static std::filesystem::path GetRecordFilePathFromWindowLocation(const std::array<char,8> &yyyymmdd);
-
-        /**
-         * @brief Translates the "storage/records/yyyy-mm-dd.rec" path to yyyymmdd array for storing
-         * 
-         * @param recFile 
-         * @return std::array<char,8> 
-         */
-        static std::array<char,8> ToShortLocationArray(const std::filesystem::path &recordFilePath);
 
         /**
          * @brief Loads the .meta file from disk into the WindowLocation vector.
@@ -190,7 +195,8 @@ namespace Core {
          */
         static std::filesystem::path GetNormalizationPath(
             std::size_t numOfSeconds,
-            std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS
+            std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS,
+            std::optional<std::string_view> indexType = std::nullopt
         );
 
         /**
@@ -217,31 +223,21 @@ namespace Core {
         HalfHourIndex(
             const std::filesystem::path indexPath,
             const std::filesystem::path metadataPath,
-            std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS
+            std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS,
+            std::optional<std::string_view> indexType = std::nullopt
         );
 
     public:
         // CONSTRUCTOR
 
         /**
-         * @brief Construct a new Half Hour Index object.
-         * Calling an empty constructor will initialize an empty faiss index.
-         */
-        HalfHourIndex()
-            : _index(_dimension) {}
-
-        /**
-         * @brief Construct a new Half Hour Index object.
-         * Calling this constructor will find the appropriate, existing
-         * index structure on disk in "~/storage/indexes/" and load it in.
-         * @param numOfSeconds Number of seconds that have elapsed since the market opened.
-         */
-        HalfHourIndex(const std::size_t &numOfSeconds);
-
-        /**
          * @brief Loads a half-hour index for a specific input-window configuration.
+         * 
+         * @param numOfSeconds Number of seconds since the start of the market day.
+         * @param inputWindowSeconds The index dimension size. This also represents the query vector size.
+         * @param indexType Type of index this is referring to. See HalfHourMultiIndex for more context.
          */
-        HalfHourIndex(const std::size_t &numOfSeconds, std::size_t inputWindowSeconds);
+        HalfHourIndex(const std::size_t &numOfSeconds, std::size_t inputWindowSeconds, std::optional<std::string_view> indexType = std::nullopt);
 
         // DESTRUCTOR
         ~HalfHourIndex();
@@ -252,6 +248,13 @@ namespace Core {
             std::array<char, 8> tradingDayId;
             uint32_t recordIndex;
         };
+
+        /**
+         * @brief Constants representing index sub-types. To be used internally for pathing
+         * to the appropriate index.
+         */
+        static constexpr std::string_view INX_TYPE_MAGNITUDE = "m";
+        static constexpr std::string_view INX_TYPE_DIRECTION = "d";
 
         // METHODS
 
@@ -264,11 +267,11 @@ namespace Core {
          * @param recFilePath 
          * @param recordOffset 
          */
-        void AddVectorsToIndex(
+        virtual void AddVectorsToIndex(
             const std::span<Core::MLRecord> &normalizedMLSpan,
             const std::filesystem::path &recFilePath,
             const std::size_t recordOffset
-        );
+        ) = 0;
 
         /**
          * @brief Takes in a normalized query vector and return the specified number of approximate nearest neighbors.
@@ -292,7 +295,7 @@ namespace Core {
          * @param inputWindowSeconds Input window configuration the index was built for.
          * @return true if all three files are present.
          */
-        static bool FilesExist(std::size_t numOfSeconds, std::size_t inputWindowSeconds);
+        static bool FilesExist(std::size_t numOfSeconds, std::size_t inputWindowSeconds, std::optional<std::string_view> indexType = std::nullopt);
 
         /**
         * @brief Sets the normalization parameters associated with this index.
@@ -307,6 +310,14 @@ namespace Core {
         * Returns a flattened FAISS-compatible vector of InputVectorDimension(inputWindowSeconds) floats.
         */
         std::vector<float> NormalizeQuery(std::span<const MLRecord> records) const;
+
+        /**
+         * @brief Translates the "storage/records/yyyy-mm-dd.rec" path to yyyymmdd array for storing
+         * 
+         * @param recFile 
+         * @return std::array<char,8> 
+         */
+        static std::array<char,8> ToShortLocationArray(const std::filesystem::path &recordFilePath);
 
     };
 }

@@ -43,10 +43,17 @@ namespace Core {
 
     std::filesystem::path HalfHourIndex::GetIndexPath(
         const std::size_t numOfSeconds,
-        const std::size_t inputWindowSeconds
+        const std::size_t inputWindowSeconds,
+        std::optional<std::string_view> indexType
     ) {
-        return Common::Storage::INDEXES_BASE_PATH /
-            std::format("{}s", inputWindowSeconds) /
+        std::filesystem::path indexPath = Common::Storage::INDEXES_BASE_PATH/
+            std::format("{}s", inputWindowSeconds);
+
+        if (indexType.has_value()) {
+            indexPath /= *indexType;
+        }
+        
+        return indexPath /
             std::format(
                 "{}.index",
                 GetHalfHourName(numOfSeconds)
@@ -55,9 +62,17 @@ namespace Core {
 
     std::filesystem::path HalfHourIndex::GetMetadataPath(
         const std::size_t numOfSeconds,
-        const std::size_t inputWindowSeconds
+        const std::size_t inputWindowSeconds,
+        std::optional<std::string_view> indexType
     ) {
-        return Common::Storage::METADATA_BASE_PATH /
+        std::filesystem::path metadataPath = Common::Storage::METADATA_BASE_PATH /
+            std::format("{}s", inputWindowSeconds);
+
+        if (indexType.has_value()) {
+            metadataPath /= *indexType;
+        }
+
+        return metadataPath /
             std::format("{}s", inputWindowSeconds) /
             std::format(
                 "{}.meta",
@@ -67,19 +82,21 @@ namespace Core {
 
     std::filesystem::path HalfHourIndex::GetNormalizationPath(
         const std::size_t numOfSeconds,
-        const std::size_t inputWindowSeconds
+        const std::size_t inputWindowSeconds,
+        std::optional<std::string_view> indexType
     ) {
-        const std::filesystem::path metadataPath = GetMetadataPath(numOfSeconds, inputWindowSeconds);
+        const std::filesystem::path metadataPath = GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType);
         return metadataPath.parent_path() / (metadataPath.stem().string() + ".normalization.json");
     }
 
     bool HalfHourIndex::FilesExist(
         const std::size_t numOfSeconds,
-        const std::size_t inputWindowSeconds
+        const std::size_t inputWindowSeconds,
+        std::optional<std::string_view> indexType
     ) {
-        return Common::Storage::FileExists(GetIndexPath(numOfSeconds, inputWindowSeconds)) &&
-            Common::Storage::FileExists(GetMetadataPath(numOfSeconds, inputWindowSeconds)) &&
-            Common::Storage::FileExists(GetNormalizationPath(numOfSeconds, inputWindowSeconds));
+        return Common::Storage::FileExists(GetIndexPath(numOfSeconds, inputWindowSeconds, indexType)) &&
+            Common::Storage::FileExists(GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType)) &&
+            Common::Storage::FileExists(GetNormalizationPath(numOfSeconds, inputWindowSeconds, indexType));
     }
 
     std::filesystem::path HalfHourIndex::GetRecordFilePathFromWindowLocation(const std::array<char,8> &yyyymmdd) {
@@ -109,9 +126,11 @@ namespace Core {
     HalfHourIndex::HalfHourIndex(
         const std::filesystem::path indexPath,
         const std::filesystem::path metadataPath,
-        const std::size_t inputWindowSeconds
+        const std::size_t inputWindowSeconds,
+        std::optional<std::string_view> indexType
     )
         : _inputWindowSeconds(inputWindowSeconds),
+        _indexType(indexType),
         _dimension(static_cast<int>(InputVectorDimension(inputWindowSeconds))),
         _index(_dimension),
         _indexPath(indexPath),
@@ -124,7 +143,7 @@ namespace Core {
         }
 
         if (_indexPath.empty()) {
-            _indexPath = GetIndexPath(1, _inputWindowSeconds);
+            _indexPath = GetIndexPath(1, _inputWindowSeconds, indexType);
         }
 
         if (_metadataPath.empty()) {
@@ -136,19 +155,18 @@ namespace Core {
         Initialize();
     }
 
-    HalfHourIndex::HalfHourIndex(const std::size_t& numOfSeconds)
-        : HalfHourIndex(numOfSeconds, DEFAULT_INPUT_WINDOW_SECONDS) {}
-
     HalfHourIndex::HalfHourIndex(
         const std::size_t& numOfSeconds,
-        const std::size_t inputWindowSeconds
+        const std::size_t inputWindowSeconds,
+        std::optional<std::string_view> indexType
     )
         : _inputWindowSeconds(inputWindowSeconds),
+        _indexType(indexType),
         _dimension(static_cast<int>(InputVectorDimension(inputWindowSeconds))),
         _index(_dimension),
-        _indexPath(GetIndexPath(numOfSeconds, inputWindowSeconds)),
-        _metadataPath(GetMetadataPath(numOfSeconds, inputWindowSeconds)),
-        _normalizationPath(GetNormalizationPath(numOfSeconds, inputWindowSeconds))
+        _indexPath(GetIndexPath(numOfSeconds, inputWindowSeconds, indexType)),
+        _metadataPath(GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType)),
+        _normalizationPath(GetNormalizationPath(numOfSeconds, inputWindowSeconds, indexType))
     {
         if (IsSupportedInputWindow(inputWindowSeconds) == false) {
             throw std::invalid_argument(
@@ -227,7 +245,9 @@ namespace Core {
             }
 
             // Laod the normalization parameters associated with this index.
-            LoadNormalizationParameters();
+            if (this->_indexType.has_value() && *this->_indexType == INX_TYPE_MAGNITUDE) {
+                LoadNormalizationParameters();
+            }
         }
         else {
             Logger::Info(
@@ -272,7 +292,10 @@ namespace Core {
                 );
 
                 SaveMetadataToDisk();
-                SaveNormalizationParametersToDisk();
+
+                if (this->_indexType.has_value() && *this->_indexType == INX_TYPE_MAGNITUDE) {
+                    SaveNormalizationParametersToDisk();
+                }
             }
             catch (const std::exception& e) {
                 Logger::Error(
@@ -392,8 +415,7 @@ namespace Core {
         }
 
         const std::vector<std::string> expectedFeatureOrder{
-            "mid_delta",
-            "spread_delta"
+            "mid_delta"
         };
 
         const auto featureOrder = json.Get<std::vector<std::string>>("feature_order");
@@ -461,8 +483,7 @@ namespace Core {
         json.Set(
             "feature_order",
             std::vector<std::string>{
-                "mid_delta",
-                "spread_delta"
+                "mid_delta"
             }
         );
 
@@ -580,77 +601,6 @@ namespace Core {
         }
 
         return NormalizeRecordsToVector(records, _normalizationParameters);
-    }
-
-    void HalfHourIndex::AddVectorsToIndex(const std::span<Core::MLRecord> &normalizedMLSpan, const std::filesystem::path &recFilePath, const std::size_t recordOffset) {
-        if (_hasNormalizationParameters == false) {
-            throw std::logic_error(
-                "Cannot add vectors before normalization parameters are set."
-            );
-        }
-
-        if (normalizedMLSpan.size() >= _inputWindowSeconds) {
-            // Number of complete configured input windows that can be created.
-            const std::size_t numVectors = normalizedMLSpan.size() - _inputWindowSeconds + 1;
-
-            Logger::Info(
-                std::format(
-                    "Adding {} vectors from {} at record offset {}",
-                    numVectors,
-                    recFilePath.string(),
-                    recordOffset
-                ),
-                true
-            );
-
-            // Each vector contains _dimension floats.
-            std::vector<float> vectors{};
-            vectors.reserve(numVectors * static_cast<std::size_t>(_dimension));
-
-            const std::array<char, 8> tradingDay = ToShortLocationArray(recFilePath);
-
-            for (std::size_t offset = 0; offset < numVectors; ++offset) {
-                for (std::size_t windowIndex = 0; windowIndex < _inputWindowSeconds; ++windowIndex) {
-                    const MLRecord &record = normalizedMLSpan[offset + windowIndex];
-
-                    vectors.push_back(record.mid_delta);
-                    vectors.push_back(record.spread_delta);
-                    // vectors.push_back(record.volume);
-                }
-
-                WindowLocation location{};
-                location.recordIndex = static_cast<uint32_t>(recordOffset + offset);
-                location.tradingDay = tradingDay;
-
-                this->_windowLocations.push_back(location);
-            }
-
-            // Add all generated vectors to FAISS in one operation.
-            this->_index.add(
-                static_cast<faiss::idx_t>(numVectors),
-                vectors.data()
-            );
-
-            this->Updated = true;
-
-            Logger::Info(
-                std::format(
-                    "Added {} vectors; index now contains {} vectors",
-                    numVectors,
-                    this->_index.ntotal
-                ),
-                true
-            );
-        }
-        else {
-            Logger::Warning(
-                std::format(
-                    "Not enough records to create a vector: {} records provided",
-                    normalizedMLSpan.size()
-                ),
-                true
-            );
-        }
     }
 
     std::vector<HalfHourIndex::QueryResult> HalfHourIndex::Query(const std::vector<float> &normalizedQuery, const std::size_t maxResults) const {
