@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace Runtime {
@@ -120,11 +121,19 @@ namespace Runtime {
         ForecastRow RunWindow(WindowSlot& slot, const LiveInputWindow::Snapshot& snapshot);
 
         /**
-         * @brief Turn FAISS results into matches with a full future, nearest first, up to MAX_PREDICTION_MATCHES.
+         * @brief Turn one sub-index's FAISS results into matches with a full future, nearest first,
+         * up to MAX_PREDICTION_MATCHES. Each match's future is the real signed .rec data that followed it.
+         *
+         * @param results Results from either the magnitude or the direction index.
+         * @param inputWindowSeconds Window length the results were queried with.
+         * @param weightFunction Converts a FAISS distance into the match's weight.
+         * @param label Sub-index name for logging.
          */
         std::vector<HistoricalMatch> CollectHistoricalMatches(
             const std::vector<Core::HalfHourIndex::QueryResult>& results,
-            std::size_t inputWindowSeconds
+            std::size_t inputWindowSeconds,
+            double (*weightFunction)(float),
+            std::string_view label
         );
 
         /**
@@ -137,7 +146,7 @@ namespace Runtime {
         );
 
         /**
-         * @brief Log one configuration's forecast with its spread and agreement diagnostics.
+         * @brief Log one configuration's combined forecast with its magnitude and direction diagnostics.
          */
         static void LogForecast(const ForecastSummary& summary, std::size_t inputWindowSeconds, std::size_t matchCount);
 

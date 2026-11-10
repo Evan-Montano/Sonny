@@ -5,6 +5,8 @@
 #include "common/logger.hpp"
 #include "core/halfhourindex.hpp"
 #include "core/structures.hpp"
+#include "core/transformer.hpp"
+#include <cstdlib>
 #include <format>
 
 namespace Core {
@@ -24,7 +26,7 @@ namespace Core {
     }
 
     void HalfHourMultiIndex::HalfHourIndex_Magnitude::AddVectorsToIndex(
-        const std::span<Core::MLRecord> &normalizedMLSpan,
+        const std::span<Core::MLRecord> &segment,
         const std::filesystem::path &recFilePath,
         const std::size_t recordOffset
     ) {
@@ -34,9 +36,24 @@ namespace Core {
             );
         }
 
-        const std::size_t numVectors = normalizedMLSpan.size() - _inputWindowSeconds + 1;
+        // IMPORTANT: Before we can add the vector(s) to this index, the data has to be
+        // the absolute magnitude AND normalized.
+        std::vector<Core::MLRecord> normalizedSegment(
+            segment.begin(),
+            segment.end()
+        );
 
-        // Each vector contains _dimension floats.
+        for (Core::MLRecord &rec : normalizedSegment) {
+            rec.mid_delta = std::abs(rec.mid_delta);
+        }
+
+        NormalizeRecordsVector(normalizedSegment, this->_normalizationParameters);
+
+        // Num vectors should typically resolve to 1800, except for the final half-hour.
+        const std::size_t numVectors = normalizedSegment.size() - _inputWindowSeconds + 1;
+
+        // Each vector we're passing in contains _dimension * numVectors floats.
+        // Basically it's a contiguous vector containing many vectors of _dimension size.
         std::vector<float> vectors{};
         vectors.reserve(numVectors * static_cast<std::size_t>(this->_dimension));
 
@@ -44,17 +61,17 @@ namespace Core {
 
         for (std::size_t offset = 0; offset < numVectors; ++offset) {
             for (std::size_t windowIndex = 0; windowIndex < this->_inputWindowSeconds; ++windowIndex) {
-                const MLRecord &record = normalizedMLSpan[offset + windowIndex];
+                const MLRecord &record = normalizedSegment[offset + windowIndex];
 
                 // MAGNITUDE SPECIFIC CODE
                 // As we parse the incoming historical span, we only care about the absolute
                 // magnitude of the quote delta between records. So this index is just tracking
                 // absolute magnitudes in changes throughout an order book stream.
-                vectors.push_back(std::abs(record.mid_delta));
+                vectors.push_back(record.mid_delta);
             }
 
             WindowLocation location{};
-            location.recordIndex = static_cast<uint32_t>(recordOffset * offset);
+            location.recordIndex = static_cast<uint32_t>(recordOffset + offset);
             location.tradingDay = tradingDay;
 
             this->_windowLocations.push_back(location);
@@ -89,11 +106,11 @@ namespace Core {
     }
 
     void HalfHourMultiIndex::HalfHourIndex_Direction::AddVectorsToIndex(
-        const std::span<Core::MLRecord> &normalizedMLSpan,
+        const std::span<Core::MLRecord> &segment,
         const std::filesystem::path &recFilePath,
         const std::size_t recordOffset
     ) {
-        const std::size_t numVectors = normalizedMLSpan.size() - _inputWindowSeconds + 1;
+        const std::size_t numVectors = segment.size() - _inputWindowSeconds + 1;
 
         // Each vector contains _dimension floats.
         std::vector<float> vectors{};
@@ -103,7 +120,7 @@ namespace Core {
 
         for (std::size_t offset = 0; offset < numVectors; ++offset) {
             for (std::size_t windowIndex = 0; windowIndex < this->_inputWindowSeconds; ++windowIndex) {
-                const MLRecord &record = normalizedMLSpan[offset + windowIndex];
+                const MLRecord &record = segment[offset + windowIndex];
                 
                 // DIRECTION SPECIFIC
                 // As we parse the incoming historical span, we only care about the actual direction that the
@@ -121,7 +138,7 @@ namespace Core {
             }
 
             WindowLocation location{};
-            location.recordIndex = static_cast<uint32_t>(recordOffset * offset);
+            location.recordIndex = static_cast<uint32_t>(recordOffset + offset);
             location.tradingDay = tradingDay;
 
             this->_windowLocations.push_back(location);
@@ -164,19 +181,19 @@ namespace Core {
     }
 
     void HalfHourMultiIndex::AddVectorsToIndex(
-        const std::span<Core::MLRecord> &normalizedMLSpan,
+        const std::span<Core::MLRecord> &segment,
         const std::filesystem::path &recFilePath,
         const std::size_t recordOffset
     ) {
-        if (normalizedMLSpan.size() >= this->_inputWindowSeconds) {
+        if (segment.size() >= this->_inputWindowSeconds) {
             this->_index_magnitude.AddVectorsToIndex(
-                normalizedMLSpan,
+                segment,
                 recFilePath,
                 recordOffset
             );
 
             this->_index_direction.AddVectorsToIndex(
-                normalizedMLSpan,
+                segment,
                 recFilePath,
                 recordOffset
             );
@@ -185,7 +202,7 @@ namespace Core {
             Logger::Warning(
                 std::format(
                     "Not enough records to create a vector: {} records provided",
-                    normalizedMLSpan.size()
+                    segment.size()
                 ),
                 true
             );
@@ -194,9 +211,14 @@ namespace Core {
 
     
 
-    HalfHourMultiIndex::MultiQueryResult HalfHourMultiIndex::Query(const std::vector<MLRecord> &query, std::size_t maxResults) const {
+    bool HalfHourMultiIndex::FilesExist(const std::size_t numOfSeconds, const std::size_t inputWindowSeconds) {
+        return HalfHourIndex::FilesExist(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_MAGNITUDE) &&
+            HalfHourIndex::FilesExist(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_DIRECTION);
+    }
+
+    HalfHourMultiIndex::MultiQueryResult HalfHourMultiIndex::Query(std::span<const MLRecord> query, std::size_t maxResults) const {
         MultiQueryResult res{};
-        MultiQuery multiQuery = this->NormalizeMultiQuery(query);
+        MultiQuery multiQuery = this->CreateMultiQuery(query);
 
         res.MagnitudeResults = this->_index_magnitude.Query(multiQuery.MagnitudeQuery, maxResults);
         res.DirectionResults = this->_index_direction.Query(multiQuery.DirectionQuery, maxResults);
@@ -204,10 +226,25 @@ namespace Core {
         return res;
     }
 
-    HalfHourMultiIndex::MultiQuery HalfHourMultiIndex::NormalizeMultiQuery(std::span<const MLRecord> records) const {
+    HalfHourMultiIndex::MultiQuery HalfHourMultiIndex::CreateMultiQuery(std::span<const MLRecord> records) const {
         MultiQuery res{};
+        std::vector<MLRecord> magnitudeQuery{};
+        magnitudeQuery.reserve(records.size());
 
-        
+        for (const MLRecord &rec : records) {
+            float direction = 0.0F;
+            if (rec.mid_delta > 0.0F) {
+                direction = 1.0F;
+            }
+            else if (rec.mid_delta < 0.0F) {
+                direction = -1.0F;
+            }
+
+            res.DirectionQuery.push_back(direction);
+            magnitudeQuery.push_back({std::abs(rec.mid_delta)});
+        }
+
+        res.MagnitudeQuery = this->_index_magnitude.NormalizeQuery(magnitudeQuery);    
 
         return res;
     }

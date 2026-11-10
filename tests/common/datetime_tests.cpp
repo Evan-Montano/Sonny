@@ -68,6 +68,33 @@ TEST(DateTime, NextDay)
     EXPECT_EQ(static_cast<int>(dt.GetDay()), 1);
 }
 
+TEST(DateTime, PreviousDay)
+{
+    Common::DateTime dt(
+        2028,
+        Common::MAR,
+        1,
+        12,
+        0,
+        0,
+        true
+    );
+
+    // 2028 is a leap year, and the year boundary must roll back too.
+    dt.PreviousDay();
+
+    EXPECT_EQ(dt.GetYear(), 2028);
+    EXPECT_EQ(static_cast<int>(dt.GetMonth()), 2);
+    EXPECT_EQ(static_cast<int>(dt.GetDay()), 29);
+
+    Common::DateTime newYear(2027, Common::JAN, 1, 12, 0, 0, true);
+    newYear.PreviousDay();
+
+    EXPECT_EQ(newYear.GetYear(), 2026);
+    EXPECT_EQ(static_cast<int>(newYear.GetMonth()), 12);
+    EXPECT_EQ(static_cast<int>(newYear.GetDay()), 31);
+}
+
 TEST(DateTime, Weekday)
 {
     Common::DateTime monday(

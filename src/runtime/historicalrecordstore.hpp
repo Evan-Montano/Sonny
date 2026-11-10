@@ -34,9 +34,12 @@ namespace Runtime {
         // MEMBERS
 
         /**
-         * @brief Days held before the cache is cleared. One day is roughly 280 KB.
+         * @brief Days held before the cache is cleared. One day is 23,400 × 4 bytes ≈ 94 KB, so this
+         * caps the cache near 385 MB while holding a full multi-year corpus (~2,450 days ≈ 230 MB).
+         * Matches come from any day in the corpus, so a cap below the corpus size makes the
+         * clear-everything eviction reload files on nearly every prediction cycle.
          */
-        static constexpr std::size_t MAX_CACHED_DAYS = 128;
+        static constexpr std::size_t MAX_CACHED_DAYS = 4096;
 
         /**
          * @brief Loaded days keyed by "yyyy-mm-dd".

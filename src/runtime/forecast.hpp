@@ -1,5 +1,5 @@
 // forecast.hpp
-// Combines the futures of historical matches into one distance-weighted forecast.
+// Combines the futures of magnitude and direction historical matches into one forecast.
 
 #pragma once
 
@@ -38,28 +38,42 @@ namespace Runtime {
     };
 
     /**
-     * @brief A forecast plus the diagnostics logged alongside it.
+     * @brief A combined magnitude × direction forecast plus the diagnostics logged alongside it.
      */
     struct ForecastSummary {
         /**
-         * @brief Weighted mean cumulative midpoint change at each evaluation horizon.
+         * @brief Combined forecast: sign(direction_agreement) × expected_magnitudes at each evaluation horizon.
+         * historical_matches is the smaller of the two match counts below.
          */
         PredictionForecast forecast;
 
         /**
-         * @brief Kish effective sample size: how many equally weighted matches the weights amount to.
+         * @brief Matches from the magnitude and direction indexes that went into this forecast.
          */
-        double effective_matches{};
+        std::size_t magnitude_matches{};
+        std::size_t direction_matches{};
 
         /**
-         * @brief Weighted mean of |cumulative move| at each evaluation horizon.
-         * Comparing |forecast| to this shows whether the matches agreed on a direction.
+         * @brief Kish effective sample size of each index's weights: how many equally weighted matches they amount to.
          */
-        std::array<double, PredictionEvaluationHorizons.size()> mean_absolute_moves{};
+        double magnitude_effective_matches{};
+        double direction_effective_matches{};
+
+        /**
+         * @brief Weighted mean of |cumulative move| across the magnitude matches at each evaluation horizon.
+         * Absolute values cannot cancel out, so this is the expected size of the move regardless of direction.
+         */
+        std::array<double, PredictionEvaluationHorizons.size()> expected_magnitudes{};
+
+        /**
+         * @brief Weighted net vote of the direction matches at each evaluation horizon, in [-1, 1].
+         * +1 means every match moved up by that horizon, -1 every match moved down, 0 an even split (or all flat).
+         */
+        std::array<double, PredictionEvaluationHorizons.size()> direction_agreement{};
     };
 
     /**
-     * @brief Weight for a match given its FAISS distance.
+     * @brief Weight for a magnitude match given its FAISS distance.
      *
      * IndexFlatL2 reports squared L2 distance, so 1 / d^2 falls off with the fourth power of the
      * true distance. A small epsilon keeps exact matches finite.
@@ -70,12 +84,39 @@ namespace Runtime {
     double MatchWeight(float squaredDistance);
 
     /**
-     * @brief Build a forecast from matches, nearest first.
+     * @brief Weight for a direction match given its FAISS distance.
      *
-     * @param matches At least one match.
-     * @param asOfTimestampMs Timestamp of the newest live record; the forecast covers the seconds after it.
-     * @throws std::invalid_argument If matches is empty or the weights do not sum to a positive value.
+     * Direction vectors hold only -1, 0, and 1, so squared distances are small integers and exact
+     * matches (distance 0) are common. MatchWeight would give those 1e12 times the weight of a
+     * near miss; 1 / (1 + d) keeps the ranking but lets near misses still vote.
+     *
+     * @param squaredDistance Distance returned by HalfHourIndex::Query.
+     * @return Positive weight, at most 1.
      */
-    ForecastSummary BuildForecast(std::span<const HistoricalMatch> matches, std::int64_t asOfTimestampMs);
+    double DirectionMatchWeight(float squaredDistance);
+
+    /**
+     * @brief Moves smaller than this (in dollars) count as flat when a direction match votes.
+     * Matches PredictionAnalytics' threshold so a "flat" vote means the same thing in both places.
+     */
+    inline constexpr double FLAT_MOVE_EPSILON = 0.0005;
+
+    /**
+     * @brief Build a forecast by combining the two indexes' matches.
+     *
+     * The magnitude matches decide how far the price moves by each horizon (weighted mean of the
+     * absolute cumulative move); the direction matches decide which way (sign of their weighted
+     * net vote). When the vote is exactly split the forecast for that horizon is 0.
+     *
+     * @param magnitudeMatches Matches from the magnitude index, nearest first.
+     * @param directionMatches Matches from the direction index, nearest first.
+     * @param asOfTimestampMs Timestamp of the newest live record; the forecast covers the seconds after it.
+     * @throws std::invalid_argument If either list is empty or its weights do not sum to a positive value.
+     */
+    ForecastSummary BuildForecast(
+        std::span<const HistoricalMatch> magnitudeMatches,
+        std::span<const HistoricalMatch> directionMatches,
+        std::int64_t asOfTimestampMs
+    );
 
 }

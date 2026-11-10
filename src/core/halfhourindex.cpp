@@ -93,9 +93,13 @@ namespace Core {
         const std::size_t inputWindowSeconds,
         std::optional<std::string_view> indexType
     ) {
+        // The direction index stores raw {-1, 0, 1} values and never writes a normalization file.
+        const bool requiresNormalization = (indexType.has_value() && *indexType == INX_TYPE_DIRECTION) == false;
+
         return Common::Storage::FileExists(GetIndexPath(numOfSeconds, inputWindowSeconds, indexType)) &&
             Common::Storage::FileExists(GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType)) &&
-            Common::Storage::FileExists(GetNormalizationPath(numOfSeconds, inputWindowSeconds, indexType));
+            (requiresNormalization == false ||
+                Common::Storage::FileExists(GetNormalizationPath(numOfSeconds, inputWindowSeconds, indexType)));
     }
 
     std::filesystem::path HalfHourIndex::GetRecordFilePathFromWindowLocation(const std::array<char,8> &yyyymmdd) {
@@ -146,7 +150,7 @@ namespace Core {
         }
 
         if (_metadataPath.empty()) {
-            _metadataPath = GetMetadataPath(1, _inputWindowSeconds);
+            _metadataPath = GetMetadataPath(1, _inputWindowSeconds, indexType);
         }
 
         _normalizationPath = _metadataPath.parent_path() / (_metadataPath.stem().string() + ".normalization.json");

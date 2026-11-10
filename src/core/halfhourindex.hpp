@@ -76,6 +76,12 @@ namespace Core {
          */
         bool Updated = false;
 
+        /**
+         * @brief Parameters describing the standard deviations for this index. Used for normalizing live data.
+         * 
+         */
+        NormalizationParameters _normalizationParameters{};
+
     private:
         // MEMBERS
 
@@ -114,12 +120,6 @@ namespace Core {
          * 
          */
         std::filesystem::path _normalizationPath;
-
-        /**
-         * @brief Parameters describing the standard deviations for this index. Used for normalizing live data.
-         * 
-         */
-        NormalizationParameters _normalizationParameters{};
 
         /**
          * @brief Optional index type for index sub-types.
@@ -240,7 +240,7 @@ namespace Core {
         HalfHourIndex(const std::size_t &numOfSeconds, std::size_t inputWindowSeconds, std::optional<std::string_view> indexType = std::nullopt);
 
         // DESTRUCTOR
-        ~HalfHourIndex();
+        virtual ~HalfHourIndex();
 
         // MEMBERS
         struct QueryResult {

@@ -85,6 +85,7 @@ namespace Common {
 
         // OPERATORS
         void NextDay();
+        void PreviousDay();
         [[nodiscard]] bool Equal(const DateTime &dt, const bool &dayOnly = false) const;
         [[nodiscard]] bool operator<(const DateTime &dt) const;
         [[nodiscard]] bool operator>(const DateTime &dt) const;

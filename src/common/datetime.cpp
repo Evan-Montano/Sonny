@@ -221,6 +221,20 @@ namespace Common {
         SetDay(static_cast<unsigned>(day.day()));
     }
 
+    void DateTime::PreviousDay() {
+        using namespace std::chrono;
+        year_month_day day(
+            year(this->Year),
+            month(this->Month),
+            std::chrono::day{this->Day}
+        );
+        day = sys_days{day} - days{1};
+
+        SetYear(static_cast<int>(day.year()));
+        SetMonth(static_cast<unsigned>(day.month()));
+        SetDay(static_cast<unsigned>(day.day()));
+    }
+
     bool DateTime::Equal(const DateTime &dt, const bool &dayOnly) const {
         bool res = false;
 

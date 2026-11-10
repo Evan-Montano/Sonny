@@ -1,8 +1,15 @@
 // halfhourmultiindex.hpp
 // Holds the class definition for HalfHourMultiIndex and other definitions.
 
+#pragma once
+
 #include "core/structures.hpp"
 #include "halfhourindex.hpp"
+
+#include <cstddef>
+#include <filesystem>
+#include <span>
+#include <vector>
 
 namespace Core {
 
@@ -38,7 +45,7 @@ namespace Core {
             * @param recordOffset 
             */
             void AddVectorsToIndex(
-                const std::span<Core::MLRecord> &normalizedMLSpan,
+                const std::span<Core::MLRecord> &segment,
                 const std::filesystem::path &recFilePath,
                 const std::size_t recordOffset
             ) override;
@@ -119,7 +126,7 @@ namespace Core {
          * @param records 
          * @return MultiQuery 
          */
-        MultiQuery NormalizeMultiQuery(std::span<const MLRecord> records) const;
+        MultiQuery CreateMultiQuery(std::span<const MLRecord> records) const;
 
 
     public:
@@ -154,13 +161,12 @@ namespace Core {
          * @brief Takes in a span of MLRecord structs and adds them to the faiss index and calls method(s) to track metadata.
          * We are assuming that the caller has already identified which records belong in this
          * particular time block and are passing them in accordingly.
-         * We are also placing them in as-is, so if the data must be normalized, that must occur before this call.
          * @param normalizedMLSpan 
          * @param recFilePath 
          * @param recordOffset 
          */
         void AddVectorsToIndex(
-            const std::span<Core::MLRecord> &normalizedMLSpan,
+            const std::span<Core::MLRecord> &segment,
             const std::filesystem::path &recFilePath,
             const std::size_t recordOffset
         );
@@ -168,15 +174,30 @@ namespace Core {
         /**
          * @brief Takes in a raw, unnormalized query vector and returns a struct the specified number of
          * approximate nearest neighbors for both sub-index types.
+         *
+         * Results are ordered by distance; ties go to the vector added first. Setup adds days newest
+         * first, so tied matches (common in the direction index) prefer the most recent days.
          * 
          * @param normalizedQuery 
          * @param maxResults 
          * @return MultiQueryResult
          */
         MultiQueryResult Query(
-            const std::vector<MLRecord> &query,
+            std::span<const MLRecord> query,
             std::size_t maxResults
         ) const;
+
+        /**
+         * @brief Checks that both sub-indexes for a segment exist on disk. The magnitude index needs its
+         * index, metadata, and normalization files; the direction index has no normalization file.
+         * Constructing a HalfHourMultiIndex without them creates new, empty indexes that are written
+         * back to disk on destruction, so read-only callers (like the live runtime) must check first.
+         *
+         * @param numOfSeconds Any second inside the segment, measured from the market open.
+         * @param inputWindowSeconds Input window configuration the indexes were built for.
+         * @return true if every required file is present.
+         */
+        static bool FilesExist(std::size_t numOfSeconds, std::size_t inputWindowSeconds);
 
     };
 

@@ -1,16 +1,21 @@
 // runtime_pipeline_tests.cpp
-// Tests for the live pipeline stages: session clock, one-second aggregation, rolling window, and forecasting.
+// Tests for the live pipeline stages: session clock, one-second aggregation, rolling window, historical futures, and forecasting.
 
 #include "core/inputconfig.hpp"
 #include "runtime/forecast.hpp"
+#include "runtime/historicalrecordstore.hpp"
 #include "runtime/liveinputwindow.hpp"
 #include "runtime/marketclock.hpp"
 #include "runtime/onesecondaggregator.hpp"
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <string>
 #include <stdexcept>
 #include <vector>
 
@@ -51,7 +56,7 @@ namespace {
 
     Runtime::LiveRecord MakeLiveRecord(const std::int64_t second, const float midDelta = 0.0f) {
         return Runtime::LiveRecord{
-            .record = Core::MLRecord{.mid_delta = midDelta/*, .spread_delta = 0.0f, .volume = 0.0f*/},
+            .record = Core::MLRecord{.mid_delta = midDelta},
             .timestamp_ms = second * 1000,
             .observed = true
         };
@@ -204,35 +209,172 @@ TEST(LiveInputWindowTests, NonConsecutiveRecordClearsTheWindow) {
     EXPECT_EQ(window.Push(MakeLiveRecord(13)), 1u);
 }
 
+// ========== HISTORICAL RECORD STORE ========== //
+
+/**
+ * @brief Runs inside a temporary working directory, since the store reads relative storage/records/ paths.
+ */
+class HistoricalRecordStoreTests : public ::testing::Test {
+protected:
+    std::filesystem::path previousWorkingDirectory_;
+    std::filesystem::path tempDirectory_;
+
+    void SetUp() override {
+        const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        tempDirectory_ = std::filesystem::temp_directory_path() / ("sonny_record_store_tests_" + std::to_string(timestamp));
+        std::filesystem::create_directories(tempDirectory_ / "storage/records");
+
+        previousWorkingDirectory_ = std::filesystem::current_path();
+        std::filesystem::current_path(tempDirectory_);
+    }
+
+    void TearDown() override {
+        std::filesystem::current_path(previousWorkingDirectory_);
+        std::filesystem::remove_all(tempDirectory_);
+    }
+
+    static void WriteBytes(const std::string& fileName, const char* data, const std::size_t size) {
+        std::ofstream file(std::filesystem::path("storage/records") / fileName, std::ios::binary);
+        file.write(data, static_cast<std::streamsize>(size));
+    }
+};
+
+TEST_F(HistoricalRecordStoreTests, LoadsADayByItsMetadataId) {
+    const std::vector<Core::MLRecord> records{{0.0f}, {0.01f}, {-0.02f}};
+    WriteBytes("2026-09-01.rec", reinterpret_cast<const char*>(records.data()), records.size() * sizeof(Core::MLRecord));
+
+    Runtime::HistoricalRecordStore store;
+    const std::vector<Core::MLRecord>* day = store.Find({'2', '0', '2', '6', '0', '9', '0', '1'});
+
+    ASSERT_NE(day, nullptr);
+    ASSERT_EQ(day->size(), 3u);
+    EXPECT_FLOAT_EQ((*day)[1].mid_delta, 0.01f);
+    EXPECT_FLOAT_EQ((*day)[2].mid_delta, -0.02f);
+
+    // A second lookup is served from the cache.
+    EXPECT_EQ(store.Find({'2', '0', '2', '6', '0', '9', '0', '1'}), day);
+}
+
+TEST_F(HistoricalRecordStoreTests, RejectsMissingAndTruncatedDays) {
+    // 6 bytes is not a whole number of 4-byte records.
+    const char bytes[6]{};
+    WriteBytes("2026-09-02.rec", bytes, sizeof(bytes));
+
+    Runtime::HistoricalRecordStore store;
+
+    EXPECT_EQ(store.Find({'2', '0', '2', '6', '0', '9', '0', '3'}), nullptr);
+    EXPECT_EQ(store.Find({'2', '0', '2', '6', '0', '9', '0', '2'}), nullptr);
+}
+
 // ========== FORECAST ========== //
 
-TEST(ForecastTests, AveragesCumulativePathsByWeight) {
+TEST(ForecastTests, MagnitudeDoesNotCancelWhenMatchesDisagree) {
+    // Two magnitude matches moving equally far in opposite directions: the old signed average was 0.
     Runtime::HistoricalMatch up{.weight = 3.0};
     Runtime::HistoricalMatch down{.weight = 1.0};
     up.mid_deltas.fill(0.01);
     down.mid_deltas.fill(-0.01);
 
-    const std::vector<Runtime::HistoricalMatch> matches{up, down};
-    const Runtime::ForecastSummary summary = Runtime::BuildForecast(matches, 1234);
+    // Direction comes only from the direction matches, which all move up.
+    Runtime::HistoricalMatch directionUp{.weight = 1.0};
+    directionUp.mid_deltas.fill(0.02);
+
+    const std::vector<Runtime::HistoricalMatch> magnitudeMatches{up, down};
+    const std::vector<Runtime::HistoricalMatch> directionMatches{directionUp, directionUp};
+    const Runtime::ForecastSummary summary = Runtime::BuildForecast(magnitudeMatches, directionMatches, 1234);
 
     EXPECT_EQ(summary.forecast.as_of_timestamp_ms, 1234);
     EXPECT_EQ(summary.forecast.historical_matches, 2u);
-    EXPECT_NEAR(summary.effective_matches, 16.0 / 10.0, 1e-9);
+    EXPECT_EQ(summary.magnitude_matches, 2u);
+    EXPECT_EQ(summary.direction_matches, 2u);
+    EXPECT_NEAR(summary.magnitude_effective_matches, 16.0 / 10.0, 1e-9);
+    EXPECT_NEAR(summary.direction_effective_matches, 2.0, 1e-9);
 
     for (std::size_t i = 0; i < Runtime::PredictionEvaluationHorizons.size(); ++i) {
         const double horizon = static_cast<double>(Runtime::PredictionEvaluationHorizons[i]);
 
-        // (3 × +0.01h + 1 × −0.01h) / 4 = +0.005h, while each path moves 0.01h in absolute terms.
-        EXPECT_NEAR(summary.forecast.cumulative_changes[i], 0.005 * horizon, 1e-9);
-        EXPECT_NEAR(summary.mean_absolute_moves[i], 0.01 * horizon, 1e-9);
+        // Both magnitude paths move 0.01h in absolute terms, so the expected magnitude is 0.01h,
+        // and the direction matches unanimously vote up.
+        EXPECT_NEAR(summary.expected_magnitudes[i], 0.01 * horizon, 1e-9);
+        EXPECT_NEAR(summary.direction_agreement[i], 1.0, 1e-9);
+        EXPECT_NEAR(summary.forecast.cumulative_changes[i], 0.01 * horizon, 1e-9);
+    }
+}
+
+TEST(ForecastTests, DirectionFollowsTheWeightedVote) {
+    Runtime::HistoricalMatch magnitude{.weight = 1.0};
+    magnitude.mid_deltas.fill(0.01);
+
+    Runtime::HistoricalMatch down{.weight = 3.0};
+    Runtime::HistoricalMatch up{.weight = 1.0};
+    down.mid_deltas.fill(-0.01);
+    up.mid_deltas.fill(0.05);
+
+    const std::vector<Runtime::HistoricalMatch> magnitudeMatches{magnitude};
+    const std::vector<Runtime::HistoricalMatch> directionMatches{down, up};
+    const Runtime::ForecastSummary summary = Runtime::BuildForecast(magnitudeMatches, directionMatches, 0);
+
+    for (std::size_t i = 0; i < Runtime::PredictionEvaluationHorizons.size(); ++i) {
+        const double horizon = static_cast<double>(Runtime::PredictionEvaluationHorizons[i]);
+
+        // Votes are signs, not sizes: (3 × −1 + 1 × +1) / 4 = −0.5, despite "up" moving further.
+        EXPECT_NEAR(summary.direction_agreement[i], -0.5, 1e-9);
+        EXPECT_NEAR(summary.forecast.cumulative_changes[i], -0.01 * horizon, 1e-9);
+    }
+}
+
+TEST(ForecastTests, SplitDirectionVoteForecastsNoChange) {
+    Runtime::HistoricalMatch magnitude{.weight = 1.0};
+    magnitude.mid_deltas.fill(0.01);
+
+    Runtime::HistoricalMatch up{.weight = 1.0};
+    Runtime::HistoricalMatch down{.weight = 1.0};
+    up.mid_deltas.fill(0.01);
+    down.mid_deltas.fill(-0.01);
+
+    const std::vector<Runtime::HistoricalMatch> magnitudeMatches{magnitude};
+    const std::vector<Runtime::HistoricalMatch> directionMatches{up, down};
+    const Runtime::ForecastSummary summary = Runtime::BuildForecast(magnitudeMatches, directionMatches, 0);
+
+    for (std::size_t i = 0; i < Runtime::PredictionEvaluationHorizons.size(); ++i) {
+        EXPECT_DOUBLE_EQ(summary.direction_agreement[i], 0.0);
+        EXPECT_DOUBLE_EQ(summary.forecast.cumulative_changes[i], 0.0);
+        EXPECT_GT(summary.expected_magnitudes[i], 0.0);
+    }
+}
+
+TEST(ForecastTests, FlatDirectionMatchesDoNotVote) {
+    Runtime::HistoricalMatch magnitude{.weight = 1.0};
+    magnitude.mid_deltas.fill(0.01);
+
+    // Cumulative moves below FLAT_MOVE_EPSILON count as flat for every horizon.
+    Runtime::HistoricalMatch flat{.weight = 10.0};
+    flat.mid_deltas.fill(Runtime::FLAT_MOVE_EPSILON / 100.0);
+    Runtime::HistoricalMatch up{.weight = 1.0};
+    up.mid_deltas.fill(0.01);
+
+    const std::vector<Runtime::HistoricalMatch> magnitudeMatches{magnitude};
+    const std::vector<Runtime::HistoricalMatch> directionMatches{flat, up};
+    const Runtime::ForecastSummary summary = Runtime::BuildForecast(magnitudeMatches, directionMatches, 0);
+
+    for (std::size_t i = 0; i < Runtime::PredictionEvaluationHorizons.size(); ++i) {
+        EXPECT_NEAR(summary.direction_agreement[i], 1.0 / 11.0, 1e-9);
+        EXPECT_GT(summary.forecast.cumulative_changes[i], 0.0);
     }
 }
 
 TEST(ForecastTests, CloserMatchesWeighMore) {
     EXPECT_GT(Runtime::MatchWeight(0.5f), Runtime::MatchWeight(1.0f));
     EXPECT_TRUE(std::isfinite(Runtime::MatchWeight(0.0f)));
+
+    EXPECT_GT(Runtime::DirectionMatchWeight(0.0f), Runtime::DirectionMatchWeight(1.0f));
+    EXPECT_DOUBLE_EQ(Runtime::DirectionMatchWeight(0.0f), 1.0);
 }
 
 TEST(ForecastTests, RejectsEmptyMatches) {
-    EXPECT_THROW(Runtime::BuildForecast({}, 0), std::invalid_argument);
+    Runtime::HistoricalMatch match{.weight = 1.0};
+    const std::vector<Runtime::HistoricalMatch> matches{match};
+
+    EXPECT_THROW(Runtime::BuildForecast({}, matches, 0), std::invalid_argument);
+    EXPECT_THROW(Runtime::BuildForecast(matches, {}, 0), std::invalid_argument);
 }

@@ -5,6 +5,7 @@
 #include "../common/storage.hpp"
 #include "../dukascopy/dukascopy.hpp"
 #include "../common/logger.hpp"
+#include "core/structures.hpp"
 #include "halfhourmultiindex.hpp"
 #include "transformer.hpp"
 #include "inputconfig.hpp"
@@ -216,10 +217,19 @@ namespace Core {
 
                                         // A segment must contain at least one complete configured window.
                                         if (segmentSize >= inputWindowSeconds) {
-                                            std::span<const Core::MLRecord> segment(
-                                                allRecords.data() + segmentOffset,
-                                                segmentSize
+
+                                            // ========= IMPORTANT ======== //
+                                            // Normalization for the magnitude sub-index requires the data to be in it's
+                                            // absolute value, so we are creating a copy of the chosen segment, and
+                                            // taking each position's absolute value before passing it to the accumulator.
+                                            std::vector<Core::MLRecord> segment(
+                                                allRecords.begin() + segmentOffset,
+                                                allRecords.begin() + end
                                             );
+
+                                            for (Core::MLRecord &rec : segment) {
+                                                rec.mid_delta = std::abs(rec.mid_delta);
+                                            }
 
                                             accumulator.AddRecords(segment);
                                         }
@@ -252,9 +262,15 @@ namespace Core {
                             // PASS 2: NORMALIZE RECORDS AND BUILD INDEX
                             // ======================================== //
 
-                            dt = Core::Setup::BEGIN_DATE;
+                            // ========= IMPORTANT ======== //
+                            // Days are added NEWEST FIRST. FAISS breaks distance ties by vector ID (lowest
+                            // wins), and IDs follow insertion order, so this makes tied matches resolve to the
+                            // most recent days. The direction index relies on it: short windows have only a few
+                            // thousand distinct {-1, 0, 1} patterns, so a query can tie with thousands of
+                            // vectors and oldest-first insertion would always pick the oldest days.
+                            dt = Core::Setup::END_DATE;
 
-                            for (; dt <= Core::Setup::END_DATE; dt.NextDay()) {
+                            for (; dt >= Core::Setup::BEGIN_DATE; dt.PreviousDay()) {
                                 const std::string date = dt.ToString_Date();
 
                                 const std::filesystem::path recFilePath = RECORDS_BASE_PATH / (date + ".rec");
@@ -287,9 +303,8 @@ namespace Core {
                                                 segmentSize
                                             );
 
-                                            // Use this index's shared parameters.
-                                            Core::NormalizeRecordsVector(segment, parameters);
-
+                                            // Raw segment can go in as-is because the HalfHourMultiIndex handles
+                                            // splitting and normalization.
                                             indexSegment.AddVectorsToIndex(segment, recFilePath, segmentOffset);
                                         }
                                     }

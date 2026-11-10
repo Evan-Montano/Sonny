@@ -4,9 +4,10 @@
 #include "predictionexperiment.hpp"
 #include "common/datetime.hpp"
 #include "common/logger.hpp"
+#include "core/halfhourindex.hpp"
 #include "marketclock.hpp"
 
-// #include <algorithm>
+#include <algorithm>
 #include <cmath>
 #include <exception>
 #include <format>
@@ -105,7 +106,8 @@ namespace Runtime {
 
         const std::size_t segmentStartSecond = segment * SECONDS_PER_SEGMENT;
 
-        if (Core::HalfHourIndex::FilesExist(segmentStartSecond, slot.input_window_seconds) == false) {
+        // Must check before constructing: a missing sub-index would otherwise be created empty and saved on destruction.
+        if (Core::HalfHourMultiIndex::FilesExist(segmentStartSecond, slot.input_window_seconds) == false) {
             Logger::Warning(std::format(
                 "No complete index files for the {}s input window in segment {}; that configuration is skipped.",
                 slot.input_window_seconds,
@@ -134,36 +136,47 @@ namespace Runtime {
             inputWindowSeconds
         );
 
-        // const std::vector<float> queryVector = slot.index->NormalizeQuery(queryWindow);
-        // const Core::HalfHourMultiIndex::MultiQueryResult results = slot.index->Query(queryVector, MAX_QUERY_RESULTS);
-        // const std::vector<HistoricalMatch> matches = CollectHistoricalMatches(results, inputWindowSeconds);
+        // The multi-index splits the raw window into |mid_delta| (normalized) and sign(mid_delta) queries.
+        const Core::HalfHourMultiIndex::MultiQueryResult results = slot.index->Query(queryWindow, MAX_QUERY_RESULTS);
 
-        // if (matches.empty()) {
-        //     Logger::Warning(std::format("{}s input: no historical matches had a full future.", inputWindowSeconds));
-        //     return row;
-        // }
+        const std::vector<HistoricalMatch> magnitudeMatches =
+            CollectHistoricalMatches(results.MagnitudeResults, inputWindowSeconds, MatchWeight, "magnitude");
+        const std::vector<HistoricalMatch> directionMatches =
+            CollectHistoricalMatches(results.DirectionResults, inputWindowSeconds, DirectionMatchWeight, "direction");
 
-        // // Matches are sorted nearest first, so each match count uses a prefix of the same list.
-        // for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
-        //     const std::size_t matchCount = PREDICTION_MATCH_COUNTS[i];
-        //     const std::size_t usedMatches = std::min(matchCount, matches.size());
+        if (magnitudeMatches.empty() || directionMatches.empty()) {
+            Logger::Warning(std::format(
+                "{}s input: not enough historical matches with a full future ({} magnitude, {} direction).",
+                inputWindowSeconds,
+                magnitudeMatches.size(),
+                directionMatches.size()
+            ));
+            return row;
+        }
 
-        //     const ForecastSummary summary = BuildForecast(
-        //         std::span<const HistoricalMatch>(matches).first(usedMatches),
-        //         snapshot.last_timestamp_ms
-        //     );
+        // Matches are sorted nearest first, so each match count uses a prefix of the same lists.
+        for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
+            const std::size_t matchCount = PREDICTION_MATCH_COUNTS[i];
 
-        //     LogForecast(summary, inputWindowSeconds, matchCount);
-        //     LogReports(slot.analytics[i].SubmitForecast(summary.forecast), inputWindowSeconds, matchCount);
-        //     row[i] = summary.forecast;
-        // }
+            const ForecastSummary summary = BuildForecast(
+                std::span<const HistoricalMatch>(magnitudeMatches).first(std::min(matchCount, magnitudeMatches.size())),
+                std::span<const HistoricalMatch>(directionMatches).first(std::min(matchCount, directionMatches.size())),
+                snapshot.last_timestamp_ms
+            );
+
+            LogForecast(summary, inputWindowSeconds, matchCount);
+            LogReports(slot.analytics[i].SubmitForecast(summary.forecast), inputWindowSeconds, matchCount);
+            row[i] = summary.forecast;
+        }
 
         return row;
     }
 
     std::vector<HistoricalMatch> PredictionExperiment::CollectHistoricalMatches(
         const std::vector<Core::HalfHourIndex::QueryResult>& results,
-        const std::size_t inputWindowSeconds
+        const std::size_t inputWindowSeconds,
+        double (*weightFunction)(float),
+        const std::string_view label
     ) {
         std::vector<HistoricalMatch> matches{};
         matches.reserve(MAX_PREDICTION_MATCHES);
@@ -190,7 +203,9 @@ namespace Runtime {
                 continue;
             }
 
-            HistoricalMatch match{.weight = MatchWeight(result.distance)};
+            // The future is the raw signed deltas for both sub-indexes; BuildForecast decides
+            // whether to read its magnitude or its direction.
+            HistoricalMatch match{.weight = weightFunction(result.distance)};
             for (std::size_t second = 0; second < FORECAST_HORIZON_SECONDS; ++second) {
                 match.mid_deltas[second] = (*day)[futureStart + second].mid_delta;
             }
@@ -199,7 +214,7 @@ namespace Runtime {
             distances += std::format("{}{:.4f}", distances.empty() ? "" : ", ", result.distance);
         }
 
-        Logger::Info(std::format("{}s input: {} usable match distances [{}]", inputWindowSeconds, matches.size(), distances));
+        Logger::Info(std::format("{}s input ({}): {} usable match distances [{}]", inputWindowSeconds, label, matches.size(), distances));
 
         return matches;
     }
@@ -225,29 +240,26 @@ namespace Runtime {
         const std::size_t matchCount
     ) {
         std::string message = std::format(
-            "{}: {} matches, {:.2f} effective\n  {:<8}{:>14}{:>14}{:>15}",
+            "{}: magnitude {} matches ({:.2f} effective), direction {} matches ({:.2f} effective)\n  {:<8}{:>14}{:>14}{:>12}",
             ConfigurationLabel(inputWindowSeconds, matchCount),
-            summary.forecast.historical_matches,
-            summary.effective_matches,
+            summary.magnitude_matches,
+            summary.magnitude_effective_matches,
+            summary.direction_matches,
+            summary.direction_effective_matches,
             "Horizon",
             "Forecast",
-            "Mean |move|",
-            "Concentration"
+            "Magnitude",
+            "Agreement"
         );
 
         for (std::size_t i = 0; i < PredictionEvaluationHorizons.size(); ++i) {
-            const double forecast = summary.forecast.cumulative_changes[i];
-            const double meanAbsoluteMove = summary.mean_absolute_moves[i];
-
-            // Near 1 when the matches agree on a direction; near 0 when their moves cancel out.
-            const double concentration = meanAbsoluteMove > 0.0 ? std::abs(forecast) / meanAbsoluteMove : 0.0;
-
+            // Agreement is the direction matches' weighted net vote: +1 all up, -1 all down, 0 split.
             message += std::format(
-                "\n  {:<8}{:>14}{:>14}{:>15.3f}",
+                "\n  {:<8}{:>14}{:>14}{:>+12.3f}",
                 std::format("{}s", PredictionEvaluationHorizons[i]),
-                std::format("${:+.5f}", forecast),
-                std::format("${:.5f}", meanAbsoluteMove),
-                concentration
+                std::format("${:+.5f}", summary.forecast.cumulative_changes[i]),
+                std::format("${:.5f}", summary.expected_magnitudes[i]),
+                summary.direction_agreement[i]
             );
         }
 

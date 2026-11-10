@@ -124,8 +124,6 @@ namespace Core {
                     parameters.mid_delta_mean,
                     parameters.mid_delta_stddev
                 )
-                // .spread_delta = record.spread_delta,
-                // .volume = record.volume
             };
         }
 
@@ -179,25 +177,15 @@ namespace Core {
 
             const double previousMid = (previousAsk.Price + previousBid.Price) / 2.0;
             const double currentMid = (currentAsk.Price + currentBid.Price) / 2.0;
-            const double previousSpread = previousAsk.Price - previousBid.Price;
-            const double currentSpread = currentAsk.Price - currentBid.Price;
 
-            // Experimental volume proxy: average displayed size
-            // at the best bid and ask.
-            const double volume = (currentAsk.size + currentBid.size) / 2.0;
             const double midDelta = currentMid - previousMid;
-            const double spreadDelta = currentSpread - previousSpread;
 
-            valid =
-                std::isfinite(midDelta) &&
-                std::isfinite(spreadDelta) &&
-                std::isfinite(volume);
+            valid = 
+            std::isfinite(midDelta);
             
             if (valid) {
                 res = MLRecord{
                     .mid_delta = static_cast<float>(midDelta)
-                    // .spread_delta = static_cast<float>(spreadDelta),
-                    // .volume = static_cast<float>(volume)
                 };
             }
 
