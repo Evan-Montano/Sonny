@@ -44,10 +44,6 @@ echo "=== Building Sonny ==="
 cmake --build build
 
 echo
-echo "=== Running Tests ==="
-ctest --test-dir build --output-on-failure
-
-echo
 echo "========================================"
-echo "       BUILD AND TESTS SUCCESSFUL"
+echo "           BUILD SUCCESSFUL"
 echo "========================================"

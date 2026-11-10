@@ -105,6 +105,22 @@ namespace Core {
          */
         std::size_t _inputWindowSeconds{DEFAULT_INPUT_WINDOW_SECONDS};
 
+        struct MultiQuery {
+            std::vector<float> MagnitudeQuery;
+            std::vector<float> DirectionQuery;
+        };
+
+        // METHODS
+
+        /**
+         * @brief Takes in the raw unnormalized quote deltas, then splits the vector into
+         * two new vectors for magnitude and direction, then normalizes the magnitude.
+         * 
+         * @param records 
+         * @return MultiQuery 
+         */
+        MultiQuery NormalizeMultiQuery(std::span<const MLRecord> records) const;
+
 
     public:
         // CONSTRUCTORS
@@ -113,6 +129,17 @@ namespace Core {
          * @brief Loads a half-hour index for a specific input-window configuration.
          */
         HalfHourMultiIndex(const std::size_t &numOfSeconds, std::size_t inputWindowSeconds);
+
+        // MEMBERS
+
+        /**
+         * @brief Multi-vector result struct containing the query results of both
+         * the magnitude index and directional index.
+         */
+        struct MultiQueryResult {
+            std::vector<HalfHourIndex::QueryResult> MagnitudeResults;
+            std::vector<HalfHourIndex::QueryResult> DirectionResults;
+        };
 
         // METHODS
 
@@ -139,16 +166,15 @@ namespace Core {
         );
 
         /**
-         * @brief Takes in a normalized query vector and returns the specified number of approximate nearest neighbors.
-         * Returning the actual predicted futures, unlike the Query method in base HalfHourIndex, which only 
-         * returns QueryResult structs.
+         * @brief Takes in a raw, unnormalized query vector and returns a struct the specified number of
+         * approximate nearest neighbors for both sub-index types.
          * 
          * @param normalizedQuery 
          * @param maxResults 
-         * @return std::vector<QueryResult> 
+         * @return MultiQueryResult
          */
-        std::vector<std::vector<float>> Query(
-            const std::vector<float> &normalizedQuery,
+        MultiQueryResult Query(
+            const std::vector<MLRecord> &query,
             std::size_t maxResults
         ) const;
 

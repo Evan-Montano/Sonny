@@ -51,7 +51,7 @@ namespace Dukascopy {
     constexpr int SESSION_OPEN_MINUTE = 30;
     constexpr std::int64_t MAX_IN_SESSION_TICK_GAP_MINUTES = 5;
     constexpr std::size_t FINGERPRINT_BUFFER_SIZE_BYTES = 64 * 1024;
-    constexpr std::size_t ML_RECORD_EXPECTED_SIZE_BYTES = 12;
+    constexpr std::size_t ML_RECORD_EXPECTED_SIZE_BYTES = 4;
     constexpr long HTTP_SUCCESS_STATUS_MIN = 200;
     constexpr long HTTP_SUCCESS_STATUS_MAX_EXCLUSIVE = 300;
     constexpr int MIN_PROGRESS_WINDOW_WIDTH = 55;
@@ -735,10 +735,11 @@ namespace Dukascopy {
         std::size_t recordCount = 0;
 
         while (recordsFileStream.read(reinterpret_cast<char*>(&record), sizeof(record))) {
-            if (std::isfinite(record.mid_delta) == false ||
-                std::isfinite(record.spread_delta) == false ||
-                std::isfinite(record.volume) == false ||
-                record.volume < 0.0f) {
+            if (std::isfinite(record.mid_delta) == false
+                // std::isfinite(record.spread_delta) == false ||
+                // std::isfinite(record.volume) == false ||
+                // record.volume < 0.0f
+            ) {
                 return false;
             }
 
@@ -1058,27 +1059,27 @@ namespace Dukascopy {
                 return (bid + ask) * MIDPOINT_AVERAGE_FACTOR;
             };
 
-        const auto getSpread =
-            [multiplier](const OHLCV_BidAsk& candle) -> float {
-                const float bid = static_cast<float>(candle.CloseBid) * multiplier;
-                const float ask = static_cast<float>(candle.CloseAsk) * multiplier;
-                return ask - bid;
-            };
+        // const auto getSpread =
+        //     [multiplier](const OHLCV_BidAsk& candle) -> float {
+        //         const float bid = static_cast<float>(candle.CloseBid) * multiplier;
+        //         const float ask = static_cast<float>(candle.CloseAsk) * multiplier;
+        //         return ask - bid;
+        //     };
 
         float previousMid = getMid(candleSticks.front());
-        float previousSpread = getSpread(candleSticks.front());
+        // float previousSpread = getSpread(candleSticks.front());
 
         for (std::size_t i = 0; i < candleSticks.size(); ++i) {
             constexpr float firstDeltaSentinel = 0.0f;
 
             const OHLCV_BidAsk& candle = candleSticks[i];
             const float mid = getMid(candle);
-            const float spread = getSpread(candle);
+            // const float spread = getSpread(candle);
 
             const Core::MLRecord record{
-                .mid_delta = i == 0 ? firstDeltaSentinel : mid - previousMid,
-                .spread_delta = i == 0 ? firstDeltaSentinel : spread - previousSpread,
-                .volume = static_cast<float>(candle.BidVolume)
+                .mid_delta = i == 0 ? firstDeltaSentinel : mid - previousMid
+                // .spread_delta = i == 0 ? firstDeltaSentinel : spread - previousSpread,
+                // .volume = static_cast<float>(candle.BidVolume)
             };
 
             recFileStream.write(
@@ -1092,7 +1093,7 @@ namespace Dukascopy {
             }
 
             previousMid = mid;
-            previousSpread = spread;
+            // previousSpread = spread;
         }
 
         recFileStream.flush();

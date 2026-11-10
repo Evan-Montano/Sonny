@@ -90,7 +90,7 @@ namespace Runtime {
         // carries the full move since the baseline, so the cumulative price path stays exact.
         for (std::int64_t i = 0; i < count; ++i) {
             on_record_(LiveRecord{
-                .record = Core::MLRecord{.mid_delta = 0.0f, .spread_delta = 0.0f, .volume = 0.0f},
+                .record = Core::MLRecord{.mid_delta = 0.0f/*, .spread_delta = 0.0f, .volume = 0.0f*/},
                 .timestamp_ms = (firstSecond + i) * 1000,
                 .observed = false
             });

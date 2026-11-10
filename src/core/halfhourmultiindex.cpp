@@ -137,7 +137,7 @@ namespace Core {
 
         Logger::Info(
             std::format(
-                "Added {} vectors. Magnitude index now contains {} vectors",
+                "Added {} vectors. Direction index now contains {} vectors",
                 numVectors,
                 this->_index.ntotal
             ),
@@ -192,14 +192,22 @@ namespace Core {
         }
     }
 
-    std::vector<std::vector<float>> HalfHourMultiIndex::Query(const std::vector<float> &normalizedQuery, std::size_t maxResults) const {
-        std::vector<std::vector<float>> res{};
+    
 
-        std::vector<HalfHourIndex::QueryResult> magnitudeResults = this->_index_magnitude.Query(normalizedQuery, maxResults);
-        std::vector<HalfHourIndex::QueryResult> directionResults = this->_index_direction.Query(normalizedQuery, maxResults);
+    HalfHourMultiIndex::MultiQueryResult HalfHourMultiIndex::Query(const std::vector<MLRecord> &query, std::size_t maxResults) const {
+        MultiQueryResult res{};
+        MultiQuery multiQuery = this->NormalizeMultiQuery(query);
 
-        // TODO: Futures lookup, weighting, prediction calculation, logging.
-        // Maybe an upgraded QueryResult struct that contains both index's future vectors
+        res.MagnitudeResults = this->_index_magnitude.Query(multiQuery.MagnitudeQuery, maxResults);
+        res.DirectionResults = this->_index_direction.Query(multiQuery.DirectionQuery, maxResults);
+
+        return res;
+    }
+
+    HalfHourMultiIndex::MultiQuery HalfHourMultiIndex::NormalizeMultiQuery(std::span<const MLRecord> records) const {
+        MultiQuery res{};
+
+        
 
         return res;
     }

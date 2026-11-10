@@ -12,8 +12,8 @@ namespace Core {
      */
     struct MLRecord {
         float mid_delta;
-        float spread_delta;
-        float volume;
+        // float spread_delta;
+        // float volume;
     };
 
     /**

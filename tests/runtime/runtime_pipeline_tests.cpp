@@ -51,7 +51,7 @@ namespace {
 
     Runtime::LiveRecord MakeLiveRecord(const std::int64_t second, const float midDelta = 0.0f) {
         return Runtime::LiveRecord{
-            .record = Core::MLRecord{.mid_delta = midDelta, .spread_delta = 0.0f, .volume = 0.0f},
+            .record = Core::MLRecord{.mid_delta = midDelta/*, .spread_delta = 0.0f, .volume = 0.0f*/},
             .timestamp_ms = second * 1000,
             .observed = true
         };

@@ -17,6 +17,7 @@ namespace Core {
      * Each length has its own set of indexes under storage/indexes/<N>s/.
      */
     inline constexpr std::array<std::size_t, 6> INPUT_WINDOW_CONFIGURATIONS{
+        // 10, 15, 20, 30, 45, 60
         10, 15, 20, 30, 45, 60
     };
 

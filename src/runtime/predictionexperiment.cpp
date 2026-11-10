@@ -6,7 +6,7 @@
 #include "common/logger.hpp"
 #include "marketclock.hpp"
 
-#include <algorithm>
+// #include <algorithm>
 #include <cmath>
 #include <exception>
 #include <format>
@@ -115,7 +115,7 @@ namespace Runtime {
         }
 
         try {
-            slot.index = std::make_unique<Core::HalfHourIndex>(segmentStartSecond, slot.input_window_seconds);
+            slot.index = std::make_unique<Core::HalfHourMultiIndex>(segmentStartSecond, slot.input_window_seconds);
         }
         catch (const std::exception& error) {
             Logger::Error(
@@ -134,29 +134,29 @@ namespace Runtime {
             inputWindowSeconds
         );
 
-        const std::vector<float> queryVector = slot.index->NormalizeQuery(queryWindow);
-        const std::vector<Core::HalfHourIndex::QueryResult> results = slot.index->Query(queryVector, MAX_QUERY_RESULTS);
-        const std::vector<HistoricalMatch> matches = CollectHistoricalMatches(results, inputWindowSeconds);
+        // const std::vector<float> queryVector = slot.index->NormalizeQuery(queryWindow);
+        // const Core::HalfHourMultiIndex::MultiQueryResult results = slot.index->Query(queryVector, MAX_QUERY_RESULTS);
+        // const std::vector<HistoricalMatch> matches = CollectHistoricalMatches(results, inputWindowSeconds);
 
-        if (matches.empty()) {
-            Logger::Warning(std::format("{}s input: no historical matches had a full future.", inputWindowSeconds));
-            return row;
-        }
+        // if (matches.empty()) {
+        //     Logger::Warning(std::format("{}s input: no historical matches had a full future.", inputWindowSeconds));
+        //     return row;
+        // }
 
-        // Matches are sorted nearest first, so each match count uses a prefix of the same list.
-        for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
-            const std::size_t matchCount = PREDICTION_MATCH_COUNTS[i];
-            const std::size_t usedMatches = std::min(matchCount, matches.size());
+        // // Matches are sorted nearest first, so each match count uses a prefix of the same list.
+        // for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
+        //     const std::size_t matchCount = PREDICTION_MATCH_COUNTS[i];
+        //     const std::size_t usedMatches = std::min(matchCount, matches.size());
 
-            const ForecastSummary summary = BuildForecast(
-                std::span<const HistoricalMatch>(matches).first(usedMatches),
-                snapshot.last_timestamp_ms
-            );
+        //     const ForecastSummary summary = BuildForecast(
+        //         std::span<const HistoricalMatch>(matches).first(usedMatches),
+        //         snapshot.last_timestamp_ms
+        //     );
 
-            LogForecast(summary, inputWindowSeconds, matchCount);
-            LogReports(slot.analytics[i].SubmitForecast(summary.forecast), inputWindowSeconds, matchCount);
-            row[i] = summary.forecast;
-        }
+        //     LogForecast(summary, inputWindowSeconds, matchCount);
+        //     LogReports(slot.analytics[i].SubmitForecast(summary.forecast), inputWindowSeconds, matchCount);
+        //     row[i] = summary.forecast;
+        // }
 
         return row;
     }

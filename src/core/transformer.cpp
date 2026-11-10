@@ -123,9 +123,9 @@ namespace Core {
                     record.mid_delta,
                     parameters.mid_delta_mean,
                     parameters.mid_delta_stddev
-                ),
-                .spread_delta = record.spread_delta,
-                .volume = record.volume
+                )
+                // .spread_delta = record.spread_delta,
+                // .volume = record.volume
             };
         }
 
@@ -195,9 +195,9 @@ namespace Core {
             
             if (valid) {
                 res = MLRecord{
-                    .mid_delta = static_cast<float>(midDelta),
-                    .spread_delta = static_cast<float>(spreadDelta),
-                    .volume = static_cast<float>(volume)
+                    .mid_delta = static_cast<float>(midDelta)
+                    // .spread_delta = static_cast<float>(spreadDelta),
+                    // .volume = static_cast<float>(volume)
                 };
             }
 

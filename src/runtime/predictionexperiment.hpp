@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "core/halfhourindex.hpp"
+#include "core/halfhourmultiindex.hpp"
 #include "core/inputconfig.hpp"
 #include "forecast.hpp"
 #include "historicalrecordstore.hpp"
@@ -99,7 +99,7 @@ namespace Runtime {
             /**
              * @brief Index for loaded_segment, or nullptr if it is unavailable.
              */
-            std::unique_ptr<Core::HalfHourIndex> index;
+            std::unique_ptr<Core::HalfHourMultiIndex> index;
 
             /**
              * @brief One scorer per entry in PREDICTION_MATCH_COUNTS.

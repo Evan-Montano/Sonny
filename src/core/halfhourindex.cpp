@@ -73,7 +73,6 @@ namespace Core {
         }
 
         return metadataPath /
-            std::format("{}s", inputWindowSeconds) /
             std::format(
                 "{}.meta",
                 GetHalfHourName(numOfSeconds)
@@ -265,7 +264,7 @@ namespace Core {
     HalfHourIndex::~HalfHourIndex() {
         if (this->Updated) {
             try {
-                if (_hasNormalizationParameters == false) {
+                if (_hasNormalizationParameters == false && this->_indexType.has_value() && *this->_indexType == INX_TYPE_MAGNITUDE) {
                     throw std::runtime_error(
                         "Cannot persist HalfHourIndex without normalization parameters."
                     );
@@ -469,7 +468,7 @@ namespace Core {
     }
 
     void HalfHourIndex::SaveNormalizationParametersToDisk() const {
-        if (_hasNormalizationParameters == false) {
+        if (_hasNormalizationParameters == false && this->_indexType.has_value() && *this->_indexType == INX_TYPE_MAGNITUDE) {
             throw std::runtime_error(
                 "Cannot save an index without normalization parameters."
             );
@@ -584,7 +583,7 @@ namespace Core {
     }
 
     std::vector<float> HalfHourIndex::NormalizeQuery(std::span<const MLRecord> records) const {
-        if (_hasNormalizationParameters == false) {
+        if (_hasNormalizationParameters == false && this->_indexType.has_value() && *this->_indexType == INX_TYPE_MAGNITUDE) {
             throw std::logic_error(
                 "Cannot normalize a query without loaded normalization parameters."
             );
@@ -604,7 +603,7 @@ namespace Core {
     }
 
     std::vector<HalfHourIndex::QueryResult> HalfHourIndex::Query(const std::vector<float> &normalizedQuery, const std::size_t maxResults) const {
-        if (_hasNormalizationParameters == false) {
+        if (_hasNormalizationParameters == false && this->_indexType.has_value() && *this->_indexType == INX_TYPE_MAGNITUDE) {
             throw std::logic_error(
                 "Cannot query an index without normalization parameters."
             );
