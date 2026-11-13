@@ -25,6 +25,10 @@ namespace Core {
         return this->_hasNormalizationParameters;
     }
 
+    const NormalizationParameters &HalfHourMultiIndex::HalfHourIndex_Magnitude::GetNormalizationParameters() const {
+        return this->_normalizationParameters;
+    }
+
     void HalfHourMultiIndex::HalfHourIndex_Magnitude::AddVectorsToIndex(
         const std::span<Core::MLRecord> &segment,
         const std::filesystem::path &recFilePath,
@@ -178,6 +182,10 @@ namespace Core {
     void HalfHourMultiIndex::SetNormalizationParameters(const NormalizationParameters &parameters) {
         this->_index_magnitude.SetNormalizationParameters(parameters);
         // The direction index does not contain normalization parameters due to the nature of the data.
+    }
+
+    const NormalizationParameters &HalfHourMultiIndex::GetNormalizationParameters() const {
+        return this->_index_magnitude.GetNormalizationParameters();
     }
 
     void HalfHourMultiIndex::AddVectorsToIndex(

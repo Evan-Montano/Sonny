@@ -57,7 +57,12 @@ namespace Core {
              * @return false 
              */
             bool HasNormalizationParameters();
-            
+
+            /**
+             * @brief Public read access to the parameters this index's vectors were normalized with.
+             */
+            const NormalizationParameters &GetNormalizationParameters() const;
+
         };
 
         /**
@@ -158,10 +163,18 @@ namespace Core {
         void SetNormalizationParameters(const NormalizationParameters &parameters);
 
         /**
+         * @brief Returns the normalization parameters of the magnitude sub-index.
+         *
+         * Each segment is normalized on its own, so its magnitude distances are in units of its own
+         * standard deviation. SessionMultiIndex uses these to put every segment on one scale.
+         */
+        const NormalizationParameters &GetNormalizationParameters() const;
+
+        /**
          * @brief Takes in a span of MLRecord structs and adds them to the faiss index and calls method(s) to track metadata.
          * We are assuming that the caller has already identified which records belong in this
          * particular time block and are passing them in accordingly.
-         * @param normalizedMLSpan 
+         * @param normalizedMLSpan
          * @param recFilePath 
          * @param recordOffset 
          */

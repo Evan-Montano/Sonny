@@ -7,7 +7,7 @@
 //     → PredictionExperiment       scores earlier forecasts against each new second
 //     → LiveInputWindow            newest MAX_INPUT_WINDOW_SECONDS records, shared with the loop below
 //   Prediction loop                (this thread, every PREDICTION_INTERVAL)
-//     → PredictionExperiment       queries every input window × match count on the same snapshot
+//     → PredictionExperiment       queries every active input window × match count on the same snapshot
 
 #include "runtime.hpp"
 #include "../ui/ui.hpp"

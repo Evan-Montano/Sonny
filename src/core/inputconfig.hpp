@@ -9,6 +9,7 @@
 #include <span>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace Core {
 
@@ -45,6 +46,58 @@ namespace Core {
         IsSupportedInputWindow(DEFAULT_INPUT_WINDOW_SECONDS),
         "INPUT_WINDOW_SECONDS must be 10, 15, 20, 30, 45, or 60."
     );
+
+    /**
+     * @brief When true, the live runtime searches and forecasts with every entry in
+     * INPUT_WINDOW_CONFIGURATIONS, each on its own. When false, only SELECTED_INPUT_WINDOW_SECONDS runs.
+     *
+     * Each active window keeps all 13 of its half-hour indexes in memory (magnitude and direction),
+     * so running every window at once needs several times the memory of a single one.
+     * "Update Indexes" always builds every configured window regardless of this setting.
+     */
+    inline constexpr bool USE_ALL_INPUT_WINDOWS = false;
+
+    /**
+     * @brief The one input window the live runtime uses while USE_ALL_INPUT_WINDOWS is false.
+     * Must be an entry in INPUT_WINDOW_CONFIGURATIONS.
+     */
+    inline constexpr std::size_t SELECTED_INPUT_WINDOW_SECONDS = 60;
+
+    static_assert(
+        IsSupportedInputWindow(SELECTED_INPUT_WINDOW_SECONDS),
+        "SELECTED_INPUT_WINDOW_SECONDS must be an entry in INPUT_WINDOW_CONFIGURATIONS."
+    );
+
+    /**
+     * @brief Resolves the two settings above into the list of input windows to run.
+     * Windows are never combined: each one returned gets its own search, ranking, and forecast.
+     *
+     * @param useAllInputWindows True to return every configured window, in configuration order.
+     * @param selectedInputWindowSeconds The single window returned otherwise.
+     * @throws std::invalid_argument If a single window is requested that is not configured.
+     */
+    inline std::vector<std::size_t> SelectInputWindows(
+        const bool useAllInputWindows,
+        const std::size_t selectedInputWindowSeconds
+    ) {
+        if (useAllInputWindows) {
+            return {INPUT_WINDOW_CONFIGURATIONS.begin(), INPUT_WINDOW_CONFIGURATIONS.end()};
+        }
+
+        if (IsSupportedInputWindow(selectedInputWindowSeconds) == false) {
+            throw std::invalid_argument("The selected input window is not a configured input window.");
+        }
+
+        return {selectedInputWindowSeconds};
+    }
+
+    /**
+     * @brief The input windows the live runtime runs, as set by USE_ALL_INPUT_WINDOWS and
+     * SELECTED_INPUT_WINDOW_SECONDS.
+     */
+    inline std::vector<std::size_t> ActiveInputWindows() {
+        return SelectInputWindows(USE_ALL_INPUT_WINDOWS, SELECTED_INPUT_WINDOW_SECONDS);
+    }
 
     /**
      * @brief Number of floats in a FAISS vector: one feature (mid_delta) per second.

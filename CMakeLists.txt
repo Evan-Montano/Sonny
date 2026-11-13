@@ -86,6 +86,7 @@ add_library(sonny_core STATIC
     src/core/halfhourindex.cpp
     src/core/transformer.cpp
     src/core/halfhourmultiindex.cpp
+    src/core/sessionmultiindex.cpp
 )
 
 target_include_directories(sonny_core

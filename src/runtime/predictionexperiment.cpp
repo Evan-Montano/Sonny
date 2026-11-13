@@ -11,7 +11,10 @@
 #include <cmath>
 #include <exception>
 #include <format>
+#include <set>
 #include <span>
+#include <stdexcept>
+#include <utility>
 
 namespace Runtime {
 
@@ -25,14 +28,34 @@ namespace Runtime {
             return std::format("{}s input / {}-match cap", inputWindowSeconds, matchCount);
         }
 
+        /**
+         * @brief Start time of a half-hour segment as "HHMM", e.g. segment 5 is "1200".
+         */
+        std::string SegmentStartLabel(const std::size_t segment) {
+            constexpr std::size_t MARKET_OPEN_MINUTES = 9 * 60 + 30;
+            const std::size_t startMinutes = MARKET_OPEN_MINUTES + segment * (SECONDS_PER_SEGMENT / 60);
+
+            return std::format("{:02}{:02}", startMinutes / 60, startMinutes % 60);
+        }
+
     }
 
     // ========== PREDICTION EXPERIMENT ========== //
 
-    PredictionExperiment::PredictionExperiment() {
+    PredictionExperiment::PredictionExperiment(std::vector<std::size_t> inputWindows)
+        : input_windows_(std::move(inputWindows)),
+          slots_(input_windows_.size()) {
         for (std::size_t i = 0; i < slots_.size(); ++i) {
-            slots_[i].input_window_seconds = Core::INPUT_WINDOW_CONFIGURATIONS[i];
+            if (Core::IsSupportedInputWindow(input_windows_[i]) == false) {
+                throw std::invalid_argument(std::format("Unsupported input window length: {}", input_windows_[i]));
+            }
+
+            slots_[i].input_window_seconds = input_windows_[i];
         }
+    }
+
+    const std::vector<std::size_t>& PredictionExperiment::InputWindows() const {
+        return input_windows_;
     }
 
     // === OBSERVATION (stream thread) === //
@@ -59,15 +82,15 @@ namespace Runtime {
 
     // === PREDICTION (prediction thread) === //
 
-    void PredictionExperiment::RunSnapshot(const LiveInputWindow::Snapshot& snapshot) {
+    std::vector<PredictionExperiment::ForecastRow> PredictionExperiment::RunSnapshot(const LiveInputWindow::Snapshot& snapshot) {
         const std::optional<std::size_t> lastSecond = GetSecondsSinceMarketOpen(snapshot.last_timestamp_ms);
 
         // Pre-market and weekend data has no historical session to compare against.
         if (lastSecond.has_value() == false) {
-            return;
+            return {};
         }
 
-        std::array<ForecastRow, Core::INPUT_WINDOW_CONFIGURATIONS.size()> rows{};
+        std::vector<ForecastRow> rows(slots_.size());
 
         for (std::size_t i = 0; i < slots_.size(); ++i) {
             WindowSlot& slot = slots_[i];
@@ -78,8 +101,8 @@ namespace Runtime {
                 continue;
             }
 
-            // Indexes file each window under the segment it starts in, so look it up the same way.
-            EnsureIndexLoaded(slot, *windowStart / SECONDS_PER_SEGMENT);
+            // Every half-hour segment is searched, whichever one the live window falls in.
+            EnsureIndexLoaded(slot);
             if (slot.index == nullptr) {
                 continue;
             }
@@ -94,37 +117,46 @@ namespace Runtime {
         }
 
         LogComparison(snapshot.last_timestamp_ms, rows);
+
+        return rows;
     }
 
-    void PredictionExperiment::EnsureIndexLoaded(WindowSlot& slot, const std::size_t segment) {
-        if (slot.loaded_segment == segment) {
+    void PredictionExperiment::EnsureIndexLoaded(WindowSlot& slot) {
+        if (slot.load_attempted) {
             return;
         }
 
-        slot.index.reset();
-        slot.loaded_segment = segment;
+        slot.load_attempted = true;
 
-        const std::size_t segmentStartSecond = segment * SECONDS_PER_SEGMENT;
-
-        // Must check before constructing: a missing sub-index would otherwise be created empty and saved on destruction.
-        if (Core::HalfHourMultiIndex::FilesExist(segmentStartSecond, slot.input_window_seconds) == false) {
-            Logger::Warning(std::format(
-                "No complete index files for the {}s input window in segment {}; that configuration is skipped.",
-                slot.input_window_seconds,
-                segment
-            ));
-            return;
-        }
-
+        // Missing or unreadable segments are logged and skipped by the index itself.
         try {
-            slot.index = std::make_unique<Core::HalfHourMultiIndex>(segmentStartSecond, slot.input_window_seconds);
+            slot.index = std::make_unique<Core::SessionMultiIndex>(slot.input_window_seconds);
         }
         catch (const std::exception& error) {
-            Logger::Error(
-                std::format("Failed to load the {}s input index for segment {}: {}", slot.input_window_seconds, segment, error.what()),
-                true
-            );
+            Logger::Error(std::format("Failed to load the {}s input indexes: {}", slot.input_window_seconds, error.what()), true);
+            return;
         }
+
+        const std::size_t loadedSegments = slot.index->LoadedSegmentCount();
+
+        if (loadedSegments == 0) {
+            Logger::Warning(std::format(
+                "No index segments are available for the {}s input window; that configuration is skipped.",
+                slot.input_window_seconds
+            ));
+            slot.index.reset();
+            return;
+        }
+
+        Logger::Info(
+            std::format(
+                "{}s input: searching {} of {} half-hour segments.",
+                slot.input_window_seconds,
+                loadedSegments,
+                Core::SessionMultiIndex::SEGMENT_COUNT
+            ),
+            true
+        );
     }
 
     PredictionExperiment::ForecastRow PredictionExperiment::RunWindow(WindowSlot& slot, const LiveInputWindow::Snapshot& snapshot) {
@@ -136,7 +168,8 @@ namespace Runtime {
             inputWindowSeconds
         );
 
-        // The multi-index splits the raw window into |mid_delta| (normalized) and sign(mid_delta) queries.
+        // Each segment splits the raw window into |mid_delta| (normalized) and sign(mid_delta) queries.
+        // The results are already the nearest across every segment, ranked separately per sub-index.
         const Core::HalfHourMultiIndex::MultiQueryResult results = slot.index->Query(queryWindow, MAX_QUERY_RESULTS);
 
         const std::vector<HistoricalMatch> magnitudeMatches =
@@ -183,6 +216,10 @@ namespace Runtime {
 
         std::string distances{};
 
+        // Diagnostics: where the selected matches came from.
+        std::array<std::size_t, Core::SessionMultiIndex::SEGMENT_COUNT> segmentOrigins{};
+        std::set<std::array<char, 8>> tradingDays{};
+
         for (const Core::HalfHourIndex::QueryResult& result : results) {
             if (matches.size() >= MAX_PREDICTION_MATCHES) {
                 break;
@@ -212,9 +249,31 @@ namespace Runtime {
 
             matches.push_back(match);
             distances += std::format("{}{:.4f}", distances.empty() ? "" : ", ", result.distance);
+
+            // Each segment's index holds the windows that start inside it, so the start names the segment.
+            ++segmentOrigins[std::min(
+                static_cast<std::size_t>(result.recordIndex) / SECONDS_PER_SEGMENT,
+                Core::SessionMultiIndex::SEGMENT_COUNT - 1
+            )];
+            tradingDays.insert(result.tradingDayId);
         }
 
         Logger::Info(std::format("{}s input ({}): {} usable match distances [{}]", inputWindowSeconds, label, matches.size(), distances));
+
+        std::string origins{};
+        for (std::size_t segment = 0; segment < segmentOrigins.size(); ++segment) {
+            if (segmentOrigins[segment] > 0) {
+                origins += std::format("{}{}:{}", origins.empty() ? "" : " ", SegmentStartLabel(segment), segmentOrigins[segment]);
+            }
+        }
+
+        Logger::Info(std::format(
+            "{}s input ({}): match origins by segment [{}] across {} trading days",
+            inputWindowSeconds,
+            label,
+            origins,
+            tradingDays.size()
+        ));
 
         return matches;
     }
@@ -266,10 +325,7 @@ namespace Runtime {
         Logger::Info(message);
     }
 
-    void PredictionExperiment::LogComparison(
-        const std::int64_t asOfTimestampMs,
-        const std::array<ForecastRow, Core::INPUT_WINDOW_CONFIGURATIONS.size()>& rows
-    ) {
+    void PredictionExperiment::LogComparison(const std::int64_t asOfTimestampMs, const std::vector<ForecastRow>& rows) const {
         std::string comparison = std::format(
             "Paired forecasts @{} (same live snapshot; next {} seconds)",
             FormatTime(asOfTimestampMs),
@@ -280,7 +336,7 @@ namespace Runtime {
             for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
                 const std::optional<PredictionForecast>& forecast = rows[window][i];
 
-                comparison += "\n" + ConfigurationLabel(Core::INPUT_WINDOW_CONFIGURATIONS[window], PREDICTION_MATCH_COUNTS[i]);
+                comparison += "\n" + ConfigurationLabel(input_windows_[window], PREDICTION_MATCH_COUNTS[i]);
 
                 if (forecast.has_value() == false) {
                     comparison += " | unavailable";

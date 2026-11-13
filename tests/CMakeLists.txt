@@ -2,6 +2,7 @@ add_executable(sonny_common_tests
     common/datetime_tests.cpp
     common/jsonutil_tests.cpp
     core/halfhourindex_tests.cpp
+    core/sessionmultiindex_tests.cpp
     core/transformer_tests.cpp
     client/webullstream_tests.cpp
     client/webull_proto_tests.cpp
