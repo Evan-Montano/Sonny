@@ -42,9 +42,14 @@ namespace Runtime {
 
     // ========== PREDICTION EXPERIMENT ========== //
 
-    PredictionExperiment::PredictionExperiment(std::vector<std::size_t> inputWindows)
+    PredictionExperiment::PredictionExperiment(std::vector<std::size_t> inputWindows, const std::size_t maxLoadedSegments)
         : input_windows_(std::move(inputWindows)),
+          max_loaded_segments_(maxLoadedSegments),
           slots_(input_windows_.size()) {
+        if (max_loaded_segments_ == 0) {
+            throw std::invalid_argument("At least one half-hour segment must be allowed to load.");
+        }
+
         for (std::size_t i = 0; i < slots_.size(); ++i) {
             if (Core::IsSupportedInputWindow(input_windows_[i]) == false) {
                 throw std::invalid_argument(std::format("Unsupported input window length: {}", input_windows_[i]));
@@ -82,6 +87,15 @@ namespace Runtime {
 
     // === PREDICTION (prediction thread) === //
 
+    void PredictionExperiment::Preload(const std::int64_t timestampMs) {
+        // Before the open (and on weekends) the next thing needed is the start of a session.
+        const std::size_t currentSegment = GetSecondsSinceMarketOpen(timestampMs).value_or(0) / SECONDS_PER_SEGMENT;
+
+        for (WindowSlot& slot : slots_) {
+            EnsureIndexLoaded(slot, currentSegment);
+        }
+    }
+
     std::vector<PredictionExperiment::ForecastRow> PredictionExperiment::RunSnapshot(const LiveInputWindow::Snapshot& snapshot) {
         const std::optional<std::size_t> lastSecond = GetSecondsSinceMarketOpen(snapshot.last_timestamp_ms);
 
@@ -101,9 +115,10 @@ namespace Runtime {
                 continue;
             }
 
-            // Every half-hour segment is searched, whichever one the live window falls in.
-            EnsureIndexLoaded(slot);
-            if (slot.index == nullptr) {
+            // The loaded segments follow the time of day; the window's start says which segment it is in,
+            // the same way the indexes file each window under the segment it starts in.
+            EnsureIndexLoaded(slot, *windowStart / SECONDS_PER_SEGMENT);
+            if (slot.index == nullptr || slot.index->LoadedSegmentCount() == 0) {
                 continue;
             }
 
@@ -121,42 +136,48 @@ namespace Runtime {
         return rows;
     }
 
-    void PredictionExperiment::EnsureIndexLoaded(WindowSlot& slot) {
-        if (slot.load_attempted) {
+    void PredictionExperiment::EnsureIndexLoaded(WindowSlot& slot, const std::size_t currentSegment) {
+        // Nothing changes within a segment, which also keeps unavailable segments from being retried every cycle.
+        if (slot.centered_segment == currentSegment) {
             return;
         }
 
-        slot.load_attempted = true;
+        slot.centered_segment = currentSegment;
 
-        // Missing or unreadable segments are logged and skipped by the index itself.
-        try {
+        if (slot.index == nullptr) {
             slot.index = std::make_unique<Core::SessionMultiIndex>(slot.input_window_seconds);
         }
-        catch (const std::exception& error) {
-            Logger::Error(std::format("Failed to load the {}s input indexes: {}", slot.input_window_seconds, error.what()), true);
-            return;
-        }
 
-        const std::size_t loadedSegments = slot.index->LoadedSegmentCount();
+        const std::vector<std::size_t> previouslyLoaded = slot.index->LoadedSegments();
 
-        if (loadedSegments == 0) {
+        // Missing or unreadable segments are logged and skipped by the index itself.
+        slot.index->LoadSegments(Core::SessionMultiIndex::SelectSegments(currentSegment, max_loaded_segments_));
+
+        const std::vector<std::size_t> loaded = slot.index->LoadedSegments();
+
+        if (loaded.empty()) {
             Logger::Warning(std::format(
-                "No index segments are available for the {}s input window; that configuration is skipped.",
-                slot.input_window_seconds
+                "No index segments are available for the {}s input window around {}; that configuration is skipped.",
+                slot.input_window_seconds,
+                SegmentStartLabel(std::min(currentSegment, Core::SessionMultiIndex::SEGMENT_COUNT - 1))
             ));
-            slot.index.reset();
             return;
         }
 
-        Logger::Info(
-            std::format(
-                "{}s input: searching {} of {} half-hour segments.",
-                slot.input_window_seconds,
-                loadedSegments,
-                Core::SessionMultiIndex::SEGMENT_COUNT
-            ),
-            true
-        );
+        if (loaded != previouslyLoaded) {
+            Logger::Info(
+                std::format(
+                    "{}s input: searching {} of {} half-hour segments, {} to {} (limit {}).",
+                    slot.input_window_seconds,
+                    loaded.size(),
+                    Core::SessionMultiIndex::SEGMENT_COUNT,
+                    SegmentStartLabel(loaded.front()),
+                    SegmentStartLabel(loaded.back() + 1),
+                    max_loaded_segments_
+                ),
+                true
+            );
+        }
     }
 
     PredictionExperiment::ForecastRow PredictionExperiment::RunWindow(WindowSlot& slot, const LiveInputWindow::Snapshot& snapshot) {

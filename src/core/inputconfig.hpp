@@ -51,9 +51,9 @@ namespace Core {
      * @brief When true, the live runtime searches and forecasts with every entry in
      * INPUT_WINDOW_CONFIGURATIONS, each on its own. When false, only SELECTED_INPUT_WINDOW_SECONDS runs.
      *
-     * Each active window keeps all 13 of its half-hour indexes in memory (magnitude and direction),
-     * so running every window at once needs several times the memory of a single one.
-     * "Update Indexes" always builds every configured window regardless of this setting.
+     * Each active window keeps up to MAX_LOADED_SEGMENTS of its half-hour indexes in memory
+     * (magnitude and direction), so running every window at once needs several times the memory of a
+     * single one. "Update Indexes" always builds every configured window regardless of this setting.
      */
     inline constexpr bool USE_ALL_INPUT_WINDOWS = false;
 
@@ -69,7 +69,24 @@ namespace Core {
     );
 
     /**
-     * @brief Resolves the two settings above into the list of input windows to run.
+     * @brief Most half-hour segments an active input window keeps in memory at once (1 to 13).
+     *
+     * A session has 13 segments. When fewer are allowed, the ones nearest the current time of day
+     * are loaded, and the set follows the clock as the session moves on: in the last hour with a
+     * limit of 8, the 8 segments from 12:00 to the close are searched.
+     *
+     * Each index stores every overlapping window in full, so memory grows with the input window.
+     * With the current corpus (about 4.09 million windows per segment) one segment costs roughly
+     * 34 MB per second of input window for its two indexes and their metadata:
+     * about 2.1 GB at 60s, 1.1 GB at 30s, and 0.4 GB at 10s. Multiply by this limit, and by the
+     * number of active windows, to get the total. Values above 13 behave as 13.
+     */
+    inline constexpr std::size_t MAX_LOADED_SEGMENTS = 4;
+
+    static_assert(MAX_LOADED_SEGMENTS >= 1, "MAX_LOADED_SEGMENTS must allow at least one segment.");
+
+    /**
+     * @brief Resolves the input-window settings above into the list of input windows to run.
      * Windows are never combined: each one returned gets its own search, ranking, and forecast.
      *
      * @param useAllInputWindows True to return every configured window, in configuration order.

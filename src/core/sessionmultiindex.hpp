@@ -16,12 +16,15 @@
 namespace Core {
 
     /**
-     * @brief Loads the HalfHourMultiIndex of every half-hour segment for one input window and answers
-     * a query with the nearest matches across the whole session.
+     * @brief Holds the HalfHourMultiIndex of several half-hour segments for one input window and
+     * answers a query with the nearest matches across all of them.
      *
      * Each segment is only a source of candidates. They are pooled, ranked together, and capped once,
      * so the result is the nearest matches overall rather than the nearest per segment.
      * Magnitude and direction candidates are pooled, ranked, and capped separately throughout.
+     *
+     * Which segments are held is chosen by the caller (see SelectSegments and LoadSegments), because
+     * a full session of indexes can be far larger than the machine's memory.
      */
     class SessionMultiIndex {
     public:
@@ -40,10 +43,7 @@ namespace Core {
         // CONSTRUCTOR
 
         /**
-         * @brief Loads every segment that has complete index files for the given input window.
-         *
-         * A segment whose files are missing is skipped with a warning, and one that fails to load is
-         * skipped with an error; the remaining segments are still searched. Nothing is written to disk.
+         * @brief Creates an index for the given input window with no segments loaded yet.
          *
          * @param inputWindowSeconds Input window the indexes were built for.
          */
@@ -52,12 +52,46 @@ namespace Core {
         // METHODS
 
         /**
-         * @brief Number of segments that loaded and take part in queries.
+         * @brief Chooses which segments to hold when only maxSegments fit in memory: the run of
+         * consecutive segments nearest the current time of day.
+         *
+         * The run is centred on currentSegment (taking the extra later segment when it cannot be
+         * centred exactly) and slides back inside the session at either end. With 8 segments allowed
+         * in the last half hour, that is the 8 segments up to the close.
+         *
+         * @param currentSegment Segment the live window falls in; past the close counts as the last one.
+         * @param maxSegments Most segments to return; values above SEGMENT_COUNT behave as SEGMENT_COUNT.
+         * @return The chosen segments in session order; empty when maxSegments is 0.
+         */
+        static std::vector<std::size_t> SelectSegments(std::size_t currentSegment, std::size_t maxSegments);
+
+        /**
+         * @brief Makes the held segments match the given list: releases the ones no longer listed,
+         * then loads the newly listed ones. Segments already held are left alone.
+         *
+         * Releasing comes first so the outgoing and incoming segments are never in memory together.
+         * A segment whose files are missing is skipped with a warning, and one that fails to load is
+         * skipped with an error; neither is tried again, and the remaining segments are still
+         * searched. Nothing is written to disk.
+         *
+         * @param segments Segments to hold, each below SEGMENT_COUNT.
+         * @throws std::out_of_range If a segment is not below SEGMENT_COUNT.
+         */
+        void LoadSegments(std::span<const std::size_t> segments);
+
+        /**
+         * @brief Number of segments that are loaded and take part in queries.
          */
         std::size_t LoadedSegmentCount() const;
 
         /**
+         * @brief The segments that are loaded and take part in queries, in session order.
+         */
+        std::vector<std::size_t> LoadedSegments() const;
+
+        /**
          * @brief Queries every loaded segment and returns the nearest matches across all of them.
+         * Returns no results while no segment is loaded.
          *
          * Up to maxResults candidates are taken from each segment, pooled per sub-index, reduced with
          * SelectNearest, and capped at maxResults overall. Magnitude distances are first converted
@@ -129,10 +163,23 @@ namespace Core {
         std::array<std::unique_ptr<HalfHourMultiIndex>, SEGMENT_COUNT> _segments{};
 
         /**
-         * @brief MagnitudeDistanceScale of each segment; 0 where the segment is unavailable or
+         * @brief Segments that were missing or failed to load, so they are not tried on every change.
+         */
+        std::array<bool, SEGMENT_COUNT> _unavailable{};
+
+        /**
+         * @brief MagnitudeDistanceScale of each segment; 0 where the segment is not loaded or
          * its magnitude distances cannot be compared.
          */
         std::array<double, SEGMENT_COUNT> _magnitudeDistanceScales{};
+
+        // METHODS
+
+        /**
+         * @brief Recalculates _magnitudeDistanceScales for the segments that are loaded now.
+         * The common scale is pooled from the loaded segments, so it changes whenever they do.
+         */
+        void UpdateMagnitudeDistanceScales();
     };
 
 }

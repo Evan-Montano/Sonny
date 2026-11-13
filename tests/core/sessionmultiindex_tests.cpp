@@ -59,6 +59,21 @@ namespace {
         return result.recordIndex / SessionMultiIndex::SECONDS_PER_SEGMENT;
     }
 
+    /**
+     * @brief An index holding every segment that exists on disk.
+     */
+    SessionMultiIndex LoadEverySegment() {
+        SessionMultiIndex index(WINDOW);
+        index.LoadSegments(SessionMultiIndex::SelectSegments(0, SessionMultiIndex::SEGMENT_COUNT));
+        return index;
+    }
+
+    std::vector<std::size_t> Segments(const std::size_t first, const std::size_t last) {
+        std::vector<std::size_t> segments;
+        for (std::size_t segment = first; segment <= last; ++segment) segments.push_back(segment);
+        return segments;
+    }
+
 }
 
 /**
@@ -159,6 +174,61 @@ TEST(InputWindowSelectionTests, ActiveWindowsFollowTheConfiguredSettings) {
         Core::ActiveInputWindows(),
         Core::SelectInputWindows(Core::USE_ALL_INPUT_WINDOWS, Core::SELECTED_INPUT_WINDOW_SECONDS)
     );
+}
+
+// ============================================================ //
+// SEGMENT SELECTION
+// ============================================================ //
+
+TEST(SegmentSelectionTests, ChoosesTheSegmentsNearestTheTimeOfDay) {
+    // Mid-session with room for five: two either side of the current segment.
+    EXPECT_EQ(SessionMultiIndex::SelectSegments(6, 5), Segments(4, 8));
+
+    // An even limit cannot be centred; the extra segment is the later one, which is needed next.
+    EXPECT_EQ(SessionMultiIndex::SelectSegments(6, 4), Segments(5, 8));
+
+    EXPECT_EQ(SessionMultiIndex::SelectSegments(6, 1), Segments(6, 6));
+}
+
+TEST(SegmentSelectionTests, LateInTheDayTakesTheLatterPartOfTheSession) {
+    // The last hour is segments 11 (15:00) and 12 (15:30). With 8 allowed, both get 12:00 to the close.
+    EXPECT_EQ(SessionMultiIndex::SelectSegments(11, 8), Segments(5, 12));
+    EXPECT_EQ(SessionMultiIndex::SelectSegments(12, 8), Segments(5, 12));
+
+    EXPECT_EQ(SessionMultiIndex::SelectSegments(12, 1), Segments(12, 12));
+}
+
+TEST(SegmentSelectionTests, EarlyInTheDayTakesTheStartOfTheSession) {
+    EXPECT_EQ(SessionMultiIndex::SelectSegments(0, 8), Segments(0, 7));
+    EXPECT_EQ(SessionMultiIndex::SelectSegments(1, 8), Segments(0, 7));
+    EXPECT_EQ(SessionMultiIndex::SelectSegments(0, 1), Segments(0, 0));
+}
+
+TEST(SegmentSelectionTests, AlwaysReturnsAsManyConsecutiveSegmentsAsAllowed) {
+    for (std::size_t limit = 1; limit <= SessionMultiIndex::SEGMENT_COUNT; ++limit) {
+        for (std::size_t current = 0; current < SessionMultiIndex::SEGMENT_COUNT; ++current) {
+            const auto segments = SessionMultiIndex::SelectSegments(current, limit);
+
+            ASSERT_EQ(segments.size(), limit) << "current " << current;
+            EXPECT_EQ(segments, Segments(segments.front(), segments.back()));
+            EXPECT_LT(segments.back(), SessionMultiIndex::SEGMENT_COUNT);
+
+            // The current segment is always among them.
+            EXPECT_LE(segments.front(), current);
+            EXPECT_GE(segments.back(), current);
+        }
+    }
+}
+
+TEST(SegmentSelectionTests, HandlesLimitsAndSegmentsOutsideTheSession) {
+    // A limit of 13 or more is the whole session, whatever the time.
+    EXPECT_EQ(SessionMultiIndex::SelectSegments(3, 13), Segments(0, 12));
+    EXPECT_EQ(SessionMultiIndex::SelectSegments(3, 100), Segments(0, 12));
+
+    // Past the close counts as the last segment.
+    EXPECT_EQ(SessionMultiIndex::SelectSegments(40, 3), Segments(10, 12));
+
+    EXPECT_TRUE(SessionMultiIndex::SelectSegments(5, 0).empty());
 }
 
 // ============================================================ //
@@ -327,7 +397,7 @@ TEST_F(SessionMultiIndexTests, LoadsAndQueriesAllThirteenSegments) {
         BuildSegment(segment, {{.records = Flat(1.0f + static_cast<float>(segment))}});
     }
 
-    const SessionMultiIndex index(WINDOW);
+    const SessionMultiIndex index = LoadEverySegment();
     ASSERT_EQ(index.LoadedSegmentCount(), SessionMultiIndex::SEGMENT_COUNT);
     ASSERT_EQ(index.LoadedSegmentCount(), 13u);
 
@@ -363,7 +433,7 @@ TEST_F(SessionMultiIndexTests, CapAppliesToThePooledCandidatesNotToEachSegment) 
     });
     BuildFarWindowInEverySegmentExcept({3});
 
-    const SessionMultiIndex index(WINDOW);
+    const SessionMultiIndex index = LoadEverySegment();
     ASSERT_EQ(index.LoadedSegmentCount(), 13u);
 
     const auto results = index.Query(Flat(1.0f), 3);
@@ -390,7 +460,7 @@ TEST_F(SessionMultiIndexTests, RanksCandidatesFromDifferentSegmentsTogether) {
     BuildSegment(6, {{.records = Flat(1.1f)}});
     BuildSegment(12, {{.records = Flat(1.2f)}});
 
-    const SessionMultiIndex index(WINDOW);
+    const SessionMultiIndex index = LoadEverySegment();
     const auto results = index.Query(Flat(1.0f), 2);
 
     ASSERT_EQ(results.MagnitudeResults.size(), 2u);
@@ -406,7 +476,7 @@ TEST_F(SessionMultiIndexTests, MagnitudeAndDirectionAreRankedIndependently) {
     // Segment 9 points the same way but its moves are four times larger.
     BuildSegment(9, {{.records = Flat(4.0f)}});
 
-    const SessionMultiIndex index(WINDOW);
+    const SessionMultiIndex index = LoadEverySegment();
     const auto results = index.Query(Flat(1.0f), 1);
 
     ASSERT_EQ(results.MagnitudeResults.size(), 1u);
@@ -442,7 +512,7 @@ TEST_F(SessionMultiIndexTests, MagnitudeDistancesAreComparedOnOneScaleAcrossSegm
         ASSERT_LT(volatileDistance, quietDistance);
     }
 
-    const SessionMultiIndex index(WINDOW);
+    const SessionMultiIndex index = LoadEverySegment();
     const auto results = index.Query(Flat(1.0f), 2);
 
     ASSERT_EQ(results.MagnitudeResults.size(), 2u);
@@ -464,7 +534,7 @@ TEST_F(SessionMultiIndexTests, SegmentNormalizationMeansDoNotAffectTheRanking) {
     BuildSegment(0, {{.records = Flat(1.3f)}}, MakeParameters(0.0, 2.0));
     BuildSegment(7, {{.records = Flat(1.1f)}}, MakeParameters(50.0, 2.0));
 
-    const SessionMultiIndex index(WINDOW);
+    const SessionMultiIndex index = LoadEverySegment();
     const auto results = index.Query(Flat(1.0f), 2);
 
     ASSERT_EQ(results.MagnitudeResults.size(), 2u);
@@ -477,7 +547,7 @@ TEST_F(SessionMultiIndexTests, SegmentWithoutAStandardDeviationIsLeftOutOfMagnit
     BuildSegment(0, {{.records = Flat(3.0f)}}, MakeParameters(0.0, 0.0));
     BuildSegment(1, {{.records = Flat(1.5f)}});
 
-    const SessionMultiIndex index(WINDOW);
+    const SessionMultiIndex index = LoadEverySegment();
     ASSERT_EQ(index.LoadedSegmentCount(), 2u);
 
     const auto results = index.Query(Flat(1.0f), 5);
@@ -490,6 +560,102 @@ TEST_F(SessionMultiIndexTests, SegmentWithoutAStandardDeviationIsLeftOutOfMagnit
 }
 
 // ============================================================ //
+// LOADING A SUBSET OF SEGMENTS
+// ============================================================ //
+
+TEST_F(SessionMultiIndexTests, NothingIsLoadedUntilSegmentsAreRequested) {
+    BuildSegment(0, {{.records = Flat(1.0f)}});
+
+    const SessionMultiIndex index(WINDOW);
+
+    EXPECT_EQ(index.LoadedSegmentCount(), 0u);
+    EXPECT_TRUE(index.Query(Flat(1.0f), 5).MagnitudeResults.empty());
+    EXPECT_TRUE(index.Query(Flat(1.0f), 5).DirectionResults.empty());
+}
+
+TEST_F(SessionMultiIndexTests, LoadsAndSearchesOnlyTheRequestedSegments) {
+    // Segment s holds one window whose every second moves by 1 + s.
+    for (std::size_t segment = 0; segment < SessionMultiIndex::SEGMENT_COUNT; ++segment) {
+        BuildSegment(segment, {{.records = Flat(1.0f + static_cast<float>(segment))}});
+    }
+
+    SessionMultiIndex index(WINDOW);
+    index.LoadSegments(Segments(5, 8));
+
+    EXPECT_EQ(index.LoadedSegments(), Segments(5, 8));
+    EXPECT_EQ(index.LoadedSegmentCount(), 4u);
+
+    const auto results = index.Query(Flat(1.0f), 32);
+
+    // Segment 0 holds an exact match, but it is not loaded: the nearest loaded segment answers.
+    ASSERT_EQ(results.MagnitudeResults.size(), 4u);
+    ASSERT_EQ(results.DirectionResults.size(), 4u);
+    EXPECT_EQ(SegmentOf(results.MagnitudeResults.front()), 5u);
+    EXPECT_GT(results.MagnitudeResults.front().distance, 0.0f);
+
+    for (const auto& result : results.MagnitudeResults) {
+        EXPECT_GE(SegmentOf(result), 5u);
+        EXPECT_LE(SegmentOf(result), 8u);
+    }
+}
+
+TEST_F(SessionMultiIndexTests, MovingTheLoadedSegmentsReleasesTheOldAndLoadsTheNew) {
+    for (std::size_t segment = 0; segment < SessionMultiIndex::SEGMENT_COUNT; ++segment) {
+        BuildSegment(segment, {{.records = Flat(1.0f + static_cast<float>(segment))}});
+    }
+
+    SessionMultiIndex index(WINDOW);
+
+    index.LoadSegments(Segments(0, 2));
+    EXPECT_EQ(index.LoadedSegments(), Segments(0, 2));
+    EXPECT_EQ(SegmentOf(index.Query(Flat(1.0f), 1).MagnitudeResults.front()), 0u);
+
+    // One step later in the day: segment 0 is released and segment 3 loaded.
+    index.LoadSegments(Segments(1, 3));
+    EXPECT_EQ(index.LoadedSegments(), Segments(1, 3));
+    EXPECT_EQ(SegmentOf(index.Query(Flat(1.0f), 1).MagnitudeResults.front()), 1u);
+    EXPECT_NEAR(index.Query(Flat(4.0f), 1).MagnitudeResults.front().distance, 0.0f, 1e-6f);
+
+    // The same request again changes nothing.
+    index.LoadSegments(Segments(1, 3));
+    EXPECT_EQ(index.LoadedSegments(), Segments(1, 3));
+
+    // An empty request releases everything.
+    index.LoadSegments({});
+    EXPECT_EQ(index.LoadedSegmentCount(), 0u);
+    EXPECT_TRUE(index.Query(Flat(1.0f), 5).MagnitudeResults.empty());
+}
+
+TEST_F(SessionMultiIndexTests, CommonMagnitudeScaleFollowsTheLoadedSegments) {
+    BuildSegment(1, {{.records = Flat(1.2f)}}, MakeParameters(0.0, 1.0));
+    BuildSegment(4, {{.records = Flat(1.5f)}}, MakeParameters(0.0, 10.0));
+
+    SessionMultiIndex index(WINDOW);
+
+    // Alone, a segment is its own reference: its distances are exactly what it reports itself.
+    index.LoadSegments(Segments(4, 4));
+    EXPECT_NEAR(index.Query(Flat(1.0f), 1).MagnitudeResults.front().distance, 0.025f, 1e-5f);
+
+    // With a second segment loaded, both are re-expressed in units of their pooled standard deviation.
+    index.LoadSegments(std::vector<std::size_t>{1, 4});
+
+    const std::vector<Core::NormalizationParameters> parameters{MakeParameters(0.0, 1.0), MakeParameters(0.0, 10.0)};
+    const double reference = SessionMultiIndex::PooledStandardDeviation(parameters);
+
+    const auto results = index.Query(Flat(1.0f), 2);
+    ASSERT_EQ(results.MagnitudeResults.size(), 2u);
+    EXPECT_EQ(SegmentOf(results.MagnitudeResults[0]), 1u);
+    EXPECT_NEAR(results.MagnitudeResults[1].distance, 2.5 / (reference * reference), 1e-6);
+}
+
+TEST_F(SessionMultiIndexTests, RejectsSegmentsOutsideTheSession) {
+    SessionMultiIndex index(WINDOW);
+
+    EXPECT_THROW(index.LoadSegments(std::vector<std::size_t>{SessionMultiIndex::SEGMENT_COUNT}), std::out_of_range);
+    EXPECT_EQ(index.LoadedSegmentCount(), 0u);
+}
+
+// ============================================================ //
 // DUPLICATES
 // ============================================================ //
 
@@ -499,7 +665,7 @@ TEST_F(SessionMultiIndexTests, WindowStoredInTwoSegmentsIsReturnedOnceWithItsBes
     BuildSegment(1, {{.records = Flat(1.0f), .day = "2026-09-01", .recordIndex = 1795}});
     BuildSegment(2, {{.records = Flat(2.0f), .day = "2026-09-01"}});
 
-    const SessionMultiIndex index(WINDOW);
+    const SessionMultiIndex index = LoadEverySegment();
     const auto results = index.Query(Flat(1.0f), 10);
 
     for (const auto* streamResults : {&results.MagnitudeResults, &results.DirectionResults}) {
@@ -525,7 +691,7 @@ TEST_F(SessionMultiIndexTests, MissingSegmentsAreSkippedAndNeverCreated) {
     BuildSegment(5, {{.records = Flat(1.1f)}});
 
     {
-        const SessionMultiIndex index(WINDOW);
+        const SessionMultiIndex index = LoadEverySegment();
         EXPECT_EQ(index.LoadedSegmentCount(), 2u);
 
         const auto results = index.Query(Flat(1.0f), 10);
@@ -548,7 +714,7 @@ TEST_F(SessionMultiIndexTests, SegmentMissingOneOfItsFilesIsSkippedWhole) {
     // Without its direction index, segment 1 contributes to neither sub-index.
     std::filesystem::remove("storage/indexes/10s/d/1000-1030.index");
 
-    const SessionMultiIndex index(WINDOW);
+    const SessionMultiIndex index = LoadEverySegment();
     EXPECT_EQ(index.LoadedSegmentCount(), 1u);
 
     const auto results = index.Query(Flat(1.0f), 10);
@@ -565,7 +731,7 @@ TEST_F(SessionMultiIndexTests, SegmentThatFailsToLoadIsSkipped) {
     faiss::IndexFlatL2 incompatibleIndex(static_cast<int>(WINDOW) + 5);
     faiss::write_index(&incompatibleIndex, "storage/indexes/10s/m/1000-1030.index");
 
-    const SessionMultiIndex index(WINDOW);
+    const SessionMultiIndex index = LoadEverySegment();
     EXPECT_EQ(index.LoadedSegmentCount(), 1u);
 
     const auto results = index.Query(Flat(1.0f), 10);
@@ -575,7 +741,7 @@ TEST_F(SessionMultiIndexTests, SegmentThatFailsToLoadIsSkipped) {
 
 TEST_F(SessionMultiIndexTests, NoSegmentsMeansNoResultsAndNoFiles) {
     {
-        const SessionMultiIndex index(WINDOW);
+        const SessionMultiIndex index = LoadEverySegment();
         EXPECT_EQ(index.LoadedSegmentCount(), 0u);
 
         const auto results = index.Query(Flat(1.0f), 10);
@@ -589,7 +755,7 @@ TEST_F(SessionMultiIndexTests, NoSegmentsMeansNoResultsAndNoFiles) {
 TEST_F(SessionMultiIndexTests, QueryRejectsIncorrectRecordCount) {
     BuildSegment(0, {{.records = Flat(1.0f)}});
 
-    const SessionMultiIndex index(WINDOW);
+    const SessionMultiIndex index = LoadEverySegment();
     const std::vector<Core::MLRecord> tooShort(WINDOW - 1, Core::MLRecord{.mid_delta = 1.0f});
 
     EXPECT_THROW(index.Query(tooShort, 5), std::invalid_argument);

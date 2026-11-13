@@ -11,6 +11,7 @@
 
 #include "runtime.hpp"
 #include "../ui/ui.hpp"
+#include "core/inputconfig.hpp"
 #include "liveinputwindow.hpp"
 #include "onesecondaggregator.hpp"
 #include "predictionexperiment.hpp"
@@ -111,6 +112,15 @@ namespace Runtime {
         const StreamStopGuard streamStopGuard(this->QuoteClient);
         this->QuoteClient.Start(this->EnvironmentType);
         UI::Get().Refresh();
+
+        // --- Index preload --- //
+        // Single-window mode only: read the window's indexes now, while the stream is still filling
+        // the first input window, so the first prediction does not have to wait for them.
+        // With every window active they load on first use instead, as before.
+        if (Core::USE_ALL_INPUT_WINDOWS == false) {
+            const auto now = std::chrono::system_clock::now().time_since_epoch();
+            experiment.Preload(std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+        }
 
         // --- Prediction loop --- //
         // Each cycle forecasts from the newest full window; unchanged windows are skipped.

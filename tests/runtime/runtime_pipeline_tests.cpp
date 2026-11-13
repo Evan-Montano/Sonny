@@ -514,13 +514,42 @@ protected:
     static bool HasNoForecast(const Runtime::PredictionExperiment::ForecastRow& row) {
         return std::none_of(row.begin(), row.end(), [](const auto& forecast) { return forecast.has_value(); });
     }
+
+    /**
+     * @brief True when the forecast's sizes are those of what followed the given historical window.
+     * An exact magnitude match outweighs every other match by many orders of magnitude, so this
+     * holds only if the segment containing that window was searched.
+     */
+    static bool FoundExactMatch(
+        const Runtime::PredictionExperiment::ForecastRow& row,
+        const std::vector<Core::MLRecord>& day,
+        const std::size_t historicalLastSecond
+    ) {
+        std::size_t comparedHorizons = 0;
+
+        for (std::size_t i = 0; i < Runtime::PredictionEvaluationHorizons.size(); ++i) {
+            double cumulative = 0.0;
+            for (std::size_t second = 1; second <= Runtime::PredictionEvaluationHorizons[i]; ++second) {
+                cumulative += day[historicalLastSecond + second].mid_delta;
+            }
+
+            // A split direction vote zeroes the forecast; its size cannot be read back then.
+            const double forecast = row.back()->cumulative_changes[i];
+            if (forecast != 0.0) {
+                if (std::abs(std::abs(forecast) - std::abs(cumulative)) > 1e-6) return false;
+                ++comparedHorizons;
+            }
+        }
+
+        return comparedHorizons > 0;
+    }
 };
 
 TEST_F(PredictionExperimentTests, SingleWindowModeForecastsOnlyTheSelectedWindow) {
     BuildIndexes(10);
     BuildIndexes(15);
 
-    Runtime::PredictionExperiment experiment(Core::SelectInputWindows(false, 15));
+    Runtime::PredictionExperiment experiment(Core::SelectInputWindows(false, 15), SEGMENT_COUNT);
     EXPECT_EQ(experiment.InputWindows(), std::vector<std::size_t>{15});
 
     const auto rows = experiment.RunSnapshot(MakeSnapshot(days_[0].second, 5000, 5000));
@@ -542,7 +571,7 @@ TEST_F(PredictionExperimentTests, AllWindowsModeForecastsEachConfiguredWindowInd
 
     const Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(days_[0].second, 5000, 5000);
 
-    Runtime::PredictionExperiment allWindows(Core::SelectInputWindows(true, 60));
+    Runtime::PredictionExperiment allWindows(Core::SelectInputWindows(true, 60), SEGMENT_COUNT);
     const auto rows = allWindows.RunSnapshot(snapshot);
 
     ASSERT_EQ(rows.size(), Core::INPUT_WINDOW_CONFIGURATIONS.size());
@@ -558,7 +587,7 @@ TEST_F(PredictionExperimentTests, AllWindowsModeForecastsEachConfiguredWindowInd
 
     // Each window's forecast is exactly what it produces when run alone.
     for (const std::size_t slot : {std::size_t{0}, std::size_t{1}}) {
-        Runtime::PredictionExperiment alone({allWindows.InputWindows()[slot]});
+        Runtime::PredictionExperiment alone({allWindows.InputWindows()[slot]}, SEGMENT_COUNT);
         const auto aloneRows = alone.RunSnapshot(snapshot);
 
         ASSERT_EQ(aloneRows.size(), 1u);
@@ -580,7 +609,7 @@ TEST_F(PredictionExperimentTests, MatchesComeFromAnySegmentWhateverTheTimeOfDay)
     const std::vector<Core::MLRecord>& day = days_[1].second;
     const std::size_t historicalLastSecond = 10 * SECONDS_PER_SEGMENT + 700;
 
-    Runtime::PredictionExperiment experiment({10});
+    Runtime::PredictionExperiment experiment({10}, SEGMENT_COUNT);
     const auto rows = experiment.RunSnapshot(MakeSnapshot(day, historicalLastSecond, 300));
 
     ASSERT_EQ(rows.size(), 1u);
@@ -617,7 +646,7 @@ TEST_F(PredictionExperimentTests, MissingSegmentsDoNotStopTheForecast) {
         std::filesystem::remove(std::format("storage/metadata/10s/{}/1330-1400.meta", type));
     }
 
-    Runtime::PredictionExperiment experiment({10});
+    Runtime::PredictionExperiment experiment({10}, SEGMENT_COUNT);
     const auto rows = experiment.RunSnapshot(MakeSnapshot(days_[0].second, 5000, 5000));
 
     ASSERT_EQ(rows.size(), 1u);
@@ -629,7 +658,7 @@ TEST_F(PredictionExperimentTests, MissingSegmentsDoNotStopTheForecast) {
 }
 
 TEST_F(PredictionExperimentTests, WindowWithoutAnyIndexIsUnavailable) {
-    Runtime::PredictionExperiment experiment({10});
+    Runtime::PredictionExperiment experiment({10}, SEGMENT_COUNT);
 
     const Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(days_[0].second, 5000, 5000);
     const auto rows = experiment.RunSnapshot(snapshot);
@@ -645,7 +674,7 @@ TEST_F(PredictionExperimentTests, WindowWithoutAnyIndexIsUnavailable) {
 TEST_F(PredictionExperimentTests, SkipsSnapshotsOutsideTheSession) {
     BuildIndexes(10);
 
-    Runtime::PredictionExperiment experiment({10});
+    Runtime::PredictionExperiment experiment({10}, SEGMENT_COUNT);
 
     // Pre-market: no historical session to compare against.
     Runtime::LiveInputWindow::Snapshot preMarket = MakeSnapshot(days_[0].second, 5000, 5000);
@@ -660,4 +689,99 @@ TEST_F(PredictionExperimentTests, SkipsSnapshotsOutsideTheSession) {
 
 TEST_F(PredictionExperimentTests, RejectsAnUnconfiguredInputWindow) {
     EXPECT_THROW(Runtime::PredictionExperiment({25}), std::invalid_argument);
+}
+
+TEST_F(PredictionExperimentTests, RejectsALimitOfNoSegments) {
+    EXPECT_THROW(Runtime::PredictionExperiment({10}, 0), std::invalid_argument);
+}
+
+// === SEGMENT LIMIT AND PRELOAD === //
+
+TEST_F(PredictionExperimentTests, LimitedSegmentsAreTheOnesNearestTheTimeOfDay) {
+    BuildIndexes(10);
+
+    // The live window repeats a historical window from the 14:30-15:00 segment (segment 10).
+    const std::vector<Core::MLRecord>& day = days_[1].second;
+    const std::size_t historicalLastSecond = 10 * SECONDS_PER_SEGMENT + 700;
+
+    const std::size_t afterTheOpen = 300;
+    const std::size_t lastHalfHour = 12 * SECONDS_PER_SEGMENT + 100;
+
+    // Eight segments in the last half hour are 12:00 to the close, which includes segment 10.
+    {
+        Runtime::PredictionExperiment experiment({10}, 8);
+        const auto rows = experiment.RunSnapshot(MakeSnapshot(day, historicalLastSecond, lastHalfHour));
+        ASSERT_TRUE(HasEveryForecast(rows[0]));
+        EXPECT_TRUE(FoundExactMatch(rows[0], day, historicalLastSecond));
+    }
+
+    // Eight segments after the open are 09:30 to 13:30, which does not.
+    {
+        Runtime::PredictionExperiment experiment({10}, 8);
+        const auto rows = experiment.RunSnapshot(MakeSnapshot(day, historicalLastSecond, afterTheOpen));
+        ASSERT_TRUE(HasEveryForecast(rows[0]));
+        EXPECT_FALSE(FoundExactMatch(rows[0], day, historicalLastSecond));
+    }
+
+    // A tighter limit late in the day still reaches one segment back.
+    {
+        Runtime::PredictionExperiment experiment({10}, 4);
+        const auto rows = experiment.RunSnapshot(MakeSnapshot(day, historicalLastSecond, 11 * SECONDS_PER_SEGMENT + 100));
+        ASSERT_TRUE(HasEveryForecast(rows[0]));
+        EXPECT_TRUE(FoundExactMatch(rows[0], day, historicalLastSecond));
+    }
+}
+
+TEST_F(PredictionExperimentTests, LoadedSegmentsMoveWithTheSession) {
+    BuildIndexes(10);
+
+    const std::vector<Core::MLRecord>& day = days_[1].second;
+    const std::size_t historicalLastSecond = 10 * SECONDS_PER_SEGMENT + 700;
+
+    Runtime::PredictionExperiment experiment({10}, 2);
+
+    // Early on, segment 10 is far outside the two loaded segments.
+    auto rows = experiment.RunSnapshot(MakeSnapshot(day, historicalLastSecond, 300));
+    ASSERT_TRUE(HasEveryForecast(rows[0]));
+    EXPECT_FALSE(FoundExactMatch(rows[0], day, historicalLastSecond));
+
+    // Once the session reaches segment 10, the loaded pair has moved there.
+    rows = experiment.RunSnapshot(MakeSnapshot(day, historicalLastSecond, 10 * SECONDS_PER_SEGMENT + 900));
+    ASSERT_TRUE(HasEveryForecast(rows[0]));
+    EXPECT_TRUE(FoundExactMatch(rows[0], day, historicalLastSecond));
+}
+
+TEST_F(PredictionExperimentTests, PreloadReadsTheIndexesBeforeTheFirstSnapshot) {
+    BuildIndexes(10);
+
+    const Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(days_[0].second, 5000, 5000);
+
+    Runtime::PredictionExperiment preloaded({10}, 3);
+    preloaded.Preload(snapshot.last_timestamp_ms);
+
+    // With the index files gone, only an experiment that already holds them can forecast.
+    std::filesystem::remove_all("storage/indexes");
+    std::filesystem::remove_all("storage/metadata");
+
+    const auto rows = preloaded.RunSnapshot(snapshot);
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_TRUE(HasEveryForecast(rows[0]));
+
+    Runtime::PredictionExperiment notPreloaded({10}, 3);
+    EXPECT_TRUE(HasNoForecast(notPreloaded.RunSnapshot(snapshot)[0]));
+}
+
+TEST_F(PredictionExperimentTests, PreloadBeforeTheOpenReadsTheOpeningSegments) {
+    BuildIndexes(10);
+
+    Runtime::PredictionExperiment experiment({10}, 2);
+    experiment.Preload(THURSDAY_OPEN_MS - 60LL * 60 * 1000);
+
+    std::filesystem::remove_all("storage/indexes");
+    std::filesystem::remove_all("storage/metadata");
+
+    // The first forecast of the session is served from what was preloaded.
+    const auto rows = experiment.RunSnapshot(MakeSnapshot(days_[0].second, 5000, 300));
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_TRUE(HasEveryForecast(rows[0]));
 }

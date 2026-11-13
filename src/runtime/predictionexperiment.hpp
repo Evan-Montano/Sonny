@@ -47,10 +47,12 @@ namespace Runtime {
      * match count, its own PredictionAnalytics so their accuracy is scored separately. Windows are
      * never mixed: every window is searched, ranked, and forecast on its own.
      *
-     * A window is searched across all 13 half-hour segments at once. The segments only supply
-     * candidates; one forecast per window and match count is built from the nearest matches overall.
+     * A window is searched across several half-hour segments at once: up to
+     * Core::MAX_LOADED_SEGMENTS of the 13, the ones nearest the current time of day. The segments
+     * only supply candidates; one forecast per window and match count is built from the nearest
+     * matches overall.
      *
-     * Threading: ObserveRecord is called from the stream thread; RunSnapshot and FlushIncomplete
+     * Threading: ObserveRecord is called from the stream thread; Preload, RunSnapshot and FlushIncomplete
      * from the prediction thread. They share only the analytics objects, which lock internally.
      */
     class PredictionExperiment {
@@ -65,13 +67,18 @@ namespace Runtime {
         // CONSTRUCTOR
 
         /**
-         * @brief Construct an experiment with no indexes loaded yet; they load on first use.
+         * @brief Construct an experiment with no indexes loaded yet; they load on Preload or on first use.
          *
          * @param inputWindows Input windows to run, each independently. Defaults to the configured
          * selection (Core::USE_ALL_INPUT_WINDOWS / Core::SELECTED_INPUT_WINDOW_SECONDS).
-         * @throws std::invalid_argument If a window is not in Core::INPUT_WINDOW_CONFIGURATIONS.
+         * @param maxLoadedSegments Most half-hour segments each window keeps in memory at once.
+         * @throws std::invalid_argument If a window is not in Core::INPUT_WINDOW_CONFIGURATIONS, or no
+         * segment is allowed to load.
          */
-        explicit PredictionExperiment(std::vector<std::size_t> inputWindows = Core::ActiveInputWindows());
+        explicit PredictionExperiment(
+            std::vector<std::size_t> inputWindows = Core::ActiveInputWindows(),
+            std::size_t maxLoadedSegments = Core::MAX_LOADED_SEGMENTS
+        );
 
         // METHODS
 
@@ -88,7 +95,21 @@ namespace Runtime {
         void ObserveRecord(const LiveRecord& record);
 
         /**
+         * @brief Load every window's indexes for the given time of day ahead of the first forecast,
+         * so that forecast does not have to wait for them.
+         *
+         * Blocks until the files are read. Before the open, and on weekends, the opening segments
+         * are loaded, since those are what a session needs first.
+         *
+         * @param timestampMs Unix timestamp in milliseconds, normally the current time.
+         */
+        void Preload(std::int64_t timestampMs);
+
+        /**
          * @brief Forecast the next FORECAST_HORIZON_SECONDS with every configuration, then log a comparison.
+         *
+         * When the time of day has moved into another half-hour segment, the loaded segments are
+         * first moved along with it (one released, one loaded).
          *
          * @param snapshot Full live window; every configuration is cut from its newest records.
          * @return One row per entry in InputWindows(), in the same order. Empty when the snapshot
@@ -112,12 +133,13 @@ namespace Runtime {
             std::size_t input_window_seconds{};
 
             /**
-             * @brief Set once loading has been tried, even if it failed, to avoid retrying every cycle.
+             * @brief Segment the loaded set was last chosen around; set even if nothing could be
+             * loaded, to avoid retrying every cycle.
              */
-            bool load_attempted{false};
+            std::optional<std::size_t> centered_segment;
 
             /**
-             * @brief Every available half-hour segment of this window, or nullptr if none could be loaded.
+             * @brief The loaded half-hour segments of this window; nullptr until first needed.
              */
             std::unique_ptr<Core::SessionMultiIndex> index;
 
@@ -130,9 +152,10 @@ namespace Runtime {
         // METHODS
 
         /**
-         * @brief Load slot.index (all 13 half-hour segments) the first time the slot is used.
+         * @brief Make sure slot.index holds the segments nearest currentSegment, up to the limit.
+         * Does nothing while currentSegment is unchanged.
          */
-        static void EnsureIndexLoaded(WindowSlot& slot);
+        void EnsureIndexLoaded(WindowSlot& slot, std::size_t currentSegment);
 
         /**
          * @brief Query one input window and submit a forecast for each match count.
@@ -181,6 +204,11 @@ namespace Runtime {
          * @brief The input windows being run. Never changes after construction.
          */
         std::vector<std::size_t> input_windows_;
+
+        /**
+         * @brief Most half-hour segments each window keeps in memory at once.
+         */
+        std::size_t max_loaded_segments_;
 
         /**
          * @brief One slot per entry in input_windows_, in the same order. Never resized after construction.

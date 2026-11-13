@@ -9,14 +9,61 @@
 #include <exception>
 #include <format>
 #include <set>
+#include <stdexcept>
 #include <utility>
 
 namespace Core {
 
     SessionMultiIndex::SessionMultiIndex(const std::size_t inputWindowSeconds)
         : _inputWindowSeconds(inputWindowSeconds) {
+    }
+
+    std::vector<std::size_t> SessionMultiIndex::SelectSegments(const std::size_t currentSegment, const std::size_t maxSegments) {
+        const std::size_t count = std::min(maxSegments, SEGMENT_COUNT);
+        std::vector<std::size_t> segments{};
+
+        if (count > 0) {
+            const std::size_t current = std::min(currentSegment, SEGMENT_COUNT - 1);
+
+            // Centre the run on the current segment, then slide it back inside the session.
+            const std::size_t segmentsBefore = (count - 1) / 2;
+            const std::size_t first = std::min(
+                current > segmentsBefore ? current - segmentsBefore : std::size_t{0},
+                SEGMENT_COUNT - count
+            );
+
+            for (std::size_t segment = first; segment < first + count; ++segment) {
+                segments.push_back(segment);
+            }
+        }
+
+        return segments;
+    }
+
+    void SessionMultiIndex::LoadSegments(const std::span<const std::size_t> segments) {
+        std::array<bool, SEGMENT_COUNT> wanted{};
+
+        for (const std::size_t segment : segments) {
+            if (segment >= SEGMENT_COUNT) {
+                throw std::out_of_range(std::format("Invalid half-hour segment: {}", segment));
+            }
+
+            wanted[segment] = true;
+        }
+
+        // Release first: holding the outgoing and incoming segments together could exceed the memory
+        // the caller budgeted for.
+        for (std::size_t segment = 0; segment < SEGMENT_COUNT; ++segment) {
+            if (wanted[segment] == false) {
+                _segments[segment].reset();
+            }
+        }
 
         for (std::size_t segment = 0; segment < SEGMENT_COUNT; ++segment) {
+            if (wanted[segment] == false || _segments[segment] != nullptr || _unavailable[segment]) {
+                continue;
+            }
+
             const std::size_t segmentStartSecond = segment * SECONDS_PER_SEGMENT;
 
             // Must check before constructing: a missing sub-index would otherwise be created empty and saved on destruction.
@@ -26,6 +73,7 @@ namespace Core {
                     _inputWindowSeconds,
                     segment
                 ));
+                _unavailable[segment] = true;
                 continue;
             }
 
@@ -37,10 +85,14 @@ namespace Core {
                     std::format("Failed to load the {}s input index for segment {}: {}", _inputWindowSeconds, segment, error.what()),
                     true
                 );
+                _unavailable[segment] = true;
             }
         }
 
-        // The common magnitude scale depends on which segments actually loaded.
+        UpdateMagnitudeDistanceScales();
+    }
+
+    void SessionMultiIndex::UpdateMagnitudeDistanceScales() {
         std::vector<NormalizationParameters> loadedParameters{};
 
         for (const std::unique_ptr<HalfHourMultiIndex> &segment : _segments) {
@@ -52,6 +104,8 @@ namespace Core {
         const double referenceStdDev = PooledStandardDeviation(loadedParameters);
 
         for (std::size_t segment = 0; segment < SEGMENT_COUNT; ++segment) {
+            _magnitudeDistanceScales[segment] = 0.0;
+
             if (_segments[segment] == nullptr) {
                 continue;
             }
@@ -76,6 +130,18 @@ namespace Core {
         return static_cast<std::size_t>(
             std::count_if(_segments.begin(), _segments.end(), [](const auto &segment) { return segment != nullptr; })
         );
+    }
+
+    std::vector<std::size_t> SessionMultiIndex::LoadedSegments() const {
+        std::vector<std::size_t> loaded{};
+
+        for (std::size_t segment = 0; segment < SEGMENT_COUNT; ++segment) {
+            if (_segments[segment] != nullptr) {
+                loaded.push_back(segment);
+            }
+        }
+
+        return loaded;
     }
 
     HalfHourMultiIndex::MultiQueryResult SessionMultiIndex::Query(

@@ -10,6 +10,7 @@
 #include <format>
 #include <fstream>
 #include <stdexcept>
+#include <utility>
 
 
 namespace Core {
@@ -229,7 +230,11 @@ namespace Core {
                 );
             }
 
-            this->_index = *flatIndex;
+            // Take the loaded vectors rather than copying them: a copy briefly holds the whole index
+            // twice, which is about a gigabyte for a 60s segment. The dimension was checked above and
+            // both are IndexFlatL2, so the vectors and their count are all that differ.
+            this->_index.codes = std::move(flatIndex->codes);
+            this->_index.ntotal = flatIndex->ntotal;
             delete loadedIndex;
             this->Updated = false;
 
