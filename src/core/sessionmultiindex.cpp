@@ -9,13 +9,18 @@
 #include <exception>
 #include <format>
 #include <set>
+#include <string>
 #include <stdexcept>
 #include <utility>
 
 namespace Core {
 
-    SessionMultiIndex::SessionMultiIndex(const std::size_t inputWindowSeconds)
-        : _inputWindowSeconds(inputWindowSeconds) {
+    SessionMultiIndex::SessionMultiIndex(
+        const std::size_t inputWindowSeconds,
+        HalfHourMultiIndex::SubIndexSelection subIndexes
+    )
+        : _inputWindowSeconds(inputWindowSeconds),
+          _subIndexes(std::move(subIndexes)) {
     }
 
     std::vector<std::size_t> SessionMultiIndex::SelectSegments(const std::size_t currentSegment, const std::size_t maxSegments) {
@@ -67,18 +72,21 @@ namespace Core {
             const std::size_t segmentStartSecond = segment * SECONDS_PER_SEGMENT;
 
             // Must check before constructing: a missing sub-index would otherwise be created empty and saved on destruction.
-            if (HalfHourMultiIndex::FilesExist(segmentStartSecond, _inputWindowSeconds) == false) {
+            if (HalfHourMultiIndex::FilesExist(segmentStartSecond, _inputWindowSeconds, _subIndexes) == false) {
                 Logger::Warning(std::format(
-                    "No complete index files for the {}s input window in segment {}; that segment is skipped.",
+                    "No complete index files for the {}s input window in segment {}{}; that segment is skipped.",
                     _inputWindowSeconds,
-                    segment
+                    segment,
+                    _subIndexes.weekday_groups.empty()
+                        ? std::string{}
+                        : std::format(" (weekday group {})", _subIndexes.weekday_groups.front().name)
                 ));
                 _unavailable[segment] = true;
                 continue;
             }
 
             try {
-                _segments[segment] = std::make_unique<HalfHourMultiIndex>(segmentStartSecond, _inputWindowSeconds);
+                _segments[segment] = std::make_unique<HalfHourMultiIndex>(segmentStartSecond, _inputWindowSeconds, _subIndexes);
             }
             catch (const std::exception &error) {
                 Logger::Error(
@@ -151,6 +159,7 @@ namespace Core {
         // Magnitude and direction candidates never share a collection.
         std::vector<HalfHourIndex::QueryResult> magnitudeCandidates{};
         std::vector<HalfHourIndex::QueryResult> directionCandidates{};
+        std::vector<HalfHourIndex::QueryResult> weekdayDirectionCandidates{};
 
         for (std::size_t segment = 0; segment < SEGMENT_COUNT; ++segment) {
             if (_segments[segment] == nullptr) {
@@ -177,11 +186,18 @@ namespace Core {
                 segmentResults.DirectionResults.begin(),
                 segmentResults.DirectionResults.end()
             );
+
+            weekdayDirectionCandidates.insert(
+                weekdayDirectionCandidates.end(),
+                segmentResults.WeekdayDirectionResults.begin(),
+                segmentResults.WeekdayDirectionResults.end()
+            );
         }
 
         return HalfHourMultiIndex::MultiQueryResult{
             .MagnitudeResults = SelectNearest(std::move(magnitudeCandidates), maxResults),
-            .DirectionResults = SelectNearest(std::move(directionCandidates), maxResults)
+            .DirectionResults = SelectNearest(std::move(directionCandidates), maxResults),
+            .WeekdayDirectionResults = SelectNearest(std::move(weekdayDirectionCandidates), maxResults)
         };
     }
 

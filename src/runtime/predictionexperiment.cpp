@@ -24,8 +24,12 @@ namespace Runtime {
             return Common::DateTime(static_cast<Common::UnixTimestamp>(timestampMs / 1000)).ToString_Time();
         }
 
-        std::string ConfigurationLabel(const std::size_t inputWindowSeconds, const std::size_t matchCount) {
-            return std::format("{}s input / {}-match cap", inputWindowSeconds, matchCount);
+        std::string ConfigurationLabel(const std::size_t inputWindowSeconds, const std::size_t matchCount, const std::string_view streamLabel) {
+            return std::format("{}s input / {}-match cap / {}", inputWindowSeconds, matchCount, streamLabel);
+        }
+
+        std::string_view GroupName(const std::optional<Core::WeekdayGroup>& group) {
+            return group.has_value() ? group->name : std::string_view{};
         }
 
         /**
@@ -42,12 +46,29 @@ namespace Runtime {
 
     // ========== PREDICTION EXPERIMENT ========== //
 
-    PredictionExperiment::PredictionExperiment(std::vector<std::size_t> inputWindows, const std::size_t maxLoadedSegments)
+    PredictionExperiment::PredictionExperiment(
+        std::vector<std::size_t> inputWindows,
+        const std::size_t maxLoadedSegments,
+        const Core::DirectionSearchMode directionSearchMode,
+        const std::span<const Core::WeekdayGroup> weekdayGroups
+    )
         : input_windows_(std::move(inputWindows)),
           max_loaded_segments_(maxLoadedSegments),
+          direction_search_mode_(directionSearchMode),
+          weekday_groups_(weekdayGroups.begin(), weekdayGroups.end()),
           slots_(input_windows_.size()) {
         if (max_loaded_segments_ == 0) {
             throw std::invalid_argument("At least one half-hour segment must be allowed to load.");
+        }
+
+        Core::ValidateWeekdayGroups(weekday_groups_);
+
+        if (Core::SearchesAllDaysDirection(direction_search_mode_)) {
+            streams_.push_back(DirectionStream::AllDays);
+        }
+
+        if (Core::SearchesWeekdayDirection(direction_search_mode_)) {
+            streams_.push_back(DirectionStream::WeekdayGroup);
         }
 
         for (std::size_t i = 0; i < slots_.size(); ++i) {
@@ -67,20 +88,25 @@ namespace Runtime {
 
     void PredictionExperiment::ObserveRecord(const LiveRecord& record) {
         for (WindowSlot& slot : slots_) {
-            for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
-                LogReports(
-                    slot.analytics[i].ObserveRecord(record.timestamp_ms, record.record.mid_delta, record.observed),
-                    slot.input_window_seconds,
-                    PREDICTION_MATCH_COUNTS[i]
-                );
+            for (const DirectionStream stream : streams_) {
+                for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
+                    LogReports(
+                        Analytics(slot, stream)[i].ObserveRecord(record.timestamp_ms, record.record.mid_delta, record.observed),
+                        slot.input_window_seconds,
+                        PREDICTION_MATCH_COUNTS[i],
+                        stream
+                    );
+                }
             }
         }
     }
 
     void PredictionExperiment::FlushIncomplete() {
         for (WindowSlot& slot : slots_) {
-            for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
-                LogReports(slot.analytics[i].FlushIncomplete(), slot.input_window_seconds, PREDICTION_MATCH_COUNTS[i]);
+            for (const DirectionStream stream : streams_) {
+                for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
+                    LogReports(Analytics(slot, stream)[i].FlushIncomplete(), slot.input_window_seconds, PREDICTION_MATCH_COUNTS[i], stream);
+                }
             }
         }
     }
@@ -90,13 +116,20 @@ namespace Runtime {
     void PredictionExperiment::Preload(const std::int64_t timestampMs) {
         // Before the open (and on weekends) the next thing needed is the start of a session.
         const std::size_t currentSegment = GetSecondsSinceMarketOpen(timestampMs).value_or(0) / SECONDS_PER_SEGMENT;
+        const std::optional<Core::WeekdayGroup> weekdayGroup = SearchedWeekdayGroupAt(timestampMs);
+
+        // Without a trading weekday there is no group to load yet; the first snapshot loads it.
+        if (Core::SearchesWeekdayDirection(direction_search_mode_) && weekdayGroup.has_value() == false) {
+            Logger::Info("Preload skipped: no weekday group applies until the next trading weekday.", true);
+            return;
+        }
 
         for (WindowSlot& slot : slots_) {
-            EnsureIndexLoaded(slot, currentSegment);
+            EnsureIndexLoaded(slot, currentSegment, weekdayGroup);
         }
     }
 
-    std::vector<PredictionExperiment::ForecastRow> PredictionExperiment::RunSnapshot(const LiveInputWindow::Snapshot& snapshot) {
+    std::vector<PredictionExperiment::WindowForecasts> PredictionExperiment::RunSnapshot(const LiveInputWindow::Snapshot& snapshot) {
         const std::optional<std::size_t> lastSecond = GetSecondsSinceMarketOpen(snapshot.last_timestamp_ms);
 
         // Pre-market and weekend data has no historical session to compare against.
@@ -104,10 +137,18 @@ namespace Runtime {
             return {};
         }
 
-        std::vector<ForecastRow> rows(slots_.size());
+        // The live session's New York weekday picks the weekday group, the same way each historical
+        // window's session date picked the group it was indexed under. Validated groups cover every
+        // trading weekday, and weekends returned above.
+        const std::optional<Core::WeekdayGroup> weekdayGroup = SearchedWeekdayGroupAt(snapshot.last_timestamp_ms);
+
+        std::vector<WindowForecasts> rows(slots_.size());
 
         for (std::size_t i = 0; i < slots_.size(); ++i) {
             WindowSlot& slot = slots_[i];
+
+            // Named even when the window ends up unavailable, so the output says which group it was.
+            rows[i].weekday_group_name = GroupName(weekdayGroup);
 
             // Skipped until the window no longer reaches back into pre-market seconds.
             const std::optional<std::size_t> windowStart = GetWindowStartSecond(*lastSecond, slot.input_window_seconds);
@@ -117,7 +158,7 @@ namespace Runtime {
 
             // The loaded segments follow the time of day; the window's start says which segment it is in,
             // the same way the indexes file each window under the segment it starts in.
-            EnsureIndexLoaded(slot, *windowStart / SECONDS_PER_SEGMENT);
+            EnsureIndexLoaded(slot, *windowStart / SECONDS_PER_SEGMENT, weekdayGroup);
             if (slot.index == nullptr || slot.index->LoadedSegmentCount() == 0) {
                 continue;
             }
@@ -136,7 +177,19 @@ namespace Runtime {
         return rows;
     }
 
-    void PredictionExperiment::EnsureIndexLoaded(WindowSlot& slot, const std::size_t currentSegment) {
+    void PredictionExperiment::EnsureIndexLoaded(
+        WindowSlot& slot,
+        const std::size_t currentSegment,
+        const std::optional<Core::WeekdayGroup>& weekdayGroup
+    ) {
+        // A new weekday group needs its own direction indexes. Release everything first so two
+        // groups' indexes are never held together; the segments are then reloaded for the new group.
+        if (GroupName(slot.weekday_group) != GroupName(weekdayGroup)) {
+            slot.index.reset();
+            slot.centered_segment.reset();
+            slot.weekday_group = weekdayGroup;
+        }
+
         // Nothing changes within a segment, which also keeps unavailable segments from being retried every cycle.
         if (slot.centered_segment == currentSegment) {
             return;
@@ -145,7 +198,10 @@ namespace Runtime {
         slot.centered_segment = currentSegment;
 
         if (slot.index == nullptr) {
-            slot.index = std::make_unique<Core::SessionMultiIndex>(slot.input_window_seconds);
+            slot.index = std::make_unique<Core::SessionMultiIndex>(
+                slot.input_window_seconds,
+                Core::HalfHourMultiIndex::SubIndexSelection::ForSearch(direction_search_mode_, slot.weekday_group)
+            );
         }
 
         const std::vector<std::size_t> previouslyLoaded = slot.index->LoadedSegments();
@@ -167,22 +223,25 @@ namespace Runtime {
         if (loaded != previouslyLoaded) {
             Logger::Info(
                 std::format(
-                    "{}s input: searching {} of {} half-hour segments, {} to {} (limit {}).",
+                    "{}s input: searching {} of {} half-hour segments, {} to {} (limit {}); direction indexes: {}{}{}.",
                     slot.input_window_seconds,
                     loaded.size(),
                     Core::SessionMultiIndex::SEGMENT_COUNT,
                     SegmentStartLabel(loaded.front()),
                     SegmentStartLabel(loaded.back() + 1),
-                    max_loaded_segments_
+                    max_loaded_segments_,
+                    Core::SearchesAllDaysDirection(direction_search_mode_) ? Core::ALL_DAYS_DIRECTION_LABEL : "",
+                    direction_search_mode_ == Core::DirectionSearchMode::Compare ? " + " : "",
+                    slot.weekday_group.has_value() ? std::format("WeekdayGroups[{}]", slot.weekday_group->name) : std::string{}
                 ),
                 true
             );
         }
     }
 
-    PredictionExperiment::ForecastRow PredictionExperiment::RunWindow(WindowSlot& slot, const LiveInputWindow::Snapshot& snapshot) {
+    PredictionExperiment::WindowForecasts PredictionExperiment::RunWindow(WindowSlot& slot, const LiveInputWindow::Snapshot& snapshot) {
         const std::size_t inputWindowSeconds = slot.input_window_seconds;
-        ForecastRow row{};
+        WindowForecasts forecasts{.weekday_group_name = GroupName(slot.weekday_group)};
 
         const std::span<const Core::MLRecord> queryWindow = Core::LatestInputWindow(
             std::span<const Core::MLRecord>(snapshot.records),
@@ -191,19 +250,60 @@ namespace Runtime {
 
         // Each segment splits the raw window into |mid_delta| (normalized) and sign(mid_delta) queries.
         // The results are already the nearest across every segment, ranked separately per sub-index.
+        // The same direction query searches the all-week and weekday-group indexes.
         const Core::HalfHourMultiIndex::MultiQueryResult results = slot.index->Query(queryWindow, MAX_QUERY_RESULTS);
 
+        // Magnitude is all-week in every mode, so both direction streams share these matches.
         const std::vector<HistoricalMatch> magnitudeMatches =
             CollectHistoricalMatches(results.MagnitudeResults, inputWindowSeconds, MatchWeight, "magnitude");
-        const std::vector<HistoricalMatch> directionMatches =
-            CollectHistoricalMatches(results.DirectionResults, inputWindowSeconds, DirectionMatchWeight, "direction");
 
-        if (magnitudeMatches.empty() || directionMatches.empty()) {
+        if (magnitudeMatches.empty()) {
             Logger::Warning(std::format(
-                "{}s input: not enough historical matches with a full future ({} magnitude, {} direction).",
+                "{}s input: not enough historical magnitude matches with a full future.",
+                inputWindowSeconds
+            ));
+            return forecasts;
+        }
+
+        for (const DirectionStream stream : streams_) {
+            const bool allDays = stream == DirectionStream::AllDays;
+
+            (allDays ? forecasts.all_days : forecasts.weekday_group) = RunDirectionStream(
+                slot,
+                stream,
+                magnitudeMatches,
+                allDays ? results.DirectionResults : results.WeekdayDirectionResults,
+                snapshot.last_timestamp_ms
+            );
+        }
+
+        return forecasts;
+    }
+
+    PredictionExperiment::ForecastRow PredictionExperiment::RunDirectionStream(
+        WindowSlot& slot,
+        const DirectionStream stream,
+        const std::vector<HistoricalMatch>& magnitudeMatches,
+        const std::vector<Core::HalfHourIndex::QueryResult>& directionResults,
+        const std::int64_t asOfTimestampMs
+    ) {
+        const std::size_t inputWindowSeconds = slot.input_window_seconds;
+        const std::string streamLabel = StreamLabel(stream, asOfTimestampMs);
+        ForecastRow row{};
+
+        const std::vector<HistoricalMatch> directionMatches = CollectHistoricalMatches(
+            directionResults,
+            inputWindowSeconds,
+            DirectionMatchWeight,
+            std::format("direction, {}", streamLabel)
+        );
+
+        // No fallback to another stream's matches: that would blur the comparison.
+        if (directionMatches.empty()) {
+            Logger::Warning(std::format(
+                "{}s input / {}: not enough historical direction matches with a full future.",
                 inputWindowSeconds,
-                magnitudeMatches.size(),
-                directionMatches.size()
+                streamLabel
             ));
             return row;
         }
@@ -215,15 +315,39 @@ namespace Runtime {
             const ForecastSummary summary = BuildForecast(
                 std::span<const HistoricalMatch>(magnitudeMatches).first(std::min(matchCount, magnitudeMatches.size())),
                 std::span<const HistoricalMatch>(directionMatches).first(std::min(matchCount, directionMatches.size())),
-                snapshot.last_timestamp_ms
+                asOfTimestampMs
             );
 
-            LogForecast(summary, inputWindowSeconds, matchCount);
-            LogReports(slot.analytics[i].SubmitForecast(summary.forecast), inputWindowSeconds, matchCount);
+            LogForecast(summary, inputWindowSeconds, matchCount, streamLabel);
+            LogReports(Analytics(slot, stream)[i].SubmitForecast(summary.forecast), inputWindowSeconds, matchCount, stream);
             row[i] = summary.forecast;
         }
 
         return row;
+    }
+
+    std::optional<Core::WeekdayGroup> PredictionExperiment::WeekdayGroupAt(const std::int64_t timestampMs) const {
+        return Core::FindWeekdayGroup(GetNewYorkWeekday(timestampMs), weekday_groups_);
+    }
+
+    std::optional<Core::WeekdayGroup> PredictionExperiment::SearchedWeekdayGroupAt(const std::int64_t timestampMs) const {
+        return Core::SearchesWeekdayDirection(direction_search_mode_) ? WeekdayGroupAt(timestampMs) : std::nullopt;
+    }
+
+    std::string PredictionExperiment::StreamLabel(const DirectionStream stream, const std::int64_t asOfTimestampMs) const {
+        if (stream == DirectionStream::AllDays) {
+            return std::string(Core::ALL_DAYS_DIRECTION_LABEL);
+        }
+
+        const std::optional<Core::WeekdayGroup> group = WeekdayGroupAt(asOfTimestampMs);
+        return std::format("WeekdayGroups[{}]", group.has_value() ? group->name : "none");
+    }
+
+    std::array<PredictionAnalytics, PREDICTION_MATCH_COUNTS.size()>& PredictionExperiment::Analytics(
+        WindowSlot& slot,
+        const DirectionStream stream
+    ) {
+        return stream == DirectionStream::AllDays ? slot.all_days_analytics : slot.weekday_analytics;
     }
 
     std::vector<HistoricalMatch> PredictionExperiment::CollectHistoricalMatches(
@@ -304,11 +428,15 @@ namespace Runtime {
     void PredictionExperiment::LogReports(
         const std::vector<PredictionEvaluationReport>& reports,
         const std::size_t inputWindowSeconds,
-        const std::size_t matchCount
-    ) {
+        const std::size_t matchCount,
+        const DirectionStream stream
+    ) const {
         for (const PredictionEvaluationReport& report : reports) {
+            // The group is that of the forecast's own weekday, even if the report completes on another.
+            const std::string label = ConfigurationLabel(inputWindowSeconds, matchCount, StreamLabel(stream, report.forecast.as_of_timestamp_ms));
+
             Logger::Info(
-                std::format("{}\n{}", ConfigurationLabel(inputWindowSeconds, matchCount), PredictionAnalytics::FormatReport(report)),
+                std::format("{}\n{}", label, PredictionAnalytics::FormatReport(report)),
                 true
             );
         }
@@ -317,11 +445,12 @@ namespace Runtime {
     void PredictionExperiment::LogForecast(
         const ForecastSummary& summary,
         const std::size_t inputWindowSeconds,
-        const std::size_t matchCount
+        const std::size_t matchCount,
+        const std::string_view streamLabel
     ) {
         std::string message = std::format(
             "{}: magnitude {} matches ({:.2f} effective), direction {} matches ({:.2f} effective)\n  {:<8}{:>14}{:>14}{:>12}",
-            ConfigurationLabel(inputWindowSeconds, matchCount),
+            ConfigurationLabel(inputWindowSeconds, matchCount, streamLabel),
             summary.magnitude_matches,
             summary.magnitude_effective_matches,
             summary.direction_matches,
@@ -346,7 +475,7 @@ namespace Runtime {
         Logger::Info(message);
     }
 
-    void PredictionExperiment::LogComparison(const std::int64_t asOfTimestampMs, const std::vector<ForecastRow>& rows) const {
+    void PredictionExperiment::LogComparison(const std::int64_t asOfTimestampMs, const std::vector<WindowForecasts>& rows) const {
         std::string comparison = std::format(
             "Paired forecasts @{} (same live snapshot; next {} seconds)",
             FormatTime(asOfTimestampMs),
@@ -354,20 +483,25 @@ namespace Runtime {
         );
 
         for (std::size_t window = 0; window < rows.size(); ++window) {
-            for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
-                const std::optional<PredictionForecast>& forecast = rows[window][i];
+            for (const DirectionStream stream : streams_) {
+                const ForecastRow& row = stream == DirectionStream::AllDays ? rows[window].all_days : rows[window].weekday_group;
+                const std::string streamLabel = StreamLabel(stream, asOfTimestampMs);
 
-                comparison += "\n" + ConfigurationLabel(input_windows_[window], PREDICTION_MATCH_COUNTS[i]);
+                for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
+                    const std::optional<PredictionForecast>& forecast = row[i];
 
-                if (forecast.has_value() == false) {
-                    comparison += " | unavailable";
-                    continue;
-                }
+                    comparison += "\n" + ConfigurationLabel(input_windows_[window], PREDICTION_MATCH_COUNTS[i], streamLabel);
 
-                comparison += std::format(" | {} matches", forecast->historical_matches);
+                    if (forecast.has_value() == false) {
+                        comparison += " | unavailable";
+                        continue;
+                    }
 
-                for (std::size_t h = 0; h < PredictionEvaluationHorizons.size(); ++h) {
-                    comparison += std::format(" | {:>2}s ${:+.5f}", PredictionEvaluationHorizons[h], forecast->cumulative_changes[h]);
+                    comparison += std::format(" | {} matches", forecast->historical_matches);
+
+                    for (std::size_t h = 0; h < PredictionEvaluationHorizons.size(); ++h) {
+                        comparison += std::format(" | {:>2}s ${:+.5f}", PredictionEvaluationHorizons[h], forecast->cumulative_changes[h]);
+                    }
                 }
             }
         }

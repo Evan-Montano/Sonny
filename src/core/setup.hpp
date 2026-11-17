@@ -29,6 +29,18 @@ namespace Core {
         */
         const long TOTAL_DAYS = END_DATE - BEGIN_DATE + 1;
 
+        /**
+         * @brief When true, "Update Indexes" keeps index segments whose files are already complete
+         * and builds only the missing ones (and weekday-group indexes whose manifest no longer
+         * matches their group). Set to false to rebuild every selected index from scratch, e.g. after
+         * changing BEGIN_DATE/END_DATE, the vector construction, or the direction temporal weights:
+         * reuse checks that the files are complete, not what they were built from.
+         *
+         * Either way, only the active input windows (Core::ActiveInputWindows) and the sub-indexes the
+         * direction search mode needs (Core::DIRECTION_SEARCH_MODE) are touched.
+         */
+        inline constexpr bool REUSE_EXISTING_INDEXES = true;
+
 
         /**
          * @brief Process including all setup steps: Corpus download, create vector files.

@@ -46,8 +46,14 @@ namespace Core {
          * @brief Creates an index for the given input window with no segments loaded yet.
          *
          * @param inputWindowSeconds Input window the indexes were built for.
+         * @param subIndexes Sub-indexes each segment loads; by default the magnitude and all-week
+         * direction indexes. A segment is only used when every selected sub-index is available, so
+         * every result list is drawn from the same segments.
          */
-        explicit SessionMultiIndex(std::size_t inputWindowSeconds);
+        explicit SessionMultiIndex(
+            std::size_t inputWindowSeconds,
+            HalfHourMultiIndex::SubIndexSelection subIndexes = {}
+        );
 
         // METHODS
 
@@ -96,6 +102,7 @@ namespace Core {
          * Up to maxResults candidates are taken from each segment, pooled per sub-index, reduced with
          * SelectNearest, and capped at maxResults overall. Magnitude distances are first converted
          * to one common scale (see MagnitudeDistanceScale); direction distances need no conversion.
+         * All-week and weekday-group direction candidates are pooled and ranked separately.
          *
          * @param query Raw, unnormalized window of exactly the configured input-window length.
          * @param maxResults Cap applied to each segment's candidates and again to the pooled result.
@@ -156,6 +163,11 @@ namespace Core {
          * @brief Number of one-second records in each indexed window.
          */
         std::size_t _inputWindowSeconds;
+
+        /**
+         * @brief Sub-indexes every segment loads.
+         */
+        HalfHourMultiIndex::SubIndexSelection _subIndexes;
 
         /**
          * @brief One entry per segment in session order; nullptr where the segment is unavailable.

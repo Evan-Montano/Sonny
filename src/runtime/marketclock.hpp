@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -30,6 +31,14 @@ namespace Runtime {
      * @return Seconds since the open, or nullopt when no historical session applies.
      */
     std::optional<std::size_t> GetSecondsSinceMarketOpen(std::int64_t timestampMs);
+
+    /**
+     * @brief Weekday of a Unix timestamp's America/New_York calendar date, the same local date
+     * GetSecondsSinceMarketOpen measures the session from. Follows daylight-saving changes.
+     *
+     * @param timestampMs Unix timestamp in milliseconds.
+     */
+    std::chrono::weekday GetNewYorkWeekday(std::int64_t timestampMs);
 
     /**
      * @brief Returns the session second on which a window ending at lastSecond begins.

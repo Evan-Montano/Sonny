@@ -29,7 +29,7 @@ namespace Core {
 
     /**
      * @brief Default window length for HalfHourIndex constructors that omit a size.
-     * "Update Indexes" builds every entry in INPUT_WINDOW_CONFIGURATIONS.
+     * "Update Indexes" builds the windows returned by ActiveInputWindows().
      */
     inline constexpr std::size_t DEFAULT_INPUT_WINDOW_SECONDS = 30;
 
@@ -52,7 +52,8 @@ namespace Core {
      *
      * Each active window keeps up to its configured segment limit of half-hour indexes in memory
      * (magnitude and direction). The runtime defaults to one segment per window when all windows
-     * are active. "Update Indexes" always builds every configured window regardless of this setting.
+     * are active. "Update Indexes" builds exactly the windows this setting makes active, so the
+     * builder and the runtime always agree on which windows have indexes.
      */
     inline constexpr bool USE_ALL_INPUT_WINDOWS = false;
 
@@ -88,6 +89,8 @@ namespace Core {
      * 34 MB per second of input window for its two indexes and their metadata:
      * about 2.1 GB at 60s, 1.1 GB at 30s, and 0.4 GB at 10s. Multiply by the selected per-window
      * limit and the number of active windows to get the total. Values above 13 behave as 13.
+     * A weekday-group direction index holds only its group's days (about a fifth of the all-week
+     * direction index for a one-day group), so Compare mode adds roughly that much per segment.
      */
     inline constexpr std::size_t MAX_LOADED_SEGMENTS = 3;
 
@@ -124,8 +127,8 @@ namespace Core {
     }
 
     /**
-     * @brief The input windows the live runtime runs, as set by USE_ALL_INPUT_WINDOWS and
-     * SELECTED_INPUT_WINDOW_SECONDS.
+     * @brief The input windows the live runtime runs and "Update Indexes" builds, as set by
+     * USE_ALL_INPUT_WINDOWS and SELECTED_INPUT_WINDOW_SECONDS.
      */
     inline std::vector<std::size_t> ActiveInputWindows() {
         return SelectInputWindows(USE_ALL_INPUT_WINDOWS, SELECTED_INPUT_WINDOW_SECONDS);

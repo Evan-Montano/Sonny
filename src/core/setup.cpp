@@ -9,6 +9,7 @@
 #include "halfhourmultiindex.hpp"
 #include "transformer.hpp"
 #include "inputconfig.hpp"
+#include "weekdayconfig.hpp"
 #include "../ui/ui.hpp"
 
 #include <cstddef>
@@ -52,12 +53,16 @@ namespace Core {
             constexpr std::size_t TOTAL_SEGMENTS = 13;
 
             const std::size_t totalDays = static_cast<std::size_t>(Core::Setup::TOTAL_DAYS);
-            const std::size_t totalWindowConfigurations = Core::INPUT_WINDOW_CONFIGURATIONS.size();
+
+            // The runtime's active windows are the only ones built, so every index the runtime
+            // looks for is one this build was asked to create.
+            const std::vector<std::size_t> inputWindows = Core::ActiveInputWindows();
 
             // Two passes for every segment-day:
             // 1. Calculate normalization statistics.
             // 2. Normalize records and build the index.
-            const std::size_t totalUnits = totalDays * TOTAL_SEGMENTS * 2 * totalWindowConfigurations;
+            // Passes that are not needed (reused indexes) count as done straight away.
+            const std::size_t totalUnits = totalDays * TOTAL_SEGMENTS * 2 * inputWindows.size();
 
             std::string status{};
             std::string currentDate{};
@@ -146,16 +151,18 @@ namespace Core {
 
             if (FileExists(RECORDS_BASE_PATH)) {
 
-                // Rebuild each configured window's indexes and metadata from scratch.
-                Logger::Info("Deleting existing configured indexes and metadata..", true);
-
-                for (const std::size_t inputWindowSeconds : Core::INPUT_WINDOW_CONFIGURATIONS) {
-                    DeleteDirectory(INDEXES_BASE_PATH / std::format("{}s", inputWindowSeconds));
-                    DeleteDirectory(METADATA_BASE_PATH / std::format("{}s", inputWindowSeconds));
-                }
+                Logger::Info(
+                    std::format(
+                        "Updating indexes for {} input window(s); direction search mode {}; {} existing complete indexes.",
+                        inputWindows.size(),
+                        Core::DirectionSearchModeName(Core::DIRECTION_SEARCH_MODE),
+                        Core::Setup::REUSE_EXISTING_INDEXES ? "reusing" : "rebuilding"
+                    ),
+                    true
+                );
 
                 // Build independent normalization parameters and FAISS vectors for each window.
-                for (const std::size_t inputWindowSeconds : Core::INPUT_WINDOW_CONFIGURATIONS) {
+                for (const std::size_t inputWindowSeconds : inputWindows) {
                     const std::size_t searchWindowPadding = inputWindowSeconds - 1;
 
                     UI::Get().Update([&] {
@@ -174,89 +181,140 @@ namespace Core {
                             );
                         });
 
-                        // The index remains alive throughout both passes.
-                        // Its destructor persists the index, metadata, and normalization JSON.
-                        {
-                            HalfHourMultiIndex indexSegment(segmentOffset, inputWindowSeconds);
-                            
+                        // Only the sub-indexes this segment still needs: magnitude, the all-week direction
+                        // index, and/or one direction index per weekday group (see SubIndexSelection::ToBuild).
+                        const HalfHourMultiIndex::SubIndexSelection subIndexes = HalfHourMultiIndex::SubIndexSelection::ToBuild(
+                            segmentOffset,
+                            inputWindowSeconds,
+                            Core::DIRECTION_SEARCH_MODE,
+                            Core::DIRECTION_WEEKDAY_GROUPS,
+                            Core::Setup::REUSE_EXISTING_INDEXES
+                        );
 
-                            // ======================================== //
-                            // PASS 1: CALCULATE NORMALIZATION PARAMETERS
-                            // ======================================== //
-
-                            Core::NormalizationAccumulator accumulator{};
-
-                            Common::DateTime dt = Core::Setup::BEGIN_DATE;
-
-                            for (; dt <= Core::Setup::END_DATE; dt.NextDay()) {
-                                const std::string date = dt.ToString_Date();
-
-                                const std::filesystem::path recFilePath = RECORDS_BASE_PATH / (date + ".rec");
-
-                                UI::Get().Update([&] {
-                                    currentDate = date;
-
-                                    status = std::format(
-                                        "Calculating normalization statistics: {}",
-                                        recFilePath.filename().string()
-                                    );
-                                });
-
-                                if (FileExists(recFilePath)) {
-                                    std::vector<Core::MLRecord> allRecords = LoadRecords(recFilePath);
-
-                                    if (allRecords.size() > segmentOffset) {
-                                        const std::size_t end = std::min(
-                                            segmentOffset +
-                                                RECORDS_PER_HALF_HOUR +
-                                                searchWindowPadding,
-                                            allRecords.size()
-                                        );
-
-                                        const std::size_t segmentSize = end - segmentOffset;
-
-                                        // A segment must contain at least one complete configured window.
-                                        if (segmentSize >= inputWindowSeconds) {
-
-                                            // ========= IMPORTANT ======== //
-                                            // Normalization for the magnitude sub-index requires the data to be in it's
-                                            // absolute value, so we are creating a copy of the chosen segment, and
-                                            // taking each position's absolute value before passing it to the accumulator.
-                                            std::vector<Core::MLRecord> segment(
-                                                allRecords.begin() + segmentOffset,
-                                                allRecords.begin() + end
-                                            );
-
-                                            for (Core::MLRecord &rec : segment) {
-                                                rec.mid_delta = std::abs(rec.mid_delta);
-                                            }
-
-                                            accumulator.AddRecords(segment);
-                                        }
-                                    }
-                                }
-
-                                UI::Get().Update([&] {
-                                    ++completedUnits;
-                                });
-                            }
-
-                            // Calculate the final parameters across all historical days.
-                            const Core::NormalizationParameters parameters = accumulator.GetParameters();
-
+                        if (subIndexes.Empty()) {
                             Logger::Info(
-                                std::format(
-                                    "Calculated normalization parameters for segment {} "
-                                    "using {} historical records.",
-                                    segmentIndex + 1,
-                                    parameters.sample_count
-                                ),
+                                std::format("{}s segment {}: every needed index already exists; reusing them.", inputWindowSeconds, segmentIndex + 1),
                                 true
                             );
 
-                            // Associate these parameters with this specific FAISS index.
+                            UI::Get().Update([&] {
+                                completedUnits += totalDays * 2;
+                            });
 
-                            indexSegment.SetNormalizationParameters(parameters);
+                            continue;
+                        }
+
+                        std::string weekdayGroupNames{};
+                        for (const Core::WeekdayGroup &group : subIndexes.weekday_groups) {
+                            weekdayGroupNames += std::format("{}{}", weekdayGroupNames.empty() ? "" : ", ", group.name);
+                        }
+
+                        Logger::Info(
+                            std::format(
+                                "{}s segment {}: building magnitude: {}, AllDays direction: {}, weekday direction: [{}].",
+                                inputWindowSeconds,
+                                segmentIndex + 1,
+                                subIndexes.magnitude ? "yes" : "reused",
+                                subIndexes.all_days_direction ? "yes" : (Core::SearchesAllDaysDirection(Core::DIRECTION_SEARCH_MODE) ? "reused" : "not needed"),
+                                weekdayGroupNames
+                            ),
+                            true
+                        );
+
+                        // Rebuilt sub-indexes start empty; an existing file would otherwise be loaded and appended to.
+                        HalfHourMultiIndex::DeleteFiles(segmentOffset, inputWindowSeconds, subIndexes);
+
+                        // The index remains alive throughout both passes.
+                        // Its destructor persists the index, metadata, normalization JSON, and weekday manifests.
+                        {
+                            HalfHourMultiIndex indexSegment(segmentOffset, inputWindowSeconds, subIndexes);
+
+                            // Only the magnitude index uses normalization parameters.
+                            if (subIndexes.magnitude) {
+
+                                // ======================================== //
+                                // PASS 1: CALCULATE NORMALIZATION PARAMETERS
+                                // ======================================== //
+
+                                Core::NormalizationAccumulator accumulator{};
+
+                                Common::DateTime dt = Core::Setup::BEGIN_DATE;
+
+                                for (; dt <= Core::Setup::END_DATE; dt.NextDay()) {
+                                    const std::string date = dt.ToString_Date();
+
+                                    const std::filesystem::path recFilePath = RECORDS_BASE_PATH / (date + ".rec");
+
+                                    UI::Get().Update([&] {
+                                        currentDate = date;
+
+                                        status = std::format(
+                                            "Calculating normalization statistics: {}",
+                                            recFilePath.filename().string()
+                                        );
+                                    });
+
+                                    if (FileExists(recFilePath)) {
+                                        std::vector<Core::MLRecord> allRecords = LoadRecords(recFilePath);
+
+                                        if (allRecords.size() > segmentOffset) {
+                                            const std::size_t end = std::min(
+                                                segmentOffset +
+                                                    RECORDS_PER_HALF_HOUR +
+                                                    searchWindowPadding,
+                                                allRecords.size()
+                                            );
+
+                                            const std::size_t segmentSize = end - segmentOffset;
+
+                                            // A segment must contain at least one complete configured window.
+                                            if (segmentSize >= inputWindowSeconds) {
+
+                                                // ========= IMPORTANT ======== //
+                                                // Normalization for the magnitude sub-index requires the data to be in it's
+                                                // absolute value, so we are creating a copy of the chosen segment, and
+                                                // taking each position's absolute value before passing it to the accumulator.
+                                                std::vector<Core::MLRecord> segment(
+                                                    allRecords.begin() + segmentOffset,
+                                                    allRecords.begin() + end
+                                                );
+
+                                                for (Core::MLRecord &rec : segment) {
+                                                    rec.mid_delta = std::abs(rec.mid_delta);
+                                                }
+
+                                                accumulator.AddRecords(segment);
+                                            }
+                                        }
+                                    }
+
+                                    UI::Get().Update([&] {
+                                        ++completedUnits;
+                                    });
+                                }
+
+                                // Calculate the final parameters across all historical days.
+                                const Core::NormalizationParameters parameters = accumulator.GetParameters();
+
+                                Logger::Info(
+                                    std::format(
+                                        "Calculated normalization parameters for segment {} "
+                                        "using {} historical records.",
+                                        segmentIndex + 1,
+                                        parameters.sample_count
+                                    ),
+                                    true
+                                );
+
+                                // Associate these parameters with this specific FAISS index.
+
+                                indexSegment.SetNormalizationParameters(parameters);
+                            }
+                            else {
+                                UI::Get().Update([&] {
+                                    completedUnits += totalDays;
+                                });
+                            }
 
                             // ======================================== //
                             // PASS 2: NORMALIZE RECORDS AND BUILD INDEX
@@ -268,7 +326,7 @@ namespace Core {
                             // most recent days. The direction index relies on it: short windows have only a few
                             // thousand distinct {-1, 0, 1} patterns, so a query can tie with thousands of
                             // vectors and oldest-first insertion would always pick the oldest days.
-                            dt = Core::Setup::END_DATE;
+                            Common::DateTime dt = Core::Setup::END_DATE;
 
                             for (; dt >= Core::Setup::BEGIN_DATE; dt.PreviousDay()) {
                                 const std::string date = dt.ToString_Date();
@@ -304,7 +362,8 @@ namespace Core {
                                             );
 
                                             // Raw segment can go in as-is because the HalfHourMultiIndex handles
-                                            // splitting and normalization.
+                                            // splitting and normalization. Each weekday-group index keeps only
+                                            // this day if the day's New York weekday is in its group.
                                             indexSegment.AddVectorsToIndex(segment, recFilePath, segmentOffset);
                                         }
                                     }

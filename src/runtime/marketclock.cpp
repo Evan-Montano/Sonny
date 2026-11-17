@@ -7,18 +7,31 @@
 
 namespace Runtime {
 
+    namespace {
+
+        /**
+         * @brief Eastern wall-clock time of a Unix timestamp; correct across DST changes.
+         */
+        std::chrono::local_time<std::chrono::milliseconds> ToEasternTime(const std::int64_t timestampMs) {
+            using namespace std::chrono;
+
+            const zoned_time<milliseconds> easternTime{
+                locate_zone("America/New_York"),
+                sys_time<milliseconds>{milliseconds{timestampMs}}
+            };
+
+            return easternTime.get_local_time();
+        }
+
+    }
+
     std::optional<std::size_t> GetSecondsSinceMarketOpen(const std::int64_t timestampMs) {
         using namespace std::chrono;
 
         constexpr std::int64_t MARKET_OPEN_SECONDS = 9 * 60 * 60 + 30 * 60;
 
         // Convert to Eastern time so the result stays correct across DST changes.
-        const zoned_time<milliseconds> easternTime{
-            locate_zone("America/New_York"),
-            sys_time<milliseconds>{milliseconds{timestampMs}}
-        };
-
-        const local_time<milliseconds> localTime = easternTime.get_local_time();
+        const local_time<milliseconds> localTime = ToEasternTime(timestampMs);
         const local_days localDay = floor<days>(localTime);
         const weekday dayOfWeek{localDay};
 
@@ -39,6 +52,10 @@ namespace Runtime {
         }
 
         return static_cast<std::size_t>(secondsSinceOpen);
+    }
+
+    std::chrono::weekday GetNewYorkWeekday(const std::int64_t timestampMs) {
+        return std::chrono::weekday{std::chrono::floor<std::chrono::days>(ToEasternTime(timestampMs))};
     }
 
     std::optional<std::size_t> GetWindowStartSecond(const std::size_t lastSecond, const std::size_t inputWindowSeconds) {
