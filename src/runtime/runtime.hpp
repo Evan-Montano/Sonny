@@ -5,6 +5,7 @@
 #pragma once
 
 #include "../client/webullstream.hpp"
+#include "predictionanalytics.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -45,7 +46,9 @@ namespace Runtime {
         /**
          * @brief Time between prediction cycles.
          */
-        static constexpr std::chrono::seconds PREDICTION_INTERVAL{30};
+        static constexpr std::chrono::seconds PREDICTION_INTERVAL{
+            static_cast<std::chrono::seconds::rep>(PredictionEvaluationHorizons.back())
+        };
 
         /**
          * @brief Minimum time between quote-panel redraws; quotes arrive far faster than the UI needs.

@@ -5,7 +5,7 @@
 //   Webull quote stream            (stream thread)
 //     → OneSecondAggregator        one gap-free MLRecord per second, same rules as the .rec export
 //     → PredictionExperiment       scores earlier forecasts against each new second
-//     → LiveInputWindow            newest MAX_INPUT_WINDOW_SECONDS records, shared with the loop below
+//     → LiveInputWindow            newest LIVE_INPUT_WINDOW_SECONDS records, shared with the loop below
 //   Prediction loop                (this thread, every PREDICTION_INTERVAL)
 //     → PredictionExperiment       queries every active input window × match count on the same snapshot
 

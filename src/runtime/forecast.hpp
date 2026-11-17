@@ -86,8 +86,7 @@ namespace Runtime {
     /**
      * @brief Weight for a direction match given its FAISS distance.
      *
-     * Direction vectors hold only -1, 0, and 1, so squared distances are small integers and exact
-     * matches (distance 0) are common. MatchWeight would give those 1e12 times the weight of a
+     * Exact matches (distance 0) are common. MatchWeight would give those 1e12 times the weight of a
      * near miss; 1 / (1 + d) keeps the ranking but lets near misses still vote.
      *
      * @param squaredDistance Distance returned by HalfHourIndex::Query.

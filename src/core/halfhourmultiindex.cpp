@@ -7,9 +7,43 @@
 #include "core/structures.hpp"
 #include "core/transformer.hpp"
 #include <cstdlib>
+#include <cmath>
 #include <format>
+#include <span>
+#include <stdexcept>
 
 namespace Core {
+
+    namespace {
+
+        void ApplyDirectionTemporalWeights(
+            const std::span<float> vectors,
+            const std::size_t vectorSize
+        ) {
+            if (vectorSize == 0 || vectors.size() % vectorSize != 0) {
+                throw std::invalid_argument("Direction vectors do not match their configured dimension.");
+            }
+
+            // A single observation has no relative recency, so leave it at the neutral weight of 1.
+            // This also avoids dividing by vectorSize - 1.
+            std::vector<float> positionScales(vectorSize, 1.0F);
+
+            if (vectorSize > 1) {
+                // IndexFlatL2 squares coordinate deltas, so scale each coordinate by sqrt(weight).
+                const double newestPosition = static_cast<double>(vectorSize - 1);
+
+                for (std::size_t position = 0; position < vectorSize; ++position) {
+                    const double weight = 0.8 + 0.4 * (static_cast<double>(position) / newestPosition);
+                    positionScales[position] = static_cast<float>(std::sqrt(weight));
+                }
+            }
+
+            for (std::size_t position = 0; position < vectors.size(); ++position) {
+                vectors[position] *= positionScales[position % vectorSize];
+            }
+        }
+
+    }
 
     // =================================== //
     // HalfHourIndex_Magnitude Implementation
@@ -148,6 +182,8 @@ namespace Core {
             this->_windowLocations.push_back(location);
         }
 
+        ApplyDirectionTemporalWeights(vectors, _inputWindowSeconds);
+
         // Add all generated vectors to FAISS in one operation.
         this->_index.add(
             static_cast<faiss::idx_t>(numVectors),
@@ -229,6 +265,9 @@ namespace Core {
         MultiQuery multiQuery = this->CreateMultiQuery(query);
 
         res.MagnitudeResults = this->_index_magnitude.Query(multiQuery.MagnitudeQuery, maxResults);
+
+        ApplyDirectionTemporalWeights(multiQuery.DirectionQuery, _inputWindowSeconds);
+
         res.DirectionResults = this->_index_direction.Query(multiQuery.DirectionQuery, maxResults);
 
         return res;

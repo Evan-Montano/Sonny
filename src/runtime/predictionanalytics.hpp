@@ -17,14 +17,14 @@ namespace Runtime {
     /**
      * @brief Seconds after the forecast at which predicted and actual cumulative moves are compared.
      */
-    inline constexpr std::array<std::size_t, 11> PredictionEvaluationHorizons{
-        1, 2, 3, 4, 5, 8, 10, 15, 20, 25, 30
+    inline constexpr std::array<std::size_t, 5> PredictionEvaluationHorizons{
+        1, 2, 3, 4, 5
     };
 
     /**
      * @brief Number of seconds a forecast stays open for evaluation.
      */
-    inline constexpr std::size_t PredictionEvaluationWindow = 30;
+    inline constexpr std::size_t PredictionEvaluationWindow = 5;
 
     static_assert(
         PredictionEvaluationHorizons.back() <= PredictionEvaluationWindow,

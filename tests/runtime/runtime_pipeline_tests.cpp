@@ -192,18 +192,18 @@ TEST(OneSecondAggregatorTests, IgnoresQuotesFromAnEarlierSecond) {
 TEST(LiveInputWindowTests, SnapshotsOnlyFullUnchangedWindowsOnce) {
     Runtime::LiveInputWindow window;
 
-    for (std::int64_t second = 0; second < static_cast<std::int64_t>(Core::MAX_INPUT_WINDOW_SECONDS) - 1; ++second) {
+    for (std::int64_t second = 0; second < static_cast<std::int64_t>(Core::LIVE_INPUT_WINDOW_SECONDS) - 1; ++second) {
         window.Push(MakeLiveRecord(second));
     }
     EXPECT_FALSE(window.TakeSnapshotIfUpdated().has_value());
 
-    window.Push(MakeLiveRecord(static_cast<std::int64_t>(Core::MAX_INPUT_WINDOW_SECONDS) - 1, 0.5f));
+    window.Push(MakeLiveRecord(static_cast<std::int64_t>(Core::LIVE_INPUT_WINDOW_SECONDS) - 1, 0.5f));
 
     const std::optional<Runtime::LiveInputWindow::Snapshot> snapshot = window.TakeSnapshotIfUpdated();
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_EQ(snapshot->records.size(), Core::MAX_INPUT_WINDOW_SECONDS);
+    EXPECT_EQ(snapshot->records.size(), Core::LIVE_INPUT_WINDOW_SECONDS);
     EXPECT_FLOAT_EQ(snapshot->records.back().mid_delta, 0.5f);
-    EXPECT_EQ(snapshot->last_timestamp_ms, (static_cast<std::int64_t>(Core::MAX_INPUT_WINDOW_SECONDS) - 1) * 1000);
+    EXPECT_EQ(snapshot->last_timestamp_ms, (static_cast<std::int64_t>(Core::LIVE_INPUT_WINDOW_SECONDS) - 1) * 1000);
 
     EXPECT_FALSE(window.TakeSnapshotIfUpdated().has_value());
 }

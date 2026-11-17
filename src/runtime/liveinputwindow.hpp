@@ -16,7 +16,7 @@
 namespace Runtime {
 
     /**
-     * @brief Holds the last Core::MAX_INPUT_WINDOW_SECONDS consecutive LiveRecords.
+     * @brief Holds the last Core::LIVE_INPUT_WINDOW_SECONDS consecutive LiveRecords.
      *
      * The stream thread pushes records; the prediction thread copies a snapshot and works on it
      * without holding the lock, so the stream is never blocked by a FAISS query.

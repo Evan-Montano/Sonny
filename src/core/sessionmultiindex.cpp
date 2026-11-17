@@ -170,7 +170,8 @@ namespace Core {
                 }
             }
 
-            // Direction vectors are raw {-1, 0, 1} in every segment, so their distances already agree.
+            // Every segment uses the same direction-coordinate weights for a given input window,
+            // so direction distances are directly comparable across segments.
             directionCandidates.insert(
                 directionCandidates.end(),
                 segmentResults.DirectionResults.begin(),

@@ -47,10 +47,10 @@ namespace Runtime {
      * match count, its own PredictionAnalytics so their accuracy is scored separately. Windows are
      * never mixed: every window is searched, ranked, and forecast on its own.
      *
-     * A window is searched across several half-hour segments at once: up to
-     * Core::MAX_LOADED_SEGMENTS of the 13, the ones nearest the current time of day. The segments
-     * only supply candidates; one forecast per window and match count is built from the nearest
-     * matches overall.
+     * A window is searched across the half-hour segments nearest the current time of day. The
+     * runtime defaults to one segment per window when all input windows are active, and uses
+     * Core::MAX_LOADED_SEGMENTS for a single active window. Segments only supply candidates; one
+     * forecast per window and match count is built from the nearest matches overall.
      *
      * Threading: ObserveRecord is called from the stream thread; Preload, RunSnapshot and FlushIncomplete
      * from the prediction thread. They share only the analytics objects, which lock internally.
@@ -71,13 +71,14 @@ namespace Runtime {
          *
          * @param inputWindows Input windows to run, each independently. Defaults to the configured
          * selection (Core::USE_ALL_INPUT_WINDOWS / Core::SELECTED_INPUT_WINDOW_SECONDS).
-         * @param maxLoadedSegments Most half-hour segments each window keeps in memory at once.
+         * @param maxLoadedSegments Most half-hour segments each window keeps in memory at once. The
+         * default is one when all input windows are active, otherwise Core::MAX_LOADED_SEGMENTS.
          * @throws std::invalid_argument If a window is not in Core::INPUT_WINDOW_CONFIGURATIONS, or no
          * segment is allowed to load.
          */
         explicit PredictionExperiment(
             std::vector<std::size_t> inputWindows = Core::ActiveInputWindows(),
-            std::size_t maxLoadedSegments = Core::MAX_LOADED_SEGMENTS
+            std::size_t maxLoadedSegments = Core::DEFAULT_ACTIVE_MAX_LOADED_SEGMENTS
         );
 
         // METHODS

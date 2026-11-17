@@ -94,7 +94,7 @@ namespace Core {
         const std::size_t inputWindowSeconds,
         std::optional<std::string_view> indexType
     ) {
-        // The direction index stores raw {-1, 0, 1} values and never writes a normalization file.
+        // The direction index does not use normalization-parameter files.
         const bool requiresNormalization = (indexType.has_value() && *indexType == INX_TYPE_DIRECTION) == false;
 
         return Common::Storage::FileExists(GetIndexPath(numOfSeconds, inputWindowSeconds, indexType)) &&

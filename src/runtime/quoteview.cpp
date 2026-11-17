@@ -59,7 +59,7 @@ namespace Runtime {
 
         ftxui::Element RenderWindowBar(const std::size_t windowSize) {
             std::string bar = "[";
-            for (std::size_t i = 0; i < Core::MAX_INPUT_WINDOW_SECONDS; ++i) {
+            for (std::size_t i = 0; i < Core::LIVE_INPUT_WINDOW_SECONDS; ++i) {
                 bar += i < windowSize ? "█" : "·";
             }
             bar += "]";
@@ -170,7 +170,7 @@ namespace Runtime {
                 ftxui::text(std::format(
                     "{} / {} one-second records ready for comparison",
                     state.window_size,
-                    Core::MAX_INPUT_WINDOW_SECONDS
+                    Core::LIVE_INPUT_WINDOW_SECONDS
                 )),
                 ftxui::text("Press Escape to return to the menu.") | ftxui::color(ftxui::Color::GrayDark)
             })

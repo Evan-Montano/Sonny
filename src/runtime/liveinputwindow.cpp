@@ -45,7 +45,7 @@ namespace Runtime {
     std::optional<LiveInputWindow::Snapshot> LiveInputWindow::TakeSnapshotIfUpdated() {
         std::lock_guard lock(mutex_);
 
-        if (records_.size() < Core::MAX_INPUT_WINDOW_SECONDS || revision_ == snapshot_revision_) {
+        if (records_.size() < Core::LIVE_INPUT_WINDOW_SECONDS || revision_ == snapshot_revision_) {
             return std::nullopt;
         }
 

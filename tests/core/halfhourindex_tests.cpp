@@ -253,8 +253,7 @@ TEST_F(HalfHourIndex_Test, MagnitudeIndexStoresNormalizedAbsoluteDeltas) {
     }
 }
 
-TEST_F(HalfHourIndex_Test, DirectionIndexStoresRawSigns) {
-    // Normalization parameters must not leak into the direction index.
+TEST_F(HalfHourIndex_Test, DirectionVectorsUseWeightsBasedOnTheirConfiguredDimension) {
     const std::vector<Core::MLRecord> records = MakeRecords(WINDOW + 2);
 
     BuildIndex(records, 0, MakeParameters(5.0, 3.0));
@@ -265,10 +264,73 @@ TEST_F(HalfHourIndex_Test, DirectionIndexStoresRawSigns) {
     for (std::size_t v = 0; v < vectors.size(); ++v) {
         for (std::size_t i = 0; i < WINDOW; ++i) {
             const float delta = records[v + i].mid_delta;
-            const float expected = delta > 0.0f ? 1.0f : (delta < 0.0f ? -1.0f : 0.0f);
+            const float direction = delta > 0.0f ? 1.0f : (delta < 0.0f ? -1.0f : 0.0f);
+            const double weight = 0.1 + 1.8 * (static_cast<double>(i) / static_cast<double>(WINDOW - 1));
+            const float expected = direction * static_cast<float>(std::sqrt(weight));
             EXPECT_FLOAT_EQ(vectors[v][i], expected) << "vector " << v << ", second " << i;
         }
     }
+}
+
+TEST_F(HalfHourIndex_Test, SixtySecondDirectionIndexUsesMatchingTemporalWeightsForStorageAndQueries) {
+    constexpr std::size_t window = 60;
+    std::vector<Core::MLRecord> records;
+    records.reserve(window);
+
+    for (std::size_t position = 0; position < window; ++position) {
+        records.push_back(Core::MLRecord{
+            .mid_delta = position % 2 == 0 ? 1.0F : -1.0F
+        });
+    }
+
+    BuildIndex(records, 0, MakeParameters(), window);
+
+    const auto directionVectors = ReadStoredVectors(
+        IndexPath(SEGMENT_START, window, Core::HalfHourIndex::INX_TYPE_DIRECTION)
+    );
+    ASSERT_EQ(directionVectors.size(), 1u);
+    ASSERT_EQ(directionVectors.front().size(), window);
+
+    double totalWeight = 0.0;
+    for (std::size_t position = 0; position < window; ++position) {
+        const double weight = 0.1 + 1.8 * (static_cast<double>(position) / static_cast<double>(window - 1));
+        totalWeight += weight;
+        const float direction = records[position].mid_delta > 0.0F ? 1.0F : -1.0F;
+        const float expected = direction * static_cast<float>(std::sqrt(weight));
+        EXPECT_FLOAT_EQ(directionVectors.front()[position], expected) << "position " << position;
+    }
+
+    EXPECT_NEAR(totalWeight / static_cast<double>(window), 1.0, 1e-12);
+
+    const float oldestScale = static_cast<float>(std::sqrt(0.1));
+    const float newestScale = static_cast<float>(std::sqrt(1.9));
+    EXPECT_FLOAT_EQ(directionVectors.front().front(), oldestScale);
+    EXPECT_FLOAT_EQ(directionVectors.front().back(), -newestScale);
+
+    const auto magnitudeVectors = ReadStoredVectors(
+        IndexPath(SEGMENT_START, window, Core::HalfHourIndex::INX_TYPE_MAGNITUDE)
+    );
+    ASSERT_EQ(magnitudeVectors.size(), 1u);
+    ASSERT_EQ(magnitudeVectors.front().size(), window);
+    for (std::size_t position = 0; position < window; ++position) {
+        EXPECT_FLOAT_EQ(magnitudeVectors.front()[position], 1.0F);
+    }
+
+    std::vector<Core::MLRecord> query = records;
+    constexpr std::array<std::size_t, 5> flippedPositions{0, 15, 30, 45, 59};
+    double expectedSquaredDistance = 0.0;
+    for (const std::size_t position : flippedPositions) {
+        query[position].mid_delta = -query[position].mid_delta;
+        const double weight = 0.1 + 1.8 * (static_cast<double>(position) / static_cast<double>(window - 1));
+        expectedSquaredDistance += 4.0 * weight;
+    }
+
+    const Core::HalfHourMultiIndex index(SEGMENT_START, window);
+    const auto results = index.Query(query, 1);
+    ASSERT_EQ(results.MagnitudeResults.size(), 1u);
+    ASSERT_EQ(results.DirectionResults.size(), 1u);
+    EXPECT_FLOAT_EQ(results.MagnitudeResults.front().distance, 0.0F);
+    EXPECT_NEAR(results.DirectionResults.front().distance, expectedSquaredDistance, 1e-4);
 }
 
 TEST_F(HalfHourIndex_Test, MetadataTracksRecordOffsetsAndTradingDay) {
@@ -648,13 +710,13 @@ TEST(InputConfigTests, LatestInputWindowRejectsUnsupportedOrShortInput) {
 TEST(InputConfigTests, InputQueueKeepsOnlyTheMostRecentConfiguredRecords) {
     std::deque<int> records;
 
-    for (std::size_t i = 0; i < Core::MAX_INPUT_WINDOW_SECONDS + 2; ++i) {
+    for (std::size_t i = 0; i < Core::LIVE_INPUT_WINDOW_SECONDS + 2; ++i) {
         Core::AppendInputWindowRecord(records, static_cast<int>(i));
     }
 
-    ASSERT_EQ(records.size(), Core::MAX_INPUT_WINDOW_SECONDS);
+    ASSERT_EQ(records.size(), Core::LIVE_INPUT_WINDOW_SECONDS);
     EXPECT_EQ(records.front(), 2);
-    EXPECT_EQ(records.back(), static_cast<int>(Core::MAX_INPUT_WINDOW_SECONDS + 1));
+    EXPECT_EQ(records.back(), static_cast<int>(Core::LIVE_INPUT_WINDOW_SECONDS + 1));
 }
 
 TEST(InputConfigTests, HistoricalFutureBeginsAfterConfiguredInputWindow) {

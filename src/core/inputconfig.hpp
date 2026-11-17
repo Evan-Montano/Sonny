@@ -23,8 +23,7 @@ namespace Core {
     };
 
     /**
-     * @brief Longest configured window. The live rolling window keeps this many records so
-     * every shorter configuration can be cut from the same snapshot.
+     * @brief Longest configured window, used as the live buffer size when every window is active.
      */
     inline constexpr std::size_t MAX_INPUT_WINDOW_SECONDS = INPUT_WINDOW_CONFIGURATIONS.back();
 
@@ -51,9 +50,9 @@ namespace Core {
      * @brief When true, the live runtime searches and forecasts with every entry in
      * INPUT_WINDOW_CONFIGURATIONS, each on its own. When false, only SELECTED_INPUT_WINDOW_SECONDS runs.
      *
-     * Each active window keeps up to MAX_LOADED_SEGMENTS of its half-hour indexes in memory
-     * (magnitude and direction), so running every window at once needs several times the memory of a
-     * single one. "Update Indexes" always builds every configured window regardless of this setting.
+     * Each active window keeps up to its configured segment limit of half-hour indexes in memory
+     * (magnitude and direction). The runtime defaults to one segment per window when all windows
+     * are active. "Update Indexes" always builds every configured window regardless of this setting.
      */
     inline constexpr bool USE_ALL_INPUT_WINDOWS = false;
 
@@ -61,7 +60,7 @@ namespace Core {
      * @brief The one input window the live runtime uses while USE_ALL_INPUT_WINDOWS is false.
      * Must be an entry in INPUT_WINDOW_CONFIGURATIONS.
      */
-    inline constexpr std::size_t SELECTED_INPUT_WINDOW_SECONDS = 60;
+    inline constexpr std::size_t SELECTED_INPUT_WINDOW_SECONDS = 20;
 
     static_assert(
         IsSupportedInputWindow(SELECTED_INPUT_WINDOW_SECONDS),
@@ -69,7 +68,16 @@ namespace Core {
     );
 
     /**
-     * @brief Most half-hour segments an active input window keeps in memory at once (1 to 13).
+     * @brief Number of recent records the live runtime needs to retain for its active windows.
+     * All-window mode needs the longest configured window; single-window mode needs only its selection.
+     */
+    inline constexpr std::size_t LIVE_INPUT_WINDOW_SECONDS =
+        USE_ALL_INPUT_WINDOWS ? MAX_INPUT_WINDOW_SECONDS : SELECTED_INPUT_WINDOW_SECONDS;
+
+    /**
+     * @brief Configured maximum of half-hour segments kept per input window (1 to 13).
+     *
+     * Single-window runtime mode uses this limit. All-window mode defaults to one segment per window.
      *
      * A session has 13 segments. When fewer are allowed, the ones nearest the current time of day
      * are loaded, and the set follows the clock as the session moves on: in the last hour with a
@@ -78,10 +86,17 @@ namespace Core {
      * Each index stores every overlapping window in full, so memory grows with the input window.
      * With the current corpus (about 4.09 million windows per segment) one segment costs roughly
      * 34 MB per second of input window for its two indexes and their metadata:
-     * about 2.1 GB at 60s, 1.1 GB at 30s, and 0.4 GB at 10s. Multiply by this limit, and by the
-     * number of active windows, to get the total. Values above 13 behave as 13.
+     * about 2.1 GB at 60s, 1.1 GB at 30s, and 0.4 GB at 10s. Multiply by the selected per-window
+     * limit and the number of active windows to get the total. Values above 13 behave as 13.
      */
-    inline constexpr std::size_t MAX_LOADED_SEGMENTS = 4;
+    inline constexpr std::size_t MAX_LOADED_SEGMENTS = 3;
+
+    /**
+     * @brief Runtime's default per-window segment limit for the current input-window mode.
+     * All-window mode uses one segment per window to keep aggregate memory use down.
+     */
+    inline constexpr std::size_t DEFAULT_ACTIVE_MAX_LOADED_SEGMENTS =
+        USE_ALL_INPUT_WINDOWS ? 1 : MAX_LOADED_SEGMENTS;
 
     static_assert(MAX_LOADED_SEGMENTS >= 1, "MAX_LOADED_SEGMENTS must allow at least one segment.");
 
@@ -154,11 +169,11 @@ namespace Core {
     }
 
     /**
-     * @brief Appends a record, dropping the oldest one once MAX_INPUT_WINDOW_SECONDS are held.
+     * @brief Appends a record, dropping the oldest one once LIVE_INPUT_WINDOW_SECONDS are held.
      */
     template<typename T>
     void AppendInputWindowRecord(std::deque<T>& records, T record) {
-        if (records.size() >= MAX_INPUT_WINDOW_SECONDS) {
+        if (records.size() >= LIVE_INPUT_WINDOW_SECONDS) {
             records.pop_front();
         }
 
