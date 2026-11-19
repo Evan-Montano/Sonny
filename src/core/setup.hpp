@@ -39,7 +39,7 @@ namespace Core {
          * Either way, only the active input windows (Core::ActiveInputWindows) and the sub-indexes the
          * direction search mode needs (Core::DIRECTION_SEARCH_MODE) are touched.
          */
-        inline constexpr bool REUSE_EXISTING_INDEXES = true;
+        inline constexpr bool REUSE_EXISTING_INDEXES = false;
 
 
         /**

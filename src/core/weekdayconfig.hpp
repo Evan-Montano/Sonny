@@ -102,7 +102,7 @@ namespace Core {
      * AllDays builds the all-week direction indexes, WeekdayGroups builds one set per group below,
      * and Compare builds both.
      */
-    inline constexpr DirectionSearchMode DIRECTION_SEARCH_MODE = DirectionSearchMode::Compare;
+    inline constexpr DirectionSearchMode DIRECTION_SEARCH_MODE = DirectionSearchMode::AllDays;
 
     /**
      * @brief Weekday groups for the weekday direction indexes. Each trading weekday (Monday to Friday)

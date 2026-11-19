@@ -33,7 +33,7 @@ namespace Core {
                 const double newestPosition = static_cast<double>(vectorSize - 1);
 
                 for (std::size_t position = 0; position < vectorSize; ++position) {
-                    const double weight = 0.8 + 0.4 * (static_cast<double>(position) / newestPosition);
+                    const double weight = 0.4 + 1.8 * (static_cast<double>(position) / newestPosition);
                     positionScales[position] = static_cast<float>(std::sqrt(weight));
                 }
             }

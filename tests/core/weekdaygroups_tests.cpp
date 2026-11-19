@@ -159,8 +159,8 @@ namespace {
 // CONFIGURATION AND WEEKDAY LOOKUP
 // ============================================================ //
 
-TEST(WeekdayGroupConfigTests, InitialConfigurationIsFiveSingleDayGroupsInCompareMode) {
-    EXPECT_EQ(Core::DIRECTION_SEARCH_MODE, Core::DirectionSearchMode::Compare);
+TEST(WeekdayGroupConfigTests, InitialConfigurationIsFiveSingleDayGroupsInAllDaysMode) {
+    EXPECT_EQ(Core::DIRECTION_SEARCH_MODE, Core::DirectionSearchMode::AllDays);
     ASSERT_EQ(Core::DIRECTION_WEEKDAY_GROUPS.size(), 5u);
     EXPECT_NO_THROW(Core::ValidateWeekdayGroups(Core::DIRECTION_WEEKDAY_GROUPS));
 }

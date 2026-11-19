@@ -265,7 +265,7 @@ TEST_F(HalfHourIndex_Test, DirectionVectorsUseWeightsBasedOnTheirConfiguredDimen
         for (std::size_t i = 0; i < WINDOW; ++i) {
             const float delta = records[v + i].mid_delta;
             const float direction = delta > 0.0f ? 1.0f : (delta < 0.0f ? -1.0f : 0.0f);
-            const double weight = 0.8 + 0.4 * (static_cast<double>(i) / static_cast<double>(WINDOW - 1));
+            const double weight = 0.4 + 1.8 * (static_cast<double>(i) / static_cast<double>(WINDOW - 1));
             const float expected = direction * static_cast<float>(std::sqrt(weight));
             EXPECT_FLOAT_EQ(vectors[v][i], expected) << "vector " << v << ", second " << i;
         }
@@ -293,17 +293,17 @@ TEST_F(HalfHourIndex_Test, SixtySecondDirectionIndexUsesMatchingTemporalWeightsF
 
     double totalWeight = 0.0;
     for (std::size_t position = 0; position < window; ++position) {
-        const double weight = 0.8 + 0.4 * (static_cast<double>(position) / static_cast<double>(window - 1));
+        const double weight = 0.4 + 1.8 * (static_cast<double>(position) / static_cast<double>(window - 1));
         totalWeight += weight;
         const float direction = records[position].mid_delta > 0.0F ? 1.0F : -1.0F;
         const float expected = direction * static_cast<float>(std::sqrt(weight));
         EXPECT_FLOAT_EQ(directionVectors.front()[position], expected) << "position " << position;
     }
 
-    EXPECT_NEAR(totalWeight / static_cast<double>(window), 1.0, 1e-12);
+    EXPECT_NEAR(totalWeight / static_cast<double>(window), 1.3, 1e-12);
 
-    const float oldestScale = static_cast<float>(std::sqrt(0.8));
-    const float newestScale = static_cast<float>(std::sqrt(1.2));
+    const float oldestScale = static_cast<float>(std::sqrt(0.4));
+    const float newestScale = static_cast<float>(std::sqrt(2.2));
     EXPECT_FLOAT_EQ(directionVectors.front().front(), oldestScale);
     EXPECT_FLOAT_EQ(directionVectors.front().back(), -newestScale);
 
@@ -321,7 +321,7 @@ TEST_F(HalfHourIndex_Test, SixtySecondDirectionIndexUsesMatchingTemporalWeightsF
     double expectedSquaredDistance = 0.0;
     for (const std::size_t position : flippedPositions) {
         query[position].mid_delta = -query[position].mid_delta;
-        const double weight = 0.8 + 0.4 * (static_cast<double>(position) / static_cast<double>(window - 1));
+        const double weight = 0.4 + 1.8 * (static_cast<double>(position) / static_cast<double>(window - 1));
         expectedSquaredDistance += 4.0 * weight;
     }
 
