@@ -105,6 +105,9 @@ namespace Common {
         static DateTime GetCurrentDateTime(const bool& newYorkTime = false);
         static DateTime GetCurrentDateTime(TimeZone zone);
 
+        static DateTime GetYesterdayDateTime(const bool& newYorkTime = false);
+        static DateTime GetYesterdayDateTime(TimeZone zone);
+
         void NextDay();
         void PreviousDay();
         [[nodiscard]] bool Equal(const DateTime &dt, const bool &dayOnly = false) const;

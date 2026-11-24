@@ -18,7 +18,7 @@ namespace Core {
          * @brief End date for export data.
          * 
          */
-        const Common::DateTime END_DATE = Common::DateTime::GetCurrentDateTime();
+        const Common::DateTime END_DATE = Common::DateTime::GetYesterdayDateTime();
 
         /**
         * @brief Total number of calendar days in the configured setup range.

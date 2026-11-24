@@ -269,6 +269,18 @@ namespace Common {
         return FromTimestampMilliseconds(GetCurrentTimestampMilliseconds(), zone);
     }
 
+    DateTime DateTime::GetYesterdayDateTime(const bool &newYorkTime) {
+        DateTime res = GetCurrentDateTime(newYorkTime ? TimeZone::NewYork : TimeZone::Local);
+        res.PreviousDay();
+        return res;
+    }
+
+    DateTime DateTime::GetYesterdayDateTime(const TimeZone zone) {
+        DateTime res = FromTimestampMilliseconds(GetCurrentTimestampMilliseconds(), zone);
+        res.PreviousDay();
+        return res;
+    }
+
     void DateTime::NextDay() {
         using namespace std::chrono;
         const auto target = sys_days{year{Year}/month{Month}/day{Day}} + days{1};
