@@ -6,3 +6,8 @@
 - Capitalize class and struct members unless their names begin with an underscore. Use PascalCase for ordinary names (for example, `Path` and `InputWindowSeconds`); existing uppercase constants and leading-underscore members may retain their style. Parameters and local variables may remain lowercase.
 - Update all callers when renaming a member. Preserve serialized keys, binary layouts, generated code, third-party APIs, and names required by framework overrides.
 - Apply these conventions to new code and to existing code being modified. Do not edit vendored dependencies or generated sources to enforce them.
+
+# Codebase-grounded analysis
+
+- Before describing Sonny's current behavior or recommending changes, search and read the relevant implementation, callers, configuration, and tests. This applies to analysis and brainstorming as well as implementation work.
+- Do not guess existing functionality or present an implemented capability as a missing feature. Ground recommendations in specific differences from the current code, and distinguish verified behavior, observations from logs, and hypotheses to test.

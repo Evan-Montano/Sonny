@@ -66,28 +66,6 @@ namespace Runtime {
         return ConfiguredInputWindows;
     }
 
-    // === OBSERVATION (stream thread) === //
-
-    void PredictionExperiment::ObserveRecord(const LiveRecord& record) {
-        for (WindowSlot& slot : Slots) {
-            for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
-                LogReports(
-                    slot.Analytics[i].ObserveRecord(record.TimestampMs, record.Record.MidDelta, record.Observed),
-                    slot.InputWindowSeconds,
-                    PREDICTION_MATCH_COUNTS[i]
-                );
-            }
-        }
-    }
-
-    void PredictionExperiment::FlushIncomplete() {
-        for (WindowSlot& slot : Slots) {
-            for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
-                LogReports(slot.Analytics[i].FlushIncomplete(), slot.InputWindowSeconds, PREDICTION_MATCH_COUNTS[i]);
-            }
-        }
-    }
-
     // === PREDICTION (prediction thread) === //
 
     void PredictionExperiment::Preload(const std::int64_t timestampMs) {
@@ -98,7 +76,7 @@ namespace Runtime {
         }
     }
 
-    std::vector<PredictionExperiment::ForecastRow> PredictionExperiment::RunSnapshot(const LiveInputWindow::Snapshot& snapshot) {
+    std::vector<PredictionExperiment::EvaluationRow> PredictionExperiment::RunSnapshot(const LiveInputWindow::Snapshot& snapshot) {
         const std::optional<std::size_t> lastSecond = GetSecondsSinceMarketOpen(snapshot.LastTimestampMs);
 
         // Pre-market and weekend data has no historical session to compare against.
@@ -106,7 +84,7 @@ namespace Runtime {
             return {};
         }
 
-        std::vector<ForecastRow> rows(Slots.size());
+        std::vector<EvaluationRow> rows(Slots.size());
 
         for (std::size_t i = 0; i < Slots.size(); ++i) {
             WindowSlot& slot = Slots[i];
@@ -133,7 +111,7 @@ namespace Runtime {
             }
         }
 
-        LogComparison(snapshot.LastTimestampMs, rows);
+        LogComparison(snapshot, rows);
 
         return rows;
     }
@@ -182,9 +160,9 @@ namespace Runtime {
         }
     }
 
-    PredictionExperiment::ForecastRow PredictionExperiment::RunWindow(WindowSlot& slot, const LiveInputWindow::Snapshot& snapshot) {
+    PredictionExperiment::EvaluationRow PredictionExperiment::RunWindow(WindowSlot& slot, const LiveInputWindow::Snapshot& snapshot) {
         const std::size_t inputWindowSeconds = slot.InputWindowSeconds;
-        ForecastRow row{};
+        EvaluationRow row{};
 
         const std::span<const Core::MLRecord> queryWindow = Core::LatestInputWindow(
             std::span<const Core::MLRecord>(snapshot.Records),
@@ -222,8 +200,8 @@ namespace Runtime {
             );
 
             LogForecast(summary, inputWindowSeconds, matchCount);
-            LogReports(slot.Analytics[i].SubmitForecast(summary.Forecast), inputWindowSeconds, matchCount);
-            row[i] = summary.Forecast;
+            row[i] = PredictionAnalytics::Evaluate(summary.Forecast, snapshot.Future);
+            LogReport(*row[i], inputWindowSeconds, matchCount);
         }
 
         return row;
@@ -304,17 +282,15 @@ namespace Runtime {
 
     // === LOGGING === //
 
-    void PredictionExperiment::LogReports(
-        const std::vector<PredictionEvaluationReport>& reports,
+    void PredictionExperiment::LogReport(
+        const PredictionEvaluationReport& report,
         const std::size_t inputWindowSeconds,
         const std::size_t matchCount
     ) {
-        for (const PredictionEvaluationReport& report : reports) {
-            Logger::Info(
-                std::format("{}\n{}", ConfigurationLabel(inputWindowSeconds, matchCount), PredictionAnalytics::FormatReport(report)),
-                true
-            );
-        }
+        Logger::Info(
+            std::format("{}\n{}", ConfigurationLabel(inputWindowSeconds, matchCount), PredictionAnalytics::FormatReport(report)),
+            true
+        );
     }
 
     void PredictionExperiment::LogForecast(
@@ -349,28 +325,29 @@ namespace Runtime {
         Logger::Info(message);
     }
 
-    void PredictionExperiment::LogComparison(const std::int64_t asOfTimestampMs, const std::vector<ForecastRow>& rows) const {
+    void PredictionExperiment::LogComparison(const LiveInputWindow::Snapshot& snapshot, const std::vector<EvaluationRow>& rows) const {
         std::string comparison = std::format(
-            "Paired forecasts @{} (same live snapshot; next {} seconds)",
-            FormatTime(asOfTimestampMs),
+            "Held-out forecasts @{} (input ends here; observed future through {}; {} seconds)",
+            FormatTime(snapshot.LastTimestampMs),
+            FormatTime(snapshot.Future.back().TimestampMs),
             FORECAST_HORIZON_SECONDS
         );
 
         for (std::size_t window = 0; window < rows.size(); ++window) {
             for (std::size_t i = 0; i < PREDICTION_MATCH_COUNTS.size(); ++i) {
-                const std::optional<PredictionForecast>& forecast = rows[window][i];
+                const auto& evaluation = rows[window][i];
 
                 comparison += "\n" + ConfigurationLabel(ConfiguredInputWindows[window], PREDICTION_MATCH_COUNTS[i]);
 
-                if (forecast.has_value() == false) {
+                if (evaluation.has_value() == false) {
                     comparison += " | unavailable";
                     continue;
                 }
 
-                comparison += std::format(" | {} matches", forecast->HistoricalMatches);
+                comparison += std::format(" | {} matches", evaluation->Forecast.HistoricalMatches);
 
                 for (std::size_t h = 0; h < PredictionEvaluationHorizons.size(); ++h) {
-                    comparison += std::format(" | {:>2}s ${:+.5f}", PredictionEvaluationHorizons[h], forecast->CumulativeChanges[h]);
+                    comparison += std::format(" | {:>2}s ${:+.5f}", PredictionEvaluationHorizons[h], evaluation->Forecast.CumulativeChanges[h]);
                 }
             }
         }

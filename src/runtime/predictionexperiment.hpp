@@ -9,7 +9,6 @@
 #include "forecast.hpp"
 #include "historicalrecordstore.hpp"
 #include "liveinputwindow.hpp"
-#include "onesecondaggregator.hpp"
 #include "predictionanalytics.hpp"
 
 #include <array>
@@ -24,8 +23,8 @@ namespace Runtime {
     /**
      * @brief Match counts compared for every input window. Each uses the N nearest matches.
      */
-    inline constexpr std::array<std::size_t, 3> PREDICTION_MATCH_COUNTS{
-        8, 16, 32
+    inline constexpr std::array<std::size_t, 5> PREDICTION_MATCH_COUNTS{
+        2, 4, 8, 16, 32
     };
 
     /**
@@ -43,26 +42,26 @@ namespace Runtime {
     /**
      * @brief Side-by-side comparison of forecast configurations while the engine is being tuned.
      *
-     * Each active input window (see Core::ActiveInputWindows) has its own indexes and, for each
-     * match count, its own PredictionAnalytics so their accuracy is scored separately. Windows are
-     * never mixed: every window is searched, ranked, and forecast on its own.
+     * Each active input window (see Core::ActiveInputWindows) has its own indexes. Every match count
+     * is evaluated immediately against the snapshot's separate held-out future. Windows are never
+     * mixed: every window is searched, ranked, and forecast on its own.
      *
      * A window is searched across the half-hour segments nearest the current time of day. The
      * runtime defaults to one segment per window when all input windows are active, and uses
      * Core::MAX_LOADED_SEGMENTS for a single active window. Segments only supply candidates; one
      * forecast per window and match count is built from the nearest matches overall.
      *
-     * Threading: ObserveRecord is called from the stream thread; Preload, RunSnapshot and FlushIncomplete
-     * from the prediction thread. They share only the analytics objects, which lock internally.
+     * Preload and RunSnapshot run on the prediction thread. The stream thread only fills the
+     * rolling buffer; later quotes cannot alter an evaluation's captured inputs or outcomes.
      */
     class PredictionExperiment {
     public:
         // MEMBERS
 
         /**
-         * @brief Forecasts from one input window, one entry per match count (nullopt if unavailable).
+         * @brief Forecasts and immediate evaluations from one input window, one entry per match count.
          */
-        using ForecastRow = std::array<std::optional<PredictionForecast>, PREDICTION_MATCH_COUNTS.size()>;
+        using EvaluationRow = std::array<std::optional<PredictionEvaluationReport>, PREDICTION_MATCH_COUNTS.size()>;
 
         // CONSTRUCTOR
 
@@ -89,13 +88,6 @@ namespace Runtime {
         const std::vector<std::size_t>& InputWindows() const;
 
         /**
-         * @brief Record what actually happened in a live second, completing any forecasts it finishes.
-         *
-         * @param record Next live second, in order.
-         */
-        void ObserveRecord(const LiveRecord& record);
-
-        /**
          * @brief Load every window's indexes for the given time of day ahead of the first forecast,
          * so that forecast does not have to wait for them.
          *
@@ -107,21 +99,16 @@ namespace Runtime {
         void Preload(std::int64_t timestampMs);
 
         /**
-         * @brief Forecast the next FORECAST_HORIZON_SECONDS with every configuration, then log a comparison.
+         * @brief Forecast from the input portion and immediately evaluate the separate held-out future.
          *
          * When the time of day has moved into another half-hour segment, the loaded segments are
          * first moved along with it (one released, one loaded).
          *
-         * @param snapshot Full live window; every configuration is cut from its newest records.
+         * @param snapshot Captured input and future; every configuration ends at the same input boundary.
          * @return One entry per entry in InputWindows(), in the same order. Empty when the snapshot
          * falls outside any historical session (pre-market or weekend).
          */
-        std::vector<ForecastRow> RunSnapshot(const LiveInputWindow::Snapshot& snapshot);
-
-        /**
-         * @brief Log forecasts whose evaluation window had not finished when the runtime stopped.
-         */
-        void FlushIncomplete();
+        std::vector<EvaluationRow> RunSnapshot(const LiveInputWindow::Snapshot& snapshot);
 
     private:
         // TYPES
@@ -147,11 +134,6 @@ namespace Runtime {
              * @brief The loaded half-hour segments of this window; nullptr until first needed.
              */
             std::unique_ptr<Core::SessionMultiIndex> Index;
-
-            /**
-             * @brief One scorer per entry in PREDICTION_MATCH_COUNTS.
-             */
-            std::array<PredictionAnalytics, PREDICTION_MATCH_COUNTS.size()> Analytics;
         };
 
         // METHODS
@@ -163,9 +145,9 @@ namespace Runtime {
         void EnsureIndexLoaded(WindowSlot& slot, std::size_t currentSegment);
 
         /**
-         * @brief Query one input window and submit a forecast for each match count.
+         * @brief Query one input window and evaluate each forecast against the captured future.
          */
-        ForecastRow RunWindow(WindowSlot& slot, const LiveInputWindow::Snapshot& snapshot);
+        EvaluationRow RunWindow(WindowSlot& slot, const LiveInputWindow::Snapshot& snapshot);
 
         /**
          * @brief Turn one sub-index's consolidated results into matches with a full future, nearest first,
@@ -185,10 +167,10 @@ namespace Runtime {
         );
 
         /**
-         * @brief Log finished evaluation reports for one configuration.
+         * @brief Log one immediately evaluated configuration.
          */
-        static void LogReports(
-            const std::vector<PredictionEvaluationReport>& reports,
+        static void LogReport(
+            const PredictionEvaluationReport& report,
             std::size_t inputWindowSeconds,
             std::size_t matchCount
         );
@@ -205,7 +187,7 @@ namespace Runtime {
         /**
          * @brief Log every configuration's forecast for one snapshot in a single table.
          */
-        void LogComparison(std::int64_t asOfTimestampMs, const std::vector<ForecastRow>& rows) const;
+        void LogComparison(const LiveInputWindow::Snapshot& snapshot, const std::vector<EvaluationRow>& rows) const;
 
         // MEMBERS
 

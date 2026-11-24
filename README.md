@@ -30,7 +30,7 @@ Storage uses binary units (GiB = 2³⁰ bytes, MiB = 2²⁰ bytes). Disk sizes a
 - Binary midpoint-change records and independently normalized magnitude indexes.
 - Exact nearest-neighbor search through FAISS, with selective half-hour loading and cross-segment ranking.
 - TLS MQTT quote ingestion, signed HTTPS subscriptions, Protobuf decoding, and read-only Secret Service credential lookup.
-- Synchronized rolling input snapshots, historical-future lookup, weighted magnitude/direction forecasts, and subsequent-observation evaluation.
+- Synchronized rolling input snapshots, historical-future lookup, weighted magnitude/direction forecasts, and immediate held-out evaluation.
 - Configurable experiments for input windows and match caps. Magnitude and direction indexes each include every trading day; only the 20-second indexes exist in the measured storage snapshot.
 
 ## Architecture and Data Flow
@@ -106,15 +106,15 @@ The Webull client connects with TLS MQTT 3.1.1, then binds a signed HTTPS subscr
 
 Two primary processing paths separate quote aggregation from periodic prediction. There are also UI, logger, stream-management, and Paho library execution threads; “two paths” is not a total process thread count. Paho invokes the quote handler through its callback bridge. The aggregator keeps the last quote per second, drops earlier-second arrivals, and emits a second only when a later quote arrives. Up to five quiet seconds are filled with zero deltas and marked unobserved; longer gaps or unusable books reset continuity.
 
-The rolling window retains 30 records in the current single-window mode. Only full, changed windows are snapshotted. The prediction loop waits five seconds between computations, so this is not a fixed five-second end-to-end deadline. Single-window mode preloads indexes while quotes accumulate. Escape requests stop; a scope guard stops/joins the stream-management worker before callback-captured pipeline state is destroyed, and remaining forecasts are flushed.
+The rolling window retains the active input length plus the maximum evaluation horizon: **35 one-second records in the current 30+5 configuration**. Only full, changed windows are snapshotted. A snapshot separates the input records from the following five held-out records, preserving their timestamps and observation flags. All-window mode retains 45+5 records and ends every input configuration at the same boundary. The prediction loop waits five seconds between computations; each computation queries only the input portion and immediately evaluates its captured future. Single-window mode preloads indexes while quotes accumulate. Escape requests stop; a scope guard stops/joins the stream-management worker before callback-captured pipeline state is destroyed.
 
 ## Forecasting Methodology and Evaluation
 
 For each historical match, the runtime reads the five signed deltas immediately **after** its input window. It estimates future magnitude as a weighted mean of absolute cumulative historical moves, while a separate direction match set votes on the cumulative move's sign. Magnitude weights are `1 / (squared_distance + 1e-6)^2`; direction weights are `1 / (1 + squared_distance)`. The signed forecast uses the full estimated magnitude in the winning direction and records agreement separately. Match caps **8, 16, and 32** are evaluated independently on the same snapshot.
 
-The evaluator anchors forecasts to the last input timestamp and scores horizons **1, 2, 3, 4, and 5 seconds** against subsequent observations. A horizon is incomplete if any required second was not observed. A short observation history allows outcomes that arrive during computation to be applied when the forecast is submitted. This avoids feeding those outcomes into the input snapshot, but timely forecast availability must be measured separately.
+The evaluator anchors forecasts to the last **input** timestamp and scores horizons **1, 2, 3, 4, and 5 seconds** immediately against the separate future portion of that same snapshot. Future timestamps must be consecutive and immediately follow the anchor. A horizon is incomplete if any required second was carried forward rather than observed. Later quotes cannot alter the captured evaluation. Logs label this as **held-out evaluation** and show the input boundary and observed-future endpoint: the calculation runs after the outcomes have arrived, so these are delayed model evaluations rather than forecasts available before those outcomes. There is no pending-forecast queue or shutdown flush.
 
-The available November 19 log contains **one sandbox run, 09:37:26–09:47:17 as logged**, with 111 anchors and complete evaluations for each cap. All indexed location dates end November 10, before the log date. This supports evaluation against later stream observations, but the log lacks full payload timestamps/provenance to establish genuinely unseen **production** market data or independently exclude sandbox replay. No several-hour run is present in the available logs.
+The November 19 results below predate the held-out runtime change and used subsequent-observation evaluation. That log contains **one sandbox run, 09:37:26–09:47:17 as logged**, with 111 anchors and complete evaluations for each cap. All indexed location dates end November 10, before the log date. This supports evaluation against later stream observations, but the log lacks full payload timestamps/provenance to establish genuinely unseen **production** market data or independently exclude sandbox replay. No several-hour run is present in the available logs.
 
 At the five-second horizon (111 samples per row, USD midpoint change):
 
@@ -500,7 +500,7 @@ GoogleTest cases cover date/time and JSON helpers, vector construction and norma
 - Designed an end-to-end C++ system spanning historical acquisition, binary storage, similarity search, streaming ingestion, and experimental evaluation.
 - Implemented four-byte one-second records for a measured 53.16-million-record historical dataset, with daily validation and recoverable file replacement.
 - Integrated FAISS exact search into 13 time partitions and separate magnitude/direction representations, managing a 7.92 GiB index collection through selective loading.
-- Separated quote processing from forecast computation using mutex-protected rolling snapshots, independent evaluator synchronization, and managed stream shutdown.
+- Separated quote processing from forecast computation using mutex-protected rolling snapshots, stateless evaluation of the captured held-out future, and managed stream shutdown.
 - Integrated signed HTTPS, TLS MQTT, Protobuf decoding, Secret Service credentials, and a terminal UI; compared independently labeled forecast configurations against subsequent sandbox observations.
 
 ## Current Limitations and Future Development

@@ -2,6 +2,7 @@
 // Implementation of the live quote-stream view.
 
 #include "quoteview.hpp"
+#include "liveinputwindow.hpp"
 #include "common/datetime.hpp"
 #include "core/inputconfig.hpp"
 
@@ -59,7 +60,7 @@ namespace Runtime {
 
         ftxui::Element RenderWindowBar(const std::size_t windowSize) {
             std::string bar = "[";
-            for (std::size_t i = 0; i < Core::LIVE_INPUT_WINDOW_SECONDS; ++i) {
+            for (std::size_t i = 0; i < LiveInputWindow::CAPACITY; ++i) {
                 bar += i < windowSize ? "█" : "·";
             }
             bar += "]";
@@ -164,14 +165,15 @@ namespace Runtime {
         ) | ftxui::flex;
 
         const ftxui::Element windowPanel = ftxui::window(
-            ftxui::text("ROLLING INPUT WINDOW") | ftxui::bold,
+            ftxui::text("ROLLING EVALUATION WINDOW") | ftxui::bold,
             ftxui::vbox({
                 RenderWindowBar(state.WindowSize),
                 ftxui::text(std::format(
                     "{} / {} one-second records ready for comparison",
                     state.WindowSize,
-                    Core::LIVE_INPUT_WINDOW_SECONDS
+                    LiveInputWindow::CAPACITY
                 )),
+                ftxui::text(std::format("{}s input + {}s held-out future", Core::LIVE_INPUT_WINDOW_SECONDS, PredictionEvaluationWindow)),
                 ftxui::text("Press Escape to return to the menu.") | ftxui::color(ftxui::Color::GrayDark)
             })
         );

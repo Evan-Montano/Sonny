@@ -749,18 +749,6 @@ TEST(InputConfigTests, LatestInputWindowRejectsUnsupportedOrShortInput) {
     }
 }
 
-TEST(InputConfigTests, InputQueueKeepsOnlyTheMostRecentConfiguredRecords) {
-    std::deque<int> records;
-
-    for (std::size_t i = 0; i < Core::LIVE_INPUT_WINDOW_SECONDS + 2; ++i) {
-        Core::AppendInputWindowRecord(records, static_cast<int>(i));
-    }
-
-    ASSERT_EQ(records.size(), Core::LIVE_INPUT_WINDOW_SECONDS);
-    EXPECT_EQ(records.front(), 2);
-    EXPECT_EQ(records.back(), static_cast<int>(Core::LIVE_INPUT_WINDOW_SECONDS + 1));
-}
-
 TEST(InputConfigTests, HistoricalFutureBeginsAfterConfiguredInputWindow) {
     for (const std::size_t window : Core::INPUT_WINDOW_CONFIGURATIONS) {
         EXPECT_EQ(Core::HistoricalFutureStart(100, window), 100 + window);

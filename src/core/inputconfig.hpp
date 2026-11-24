@@ -5,10 +5,8 @@
 
 #include <cstddef>
 #include <array>
-#include <deque>
 #include <span>
 #include <stdexcept>
-#include <utility>
 #include <vector>
 
 namespace Core {
@@ -30,7 +28,7 @@ namespace Core {
      * @brief Default window length for HalfHourIndex constructors that omit a size.
      * "Update Indexes" builds the windows returned by ActiveInputWindows().
      */
-    inline constexpr std::size_t DEFAULT_INPUT_WINDOW_SECONDS = 30;
+    inline constexpr std::size_t DEFAULT_INPUT_WINDOW_SECONDS = 45;
 
     constexpr bool IsSupportedInputWindow(const std::size_t inputWindowSeconds) {
         for (const std::size_t configuredWindow : INPUT_WINDOW_CONFIGURATIONS) {
@@ -68,8 +66,8 @@ namespace Core {
     );
 
     /**
-     * @brief Number of recent records the live runtime needs to retain for its active windows.
-     * All-window mode needs the longest configured window; single-window mode needs only its selection.
+     * @brief Input portion of a live snapshot, excluding its held-out future.
+     * All-window mode needs the longest configured input; single-window mode needs only its selection.
      */
     inline constexpr std::size_t LIVE_INPUT_WINDOW_SECONDS =
         USE_ALL_INPUT_WINDOWS ? MAX_INPUT_WINDOW_SECONDS : SELECTED_INPUT_WINDOW_SECONDS;
@@ -166,18 +164,6 @@ namespace Core {
         }
 
         return records.last(inputWindowSeconds);
-    }
-
-    /**
-     * @brief Appends a record, dropping the oldest one once LIVE_INPUT_WINDOW_SECONDS are held.
-     */
-    template<typename T>
-    void AppendInputWindowRecord(std::deque<T>& records, T record) {
-        if (records.size() >= LIVE_INPUT_WINDOW_SECONDS) {
-            records.pop_front();
-        }
-
-        records.push_back(std::move(record));
     }
 
 }

@@ -4,8 +4,11 @@
 #pragma once
 
 #include "onesecondaggregator.hpp"
+#include "predictionanalytics.hpp"
+#include "core/inputconfig.hpp"
 #include "core/structures.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -16,7 +19,7 @@
 namespace Runtime {
 
     /**
-     * @brief Holds the last Core::LIVE_INPUT_WINDOW_SECONDS consecutive LiveRecords.
+     * @brief Holds consecutive input records followed by a complete held-out evaluation horizon.
      *
      * The stream thread pushes records; the prediction thread copies a snapshot and works on it
      * without holding the lock, so the stream is never blocked by a FAISS query.
@@ -25,6 +28,9 @@ namespace Runtime {
     public:
         // MEMBERS
 
+        /** @brief Input seconds plus the largest forecast horizon, retained in one rolling buffer. */
+        static constexpr std::size_t CAPACITY = Core::LIVE_INPUT_WINDOW_SECONDS + PredictionEvaluationWindow;
+
         /**
          * @brief Copy of a full window taken for one prediction cycle.
          */
@@ -32,14 +38,17 @@ namespace Runtime {
             // MEMBERS
 
             /**
-             * @brief Consecutive one-second records, oldest to newest.
+             * @brief Query inputs, oldest to newest. The held-out future is excluded.
              */
             std::vector<Core::MLRecord> Records;
 
             /**
-             * @brief Timestamp of the newest record. Forecasts are anchored to this second.
+             * @brief Timestamp of the last input record, immediately before Future.
              */
             std::int64_t LastTimestampMs{};
+
+            /** @brief The immediately following seconds, including timestamps and observation flags. */
+            std::array<LiveRecord, PredictionEvaluationWindow> Future{};
         };
 
         // METHODS
@@ -62,7 +71,7 @@ namespace Runtime {
         /**
          * @brief Copy the window if it is full and has changed since the previous snapshot.
          *
-         * @return The snapshot, or nullopt if there is nothing new to predict on.
+         * @return Separate input and future records, or nullopt until both portions are full and new.
          */
         std::optional<Snapshot> TakeSnapshotIfUpdated();
 

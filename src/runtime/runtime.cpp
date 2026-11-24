@@ -4,10 +4,9 @@
 // Data flow (each stage lives in its own file under src/runtime/):
 //   Webull quote stream            (stream thread)
 //     → OneSecondAggregator        one gap-free MLRecord per second, same rules as the .rec export
-//     → PredictionExperiment       scores earlier forecasts against each new second
-//     → LiveInputWindow            newest LIVE_INPUT_WINDOW_SECONDS records, shared with the loop below
+//     → LiveInputWindow            input records + held-out horizon, shared with the loop below
 //   Prediction loop                (this thread, every PREDICTION_INTERVAL)
-//     → PredictionExperiment       queries every active input window × match count on the same snapshot
+//     → PredictionExperiment       queries inputs and immediately scores against the captured held-out future
 
 #include "runtime.hpp"
 #include "../ui/ui.hpp"
@@ -90,8 +89,6 @@ namespace Runtime {
 
         OneSecondAggregator aggregator(
             [&](const LiveRecord& record) {
-                // Score earlier forecasts first; this second is their outcome, not an input to them.
-                experiment.ObserveRecord(record);
                 const std::size_t windowSize = inputWindow.Push(record);
                 UI::Get().Update([&] { viewState.OnRecord(record, windowSize); });
             },
@@ -130,16 +127,14 @@ namespace Runtime {
         }
 
         // --- Prediction loop --- //
-        // Each cycle forecasts from the newest full window; unchanged windows are skipped.
+        // Each cycle queries only the input portion, then scores its already captured future.
         while (this->WaitForNextPredictionCycle()) {
             if (std::optional<LiveInputWindow::Snapshot> snapshot = inputWindow.TakeSnapshotIfUpdated()) {
                 experiment.RunSnapshot(*snapshot);
             }
         }
 
-        // Stop the stream before flushing so no new observations arrive mid-flush.
         this->QuoteClient.Stop();
-        experiment.FlushIncomplete();
     }
 
     void Orchestrator::RequestStop() {

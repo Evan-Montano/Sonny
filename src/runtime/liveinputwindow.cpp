@@ -29,7 +29,8 @@ namespace Runtime {
             }
         }
 
-        Core::AppendInputWindowRecord(Records, record);
+        if (Records.size() == CAPACITY) Records.pop_front();
+        Records.push_back(record);
         ++Revision;
 
         return Records.size();
@@ -45,18 +46,21 @@ namespace Runtime {
     std::optional<LiveInputWindow::Snapshot> LiveInputWindow::TakeSnapshotIfUpdated() {
         std::lock_guard lock(Mutex);
 
-        if (Records.size() < Core::LIVE_INPUT_WINDOW_SECONDS || Revision == SnapshotRevision) {
+        if (Records.size() < CAPACITY || Revision == SnapshotRevision) {
             return std::nullopt;
         }
 
         Snapshot snapshot{};
-        snapshot.Records.reserve(Records.size());
+        snapshot.Records.reserve(Core::LIVE_INPUT_WINDOW_SECONDS);
 
-        for (const LiveRecord& record : Records) {
-            snapshot.Records.push_back(record.Record);
+        for (std::size_t i = 0; i < Core::LIVE_INPUT_WINDOW_SECONDS; ++i) {
+            snapshot.Records.push_back(Records[i].Record);
         }
 
-        snapshot.LastTimestampMs = Records.back().TimestampMs;
+        snapshot.LastTimestampMs = Records[Core::LIVE_INPUT_WINDOW_SECONDS - 1].TimestampMs;
+        for (std::size_t i = 0; i < snapshot.Future.size(); ++i) {
+            snapshot.Future[i] = Records[Core::LIVE_INPUT_WINDOW_SECONDS + i];
+        }
         SnapshotRevision = Revision;
 
         return snapshot;

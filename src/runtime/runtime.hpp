@@ -16,7 +16,7 @@ namespace Runtime {
 
     /**
      * @brief Owns the live pipeline:
-     * quote stream → one-second records → rolling input window → periodic forecasts → evaluation.
+     * quote stream → one-second records → rolling input window → periodic held-out forecasts and immediate evaluation.
      */
     class Orchestrator {
     public:
@@ -50,7 +50,7 @@ namespace Runtime {
          * @brief Time between prediction cycles.
          */
         static constexpr std::chrono::seconds PREDICTION_INTERVAL{
-            static_cast<std::chrono::seconds::rep>(PredictionEvaluationHorizons.back())
+            static_cast<std::chrono::seconds::rep>(PredictionEvaluationWindow)
         };
 
         /**

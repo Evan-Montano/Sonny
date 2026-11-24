@@ -203,23 +203,53 @@ TEST(OneSecondAggregatorTests, IgnoresQuotesFromAnEarlierSecond) {
 
 // ========== LIVE INPUT WINDOW ========== //
 
-TEST(LiveInputWindowTests, SnapshotsOnlyFullUnchangedWindowsOnce) {
+TEST(LiveInputWindowTests, WaitsForInputAndFutureBeforeTakingOneSnapshot) {
     Runtime::LiveInputWindow window;
 
-    for (std::int64_t second = 0; second < static_cast<std::int64_t>(Core::LIVE_INPUT_WINDOW_SECONDS) - 1; ++second) {
-        window.Push(MakeLiveRecord(second));
+    for (std::size_t second = 0; second < Runtime::LiveInputWindow::CAPACITY - 1; ++second) {
+        EXPECT_EQ(window.Push(MakeLiveRecord(second, static_cast<float>(second))), second + 1);
+        EXPECT_FALSE(window.TakeSnapshotIfUpdated().has_value());
     }
-    EXPECT_FALSE(window.TakeSnapshotIfUpdated().has_value());
+    window.Push(MakeLiveRecord(Runtime::LiveInputWindow::CAPACITY - 1, 99.0f));
 
-    window.Push(MakeLiveRecord(static_cast<std::int64_t>(Core::LIVE_INPUT_WINDOW_SECONDS) - 1, 0.5f));
-
-    const std::optional<Runtime::LiveInputWindow::Snapshot> snapshot = window.TakeSnapshotIfUpdated();
+    const auto snapshot = window.TakeSnapshotIfUpdated();
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_EQ(snapshot->Records.size(), Core::LIVE_INPUT_WINDOW_SECONDS);
-    EXPECT_FLOAT_EQ(snapshot->Records.back().MidDelta, 0.5f);
-    EXPECT_EQ(snapshot->LastTimestampMs, (static_cast<std::int64_t>(Core::LIVE_INPUT_WINDOW_SECONDS) - 1) * 1000);
-
+    ASSERT_EQ(snapshot->Records.size(), Core::LIVE_INPUT_WINDOW_SECONDS);
+    EXPECT_FLOAT_EQ(snapshot->Records.front().MidDelta, 0.0f);
+    EXPECT_FLOAT_EQ(snapshot->Records.back().MidDelta, Core::LIVE_INPUT_WINDOW_SECONDS - 1);
+    EXPECT_EQ(snapshot->LastTimestampMs, (Core::LIVE_INPUT_WINDOW_SECONDS - 1) * 1000);
+    EXPECT_EQ(snapshot->Future.front().TimestampMs, Core::LIVE_INPUT_WINDOW_SECONDS * 1000);
+    EXPECT_FLOAT_EQ(snapshot->Future.front().Record.MidDelta, Core::LIVE_INPUT_WINDOW_SECONDS);
+    EXPECT_FLOAT_EQ(snapshot->Future.back().Record.MidDelta, 99.0f);
+    EXPECT_EQ(snapshot->Future.back().TimestampMs, (Runtime::LiveInputWindow::CAPACITY - 1) * 1000);
     EXPECT_FALSE(window.TakeSnapshotIfUpdated().has_value());
+}
+
+TEST(LiveInputWindowTests, RollsTheInputFutureBoundaryAndKeepsEarlierSnapshotsImmutable) {
+    Runtime::LiveInputWindow window;
+    for (std::size_t second = 0; second < Runtime::LiveInputWindow::CAPACITY; ++second) {
+        window.Push(MakeLiveRecord(second, static_cast<float>(second)));
+    }
+    const auto first = window.TakeSnapshotIfUpdated();
+    ASSERT_TRUE(first.has_value());
+
+    auto unobserved = MakeLiveRecord(Runtime::LiveInputWindow::CAPACITY, -1.0f);
+    unobserved.Observed = false;
+    EXPECT_EQ(window.Push(unobserved), Runtime::LiveInputWindow::CAPACITY);
+    const auto next = window.TakeSnapshotIfUpdated();
+    ASSERT_TRUE(next.has_value());
+    EXPECT_FLOAT_EQ(next->Records.front().MidDelta, 1.0f);
+    EXPECT_FLOAT_EQ(next->Records.back().MidDelta, Core::LIVE_INPUT_WINDOW_SECONDS);
+    EXPECT_EQ(next->LastTimestampMs, Core::LIVE_INPUT_WINDOW_SECONDS * 1000);
+    EXPECT_EQ(next->Future.front().TimestampMs, (Core::LIVE_INPUT_WINDOW_SECONDS + 1) * 1000);
+    EXPECT_FALSE(next->Future.back().Observed);
+    EXPECT_FLOAT_EQ(first->Records.front().MidDelta, 0.0f);
+    EXPECT_TRUE(first->Future.back().Observed);
+    EXPECT_EQ(first->Future.back().TimestampMs, (Runtime::LiveInputWindow::CAPACITY - 1) * 1000);
+
+    window.Clear();
+    EXPECT_FALSE(window.TakeSnapshotIfUpdated().has_value());
+    EXPECT_EQ(window.Push(MakeLiveRecord(200)), 1u);
 }
 
 TEST(LiveInputWindowTests, NonConsecutiveRecordClearsTheWindow) {
@@ -229,6 +259,97 @@ TEST(LiveInputWindowTests, NonConsecutiveRecordClearsTheWindow) {
     window.Push(MakeLiveRecord(11));
 
     EXPECT_EQ(window.Push(MakeLiveRecord(13)), 1u);
+}
+
+TEST(LiveInputWindowTests, GapDiscardsBothInputAndFutureUntilTheEntireWindowRefills) {
+    Runtime::LiveInputWindow window;
+    for (std::size_t second = 0; second < Runtime::LiveInputWindow::CAPACITY; ++second) {
+        window.Push(MakeLiveRecord(second, -1.0f));
+    }
+    ASSERT_TRUE(window.TakeSnapshotIfUpdated().has_value());
+
+    const auto firstNewSecond = static_cast<std::int64_t>(Runtime::LiveInputWindow::CAPACITY + 10);
+    EXPECT_EQ(window.Push(MakeLiveRecord(firstNewSecond, 1.0f)), 1u);
+    EXPECT_FALSE(window.TakeSnapshotIfUpdated().has_value());
+    for (std::size_t i = 1; i < Runtime::LiveInputWindow::CAPACITY; ++i) {
+        window.Push(MakeLiveRecord(firstNewSecond + i, 1.0f));
+        if (i + 1 < Runtime::LiveInputWindow::CAPACITY) {
+            EXPECT_FALSE(window.TakeSnapshotIfUpdated().has_value());
+        }
+    }
+
+    const auto snapshot = window.TakeSnapshotIfUpdated();
+    ASSERT_TRUE(snapshot.has_value());
+    for (const auto& record : snapshot->Records) EXPECT_FLOAT_EQ(record.MidDelta, 1.0f);
+    for (const auto& record : snapshot->Future) EXPECT_FLOAT_EQ(record.Record.MidDelta, 1.0f);
+    EXPECT_EQ(snapshot->LastTimestampMs, (firstNewSecond + Core::LIVE_INPUT_WINDOW_SECONDS - 1) * 1000);
+    EXPECT_EQ(snapshot->Future.front().TimestampMs, snapshot->LastTimestampMs + 1000);
+}
+
+// ========== CAPTURED FUTURE EVALUATION ========== //
+
+TEST(PredictionAnalyticsTests, ImmediatelyScoresTheCapturedSecondsAfterTheInputAnchor) {
+    Runtime::PredictionForecast forecast{.AsOfTimestampMs = 100'990, .HistoricalMatches = 8};
+    forecast.CumulativeChanges.fill(0.02);
+    std::array<Runtime::LiveRecord, Runtime::PredictionEvaluationWindow> future{};
+    for (std::size_t i = 0; i < future.size(); ++i) {
+        future[i] = MakeLiveRecord(101 + i, 0.01f * static_cast<float>(i + 1));
+        future[i].TimestampMs += static_cast<std::int64_t>(i * 100);
+    }
+
+    const auto report = Runtime::PredictionAnalytics::Evaluate(forecast, future);
+    EXPECT_EQ(report.Forecast.AsOfTimestampMs, forecast.AsOfTimestampMs);
+    EXPECT_EQ(report.Forecast.CumulativeChanges, forecast.CumulativeChanges);
+    EXPECT_EQ(report.ObservedSeconds, Runtime::PredictionEvaluationWindow);
+    for (const auto& evaluation : report.Horizons) {
+        const double horizon = static_cast<double>(evaluation.HorizonSeconds);
+        ASSERT_TRUE(evaluation.ActualChange.has_value());
+        EXPECT_NEAR(*evaluation.ActualChange, 0.01 * horizon * (horizon + 1) / 2, 1e-7);
+        EXPECT_EQ(evaluation.ObservedSeconds, evaluation.HorizonSeconds);
+    }
+    const auto text = Runtime::PredictionAnalytics::FormatReport(report);
+    EXPECT_NE(text.find("Held-out evaluation @"), std::string::npos);
+    EXPECT_EQ(text.find("INCOMPLETE"), std::string::npos);
+}
+
+TEST(PredictionAnalyticsTests, CarriedForwardSecondsMakeOnlyTheirAffectedHorizonsIncomplete) {
+    Runtime::PredictionForecast forecast{.AsOfTimestampMs = 100'000};
+    std::array<Runtime::LiveRecord, Runtime::PredictionEvaluationWindow> future{};
+    for (std::size_t i = 0; i < future.size(); ++i) {
+        future[i] = MakeLiveRecord(101 + i, 0.01f);
+    }
+    future[2].Observed = false;
+    future[2].Record.MidDelta = 0.0f;
+
+    const auto report = Runtime::PredictionAnalytics::Evaluate(forecast, future);
+    EXPECT_EQ(report.ObservedSeconds, future.size() - 1);
+    for (const auto& evaluation : report.Horizons) {
+        if (evaluation.HorizonSeconds < 3) {
+            ASSERT_TRUE(evaluation.ActualChange.has_value());
+            EXPECT_NEAR(*evaluation.ActualChange, 0.01 * evaluation.HorizonSeconds, 1e-7);
+        } else {
+            EXPECT_FALSE(evaluation.ActualChange.has_value());
+            EXPECT_EQ(evaluation.ObservedSeconds, evaluation.HorizonSeconds - 1);
+        }
+    }
+    EXPECT_NE(Runtime::PredictionAnalytics::FormatReport(report).find("INCOMPLETE"), std::string::npos);
+}
+
+TEST(PredictionAnalyticsTests, RejectsFutureThatIsShortOverlongOrMisaligned) {
+    Runtime::PredictionForecast forecast{.AsOfTimestampMs = 100'000};
+    std::vector<Runtime::LiveRecord> future;
+    for (std::size_t i = 0; i <= Runtime::PredictionEvaluationWindow; ++i) {
+        future.push_back(MakeLiveRecord(101 + i));
+    }
+    const std::span<const Runtime::LiveRecord> records(future);
+    EXPECT_THROW(Runtime::PredictionAnalytics::Evaluate(forecast, records.first(Runtime::PredictionEvaluationWindow - 1)), std::invalid_argument);
+    EXPECT_THROW(Runtime::PredictionAnalytics::Evaluate(forecast, records), std::invalid_argument);
+    future.resize(Runtime::PredictionEvaluationWindow);
+    future.front().TimestampMs = forecast.AsOfTimestampMs;
+    EXPECT_THROW(Runtime::PredictionAnalytics::Evaluate(forecast, future), std::invalid_argument);
+    future.front().TimestampMs += 1000;
+    future[2].TimestampMs += 1000;
+    EXPECT_THROW(Runtime::PredictionAnalytics::Evaluate(forecast, future), std::invalid_argument);
 }
 
 // ========== HISTORICAL RECORD STORE ========== //
@@ -523,20 +644,27 @@ protected:
     ) {
         const std::size_t first = historicalLastSecond + 1 - Core::MAX_INPUT_WINDOW_SECONDS;
 
-        return Runtime::LiveInputWindow::Snapshot{
+        Runtime::LiveInputWindow::Snapshot snapshot{
             .Records = std::vector<Core::MLRecord>(
                 day.begin() + static_cast<std::ptrdiff_t>(first),
                 day.begin() + static_cast<std::ptrdiff_t>(historicalLastSecond + 1)
             ),
             .LastTimestampMs = THURSDAY_OPEN_MS + static_cast<std::int64_t>(liveLastSecond) * 1000
         };
+        for (std::size_t i = 0; i < snapshot.Future.size(); ++i) {
+            snapshot.Future[i] = Runtime::LiveRecord{
+                .Record = day[historicalLastSecond + 1 + i],
+                .TimestampMs = snapshot.LastTimestampMs + static_cast<std::int64_t>(i + 1) * 1000
+            };
+        }
+        return snapshot;
     }
 
-    static bool HasEveryForecast(const Runtime::PredictionExperiment::ForecastRow& row) {
+    static bool HasEveryForecast(const Runtime::PredictionExperiment::EvaluationRow& row) {
         return std::all_of(row.begin(), row.end(), [](const auto& forecast) { return forecast.has_value(); });
     }
 
-    static bool HasNoForecast(const Runtime::PredictionExperiment::ForecastRow& row) {
+    static bool HasNoForecast(const Runtime::PredictionExperiment::EvaluationRow& row) {
         return std::none_of(row.begin(), row.end(), [](const auto& forecast) { return forecast.has_value(); });
     }
 
@@ -546,7 +674,7 @@ protected:
      * holds only if the segment containing that window was searched.
      */
     static bool FoundExactMatch(
-        const Runtime::PredictionExperiment::ForecastRow& row,
+        const Runtime::PredictionExperiment::EvaluationRow& row,
         const std::vector<Core::MLRecord>& day,
         const std::size_t historicalLastSecond
     ) {
@@ -559,7 +687,7 @@ protected:
             }
 
             // A split direction vote zeroes the forecast; its size cannot be read back then.
-            const double forecast = row.back()->CumulativeChanges[i];
+            const double forecast = row.back()->Forecast.CumulativeChanges[i];
             if (forecast != 0.0) {
                 if (std::abs(std::abs(forecast) - std::abs(cumulative)) > 1e-6) return false;
                 ++comparedHorizons;
@@ -585,7 +713,7 @@ TEST_F(PredictionExperimentTests, SingleWindowModeForecastsOnlyTheSelectedWindow
 
     // The cap is applied to the pooled matches: each forecast uses exactly its match count.
     for (std::size_t i = 0; i < Runtime::PREDICTION_MATCH_COUNTS.size(); ++i) {
-        EXPECT_EQ(rows[0][i]->HistoricalMatches, Runtime::PREDICTION_MATCH_COUNTS[i]);
+        EXPECT_EQ(rows[0][i]->Forecast.HistoricalMatches, Runtime::PREDICTION_MATCH_COUNTS[i]);
     }
 }
 
@@ -618,12 +746,12 @@ TEST_F(PredictionExperimentTests, AllWindowsModeForecastsEachConfiguredWindowInd
         ASSERT_EQ(aloneRows.size(), 1u);
         for (std::size_t i = 0; i < Runtime::PREDICTION_MATCH_COUNTS.size(); ++i) {
             ASSERT_TRUE(aloneRows[0][i].has_value());
-            EXPECT_EQ(aloneRows[0][i]->CumulativeChanges, rows[slot][i]->CumulativeChanges);
+            EXPECT_EQ(aloneRows[0][i]->Forecast.CumulativeChanges, rows[slot][i]->Forecast.CumulativeChanges);
         }
     }
 
     // The two windows are different searches, not copies of one result.
-    EXPECT_NE(rows[0].back()->CumulativeChanges, rows[1].back()->CumulativeChanges);
+    EXPECT_NE(rows[0].back()->Forecast.CumulativeChanges, rows[1].back()->Forecast.CumulativeChanges);
 }
 
 TEST_F(PredictionExperimentTests, MatchesComeFromAnySegmentWhateverTheTimeOfDay) {
@@ -651,7 +779,7 @@ TEST_F(PredictionExperimentTests, MatchesComeFromAnySegmentWhateverTheTimeOfDay)
         }
 
         // A split direction vote zeroes the forecast; its size cannot be read back then.
-        const double forecast = rows[0].back()->CumulativeChanges[i];
+        const double forecast = rows[0].back()->Forecast.CumulativeChanges[i];
         if (forecast != 0.0) {
             EXPECT_NEAR(std::abs(forecast), std::abs(cumulative), 1e-6) << Runtime::PredictionEvaluationHorizons[i] << "s";
             ++comparedHorizons;
@@ -816,13 +944,7 @@ TEST_F(PredictionExperimentTests, LoadedIndexesAndForecastsAreReusedAcrossTradin
     constexpr std::size_t lastSecond = 5000;
     BuildIndexes(window);
 
-    Runtime::LiveInputWindow::Snapshot snapshot{
-        .Records = std::vector<Core::MLRecord>(
-            Days[0].second.begin() + lastSecond + 1 - window,
-            Days[0].second.begin() + lastSecond + 1
-        ),
-        .LastTimestampMs = THURSDAY_OPEN_MS + static_cast<std::int64_t>(lastSecond) * 1000
-    };
+    auto snapshot = MakeSnapshot(Days[0].second, lastSecond, lastSecond);
     Runtime::PredictionExperiment experiment({window}, 3);
     experiment.Preload(snapshot.LastTimestampMs);
 
@@ -835,11 +957,77 @@ TEST_F(PredictionExperimentTests, LoadedIndexesAndForecastsAreReusedAcrossTradin
 
     const Common::DateTime mondayOpen(2026, Common::SEP, 7, 9, 30, 0, true);
     snapshot.LastTimestampMs = (static_cast<std::int64_t>(mondayOpen.GetTimestamp()) + lastSecond) * 1000;
+    for (std::size_t i = 0; i < snapshot.Future.size(); ++i) {
+        snapshot.Future[i].TimestampMs = snapshot.LastTimestampMs + static_cast<std::int64_t>(i + 1) * 1000;
+    }
     const auto monday = experiment.RunSnapshot(snapshot);
     ASSERT_EQ(monday.size(), 1u);
     ASSERT_TRUE(HasEveryForecast(monday[0]));
     for (std::size_t i = 0; i < Runtime::PREDICTION_MATCH_COUNTS.size(); ++i) {
-        EXPECT_EQ(monday[0][i]->AsOfTimestampMs, snapshot.LastTimestampMs);
-        EXPECT_EQ(monday[0][i]->CumulativeChanges, thursday[0][i]->CumulativeChanges);
+        EXPECT_EQ(monday[0][i]->Forecast.AsOfTimestampMs, snapshot.LastTimestampMs);
+        EXPECT_EQ(monday[0][i]->Forecast.CumulativeChanges, thursday[0][i]->Forecast.CumulativeChanges);
+    }
+}
+
+TEST_F(PredictionExperimentTests, ActiveWindowModeReturnsEvaluatedForecastsWithoutMoreQuotes) {
+    constexpr std::size_t windowSeconds = Core::LIVE_INPUT_WINDOW_SECONDS;
+    constexpr std::size_t lastInputSecond = 5000;
+    const auto activeWindows = Core::ActiveInputWindows();
+    for (const auto seconds : activeWindows) BuildIndexes(seconds);
+
+    Runtime::LiveInputWindow window;
+    const auto& day = Days[0].second;
+    for (std::size_t second = lastInputSecond + 1 - windowSeconds;
+         second <= lastInputSecond + Runtime::PredictionEvaluationWindow; ++second) {
+        window.Push(Runtime::LiveRecord{
+            .Record = day[second],
+            .TimestampMs = THURSDAY_OPEN_MS + static_cast<std::int64_t>(second) * 1000
+        });
+    }
+    const auto snapshot = window.TakeSnapshotIfUpdated();
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_EQ(snapshot->LastTimestampMs, THURSDAY_OPEN_MS + lastInputSecond * 1000);
+    Runtime::PredictionExperiment experiment;
+    const auto rows = experiment.RunSnapshot(*snapshot);
+    ASSERT_EQ(rows.size(), activeWindows.size());
+    for (const auto& row : rows) {
+        ASSERT_TRUE(HasEveryForecast(row));
+        for (const auto& result : row) {
+            EXPECT_EQ(result->Forecast.AsOfTimestampMs, snapshot->LastTimestampMs);
+            EXPECT_EQ(result->ObservedSeconds, Runtime::PredictionEvaluationWindow);
+            for (const auto& evaluation : result->Horizons) {
+                double actual = 0.0;
+                for (std::size_t i = 0; i < evaluation.HorizonSeconds; ++i) {
+                    actual += day[lastInputSecond + 1 + i].MidDelta;
+                }
+                ASSERT_TRUE(evaluation.ActualChange.has_value());
+                EXPECT_NEAR(*evaluation.ActualChange, actual, 1e-7);
+            }
+        }
+    }
+}
+
+TEST_F(PredictionExperimentTests, ChangingHeldOutFutureNeverChangesAnyConfiguredInputQuery) {
+    for (const auto seconds : Core::INPUT_WINDOW_CONFIGURATIONS) BuildIndexes(seconds);
+    Runtime::PredictionExperiment experiment(Core::SelectInputWindows(true, WINDOW), SEGMENT_COUNT);
+    auto snapshot = MakeSnapshot(Days[0].second, 5000, 5000);
+    const auto first = experiment.RunSnapshot(snapshot);
+    for (auto& record : snapshot.Future) record.Record.MidDelta = 1000.0f;
+    const auto second = experiment.RunSnapshot(snapshot);
+
+    ASSERT_EQ(first.size(), Core::INPUT_WINDOW_CONFIGURATIONS.size());
+    ASSERT_EQ(second.size(), first.size());
+    for (std::size_t window = 0; window < first.size(); ++window) {
+        ASSERT_TRUE(HasEveryForecast(first[window]));
+        ASSERT_TRUE(HasEveryForecast(second[window]));
+        for (std::size_t i = 0; i < Runtime::PREDICTION_MATCH_COUNTS.size(); ++i) {
+            EXPECT_EQ(first[window][i]->Forecast.CumulativeChanges, second[window][i]->Forecast.CumulativeChanges);
+            EXPECT_EQ(second[window][i]->Forecast.AsOfTimestampMs, snapshot.LastTimestampMs);
+            for (const auto& evaluation : second[window][i]->Horizons) {
+                ASSERT_TRUE(evaluation.ActualChange.has_value());
+                EXPECT_DOUBLE_EQ(*evaluation.ActualChange, 1000.0 * evaluation.HorizonSeconds);
+            }
+            EXPECT_NE(first[window][i]->Horizons.back().ActualChange, second[window][i]->Horizons.back().ActualChange);
+        }
     }
 }

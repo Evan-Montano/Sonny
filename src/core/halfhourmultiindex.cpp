@@ -29,11 +29,28 @@ namespace Core {
             std::vector<float> positionScales(vectorSize, 1.0F);
 
             if (vectorSize > 1) {
-                // IndexFlatL2 squares coordinate deltas, so scale each coordinate by sqrt(weight).
+                constexpr double halfLifeSeconds = 10.0;
+                constexpr double averageWeight = 1.3;
+
                 const double newestPosition = static_cast<double>(vectorSize - 1);
+                const double decayPerSecond = std::exp2(-1.0 / halfLifeSeconds);
+
+                // Sum of the exponential weights, from oldest to newest.
+                const double rawWeightSum =
+                    (1.0 - std::pow(decayPerSecond, static_cast<double>(vectorSize))) /
+                    (1.0 - decayPerSecond);
+
+                // Preserve the current average weight while changing its distribution.
+                const double weightScale =
+                    averageWeight * static_cast<double>(vectorSize) / rawWeightSum;
 
                 for (std::size_t position = 0; position < vectorSize; ++position) {
-                    const double weight = 0.4 + 1.8 * (static_cast<double>(position) / newestPosition);
+                    const double ageSeconds =
+                        newestPosition - static_cast<double>(position);
+
+                    const double weight =
+                        weightScale * std::exp2(-ageSeconds / halfLifeSeconds);
+
                     positionScales[position] = static_cast<float>(std::sqrt(weight));
                 }
             }
