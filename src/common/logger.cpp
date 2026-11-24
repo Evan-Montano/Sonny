@@ -3,6 +3,7 @@
 
 #include "logger.hpp"
 #include "datetime.hpp"
+#include "storage.hpp"
 #include "../ui/ui.hpp"
 
 #include <stdexcept>
@@ -17,7 +18,7 @@ void Logger::Start() {
 
     if (running == false) {
         running = true;
-        if (fs::exists(log_dir) == false && fs::create_directories(log_dir) == false) {
+        if (Common::Storage::FileExists(log_dir) == false && Common::Storage::CreateDirectory(log_dir) == false) {
             throw std::runtime_error(
                 "Failed to create log directory: " + log_dir.string()
             );

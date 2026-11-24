@@ -4,8 +4,6 @@
 #include "../common/logger.hpp"
 #include "common/jsonutil.hpp"
 
-#include <nlohmann/json.hpp>
-
 #include <cerrno>
 #include <csignal>
 #include <cstring>
@@ -250,14 +248,15 @@ namespace Client {
             try {
                 // Waiting for the browser instance to spin up. Node will be 
                 // sending a "ready" notification.
-                const nlohmann::json ready = nlohmann::json::parse(
+                const Common::JsonUtility ready(
                     ReadLine(_responseFd, _responseBuffer)
                 );
-                const std::string type = ready.value("type", "");
+                std::string type;
+                ready.TryGet("type", type);
                 if (type != "ready") {
-                    throw std::runtime_error(
-                        ready.value("error", "Browser worker did not become ready")
-                    );
+                    std::string error = "Browser worker did not become ready";
+                    ready.TryGet("error", error);
+                    throw std::runtime_error(error);
                 }
             }
             catch (...) {
@@ -283,21 +282,15 @@ namespace Client {
          * @return std::string Curl request body.
          */
         std::string Execute(const std::string &url, const HeaderMap &headers) {
-            nlohmann::json headerJson = nlohmann::json::object();
-            for (const auto &[key, value] : headers) {
-                headerJson[key] = value;
-            }
-
             const std::uint64_t requestId = ++_nextRequestId;
-            const nlohmann::json request = {
-                {"type", "request"},
-                {"id", requestId},
-                {"url", url},
-                {"headers", std::move(headerJson)}
-            };
+            Common::JsonUtility request;
+            request.Set("type", "request");
+            request.Set("id", requestId);
+            request.Set("url", url);
+            request.Set("headers", headers);
 
             // Writing bytes to node process.
-            WriteAllWithoutSigpipe(_requestFd, request.dump() + '\n');
+            WriteAllWithoutSigpipe(_requestFd, request.ToString() + '\n');
 
             // Capturing the response and deserializing into a json object.
             const Common::JsonUtility response(ReadLine(_responseFd, _responseBuffer));
@@ -336,9 +329,11 @@ namespace Client {
 
             if (terminateImmediately == false && _requestFd >= 0) {
                 try {
+                    Common::JsonUtility shutdown;
+                    shutdown.Set("type", "shutdown");
                     WriteAllWithoutSigpipe(
                         _requestFd,
-                        nlohmann::json({{"type", "shutdown"}}).dump() + '\n'
+                        shutdown.ToString() + '\n'
                     );
                     (void)ReadLine(_responseFd, _responseBuffer);
                 }

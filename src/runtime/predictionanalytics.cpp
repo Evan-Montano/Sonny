@@ -161,9 +161,7 @@ namespace Runtime {
     }
 
     std::string PredictionAnalytics::FormatReport(const PredictionEvaluationReport& report) {
-        const std::string timestamp = Common::DateTime(
-            static_cast<Common::UnixTimestamp>(ToSecond(report.forecast.as_of_timestamp_ms))
-        ).ToString_Time();
+        const std::string timestamp = Common::DateTime::FromTimestampMilliseconds(report.forecast.as_of_timestamp_ms).ToString_Time();
 
         std::string message = std::format(
             "Prediction evaluation @{} | {} matches | {} window | observed {}/{}\n"

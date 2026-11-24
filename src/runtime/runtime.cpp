@@ -12,6 +12,7 @@
 #include "runtime.hpp"
 #include "../ui/ui.hpp"
 #include "core/inputconfig.hpp"
+#include "common/datetime.hpp"
 #include "liveinputwindow.hpp"
 #include "onesecondaggregator.hpp"
 #include "predictionexperiment.hpp"
@@ -118,8 +119,7 @@ namespace Runtime {
         // the first input window, so the first prediction does not have to wait for them.
         // With every window active they load on first use instead, as before.
         if (Core::USE_ALL_INPUT_WINDOWS == false) {
-            const auto now = std::chrono::system_clock::now().time_since_epoch();
-            experiment.Preload(std::chrono::duration_cast<std::chrono::milliseconds>(now).count());
+            experiment.Preload(Common::DateTime::GetCurrentTimestampMilliseconds());
         }
 
         // --- Prediction loop --- //

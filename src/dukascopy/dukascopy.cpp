@@ -440,7 +440,7 @@ namespace Dukascopy {
     std::optional<std::pair<std::uintmax_t, std::uint64_t>> CalculateFileFingerprint(
         const std::filesystem::path& path)
     {
-        std::ifstream file(path, std::ios::binary);
+        auto file = Common::Storage::OpenInputFile(path, std::ios::binary);
         if (file.is_open() == false) {
             return std::nullopt;
         }
@@ -475,7 +475,7 @@ namespace Dukascopy {
      */
     bool RemoveFileIfExists(const std::filesystem::path& path) {
         std::error_code error;
-        std::filesystem::remove(path, error);
+        Common::Storage::DeleteFile(path, error);
 
         if (error) {
             Logger::Error(std::format("Could not remove file {}: {}", path.string(), error.message()), true);
@@ -517,25 +517,25 @@ namespace Dukascopy {
         const std::filesystem::path commitPath = BuildCommitPath(corpusPath);
 
         std::error_code error;
-        const bool hasTransaction = std::filesystem::exists(transactionPath, error);
+        const bool hasTransaction = Common::Storage::FileExists(transactionPath, error);
         if (error) {
             Logger::Error(std::format("Could not inspect {}: {}", transactionPath.string(), error.message()), true);
             return false;
         }
 
-        const bool hasCommit = std::filesystem::exists(commitPath, error);
+        const bool hasCommit = Common::Storage::FileExists(commitPath, error);
         if (error) {
             Logger::Error(std::format("Could not inspect {}: {}", commitPath.string(), error.message()), true);
             return false;
         }
 
-        const bool hasCorpusBackup = std::filesystem::exists(corpusBackup, error);
+        const bool hasCorpusBackup = Common::Storage::FileExists(corpusBackup, error);
         if (error) {
             Logger::Error(std::format("Could not inspect {}: {}", corpusBackup.string(), error.message()), true);
             return false;
         }
 
-        const bool hasRecordsBackup = std::filesystem::exists(recordsBackup, error);
+        const bool hasRecordsBackup = Common::Storage::FileExists(recordsBackup, error);
         if (error) {
             Logger::Error(std::format("Could not inspect {}: {}", recordsBackup.string(), error.message()), true);
             return false;
@@ -560,7 +560,7 @@ namespace Dukascopy {
             bool corpusOriginallyExisted = false;
             bool recordsOriginallyExisted = false;
 
-            std::ifstream transactionFile(transactionPath);
+            auto transactionFile = Common::Storage::OpenInputFile(transactionPath);
             if (transactionFile.is_open() == false ||
                 !(transactionFile >> corpusOriginallyExisted >> recordsOriginallyExisted)) {
                 Logger::Error("Daily export transaction marker is unreadable; refusing to modify the files.", true);
@@ -572,7 +572,7 @@ namespace Dukascopy {
                     return false;
                 }
 
-                std::filesystem::rename(corpusBackup, corpusPath, error);
+                Common::Storage::RenameFile(corpusBackup, corpusPath, error);
                 if (error) {
                     Logger::Error(std::format("Could not restore {}: {}", corpusPath.string(), error.message()), true);
                     return false;
@@ -587,7 +587,7 @@ namespace Dukascopy {
                     return false;
                 }
 
-                std::filesystem::rename(recordsBackup, recordsPath, error);
+                Common::Storage::RenameFile(recordsBackup, recordsPath, error);
                 if (error) {
                     Logger::Error(std::format("Could not restore {}: {}", recordsPath.string(), error.message()), true);
                     return false;
@@ -633,23 +633,23 @@ namespace Dukascopy {
 
         std::error_code error;
 
-        if (std::filesystem::exists(corpusPath, error) == false || error) {
+        if (Common::Storage::FileExists(corpusPath, error) == false || error) {
             return false;
         }
 
-        if (std::filesystem::exists(recordsPath, error) == false || error) {
+        if (Common::Storage::FileExists(recordsPath, error) == false || error) {
             return false;
         }
 
         const std::uintmax_t expectedRecordBytes =
             static_cast<std::uintmax_t>(sessionLengthSeconds) * sizeof(Core::MLRecord);
 
-        const std::uintmax_t actualRecordBytes = std::filesystem::file_size(recordsPath, error);
+        const std::uintmax_t actualRecordBytes = Common::Storage::FileSize(recordsPath, error);
         if (error || actualRecordBytes != expectedRecordBytes) {
             return false;
         }
 
-        std::ifstream corpusFileStream(corpusPath);
+        auto corpusFileStream = Common::Storage::OpenInputFile(corpusPath);
         if (corpusFileStream.is_open() == false) {
             return false;
         }
@@ -726,7 +726,7 @@ namespace Dukascopy {
             return false;
         }
 
-        std::ifstream recordsFileStream(recordsPath, std::ios::binary);
+        auto recordsFileStream = Common::Storage::OpenInputFile(recordsPath, std::ios::binary);
         if (recordsFileStream.is_open() == false) {
             return false;
         }
@@ -768,7 +768,7 @@ namespace Dukascopy {
             return false;
         }
 
-        std::ifstream validationFile(BuildValidationPath(corpusPath));
+        auto validationFile = Common::Storage::OpenInputFile(BuildValidationPath(corpusPath));
         std::string validationLabel;
         std::uintmax_t expectedCorpusSize = 0;
         std::uint64_t expectedCorpusHash = 0;
@@ -813,7 +813,7 @@ namespace Dukascopy {
         }
 
         {
-            std::ofstream validationFile(temporaryPath, std::ios::out | std::ios::trunc);
+            auto validationFile = Common::Storage::OpenOutputFile(temporaryPath, std::ios::out | std::ios::trunc);
             if (validationFile.is_open() == false) {
                 Logger::Error("Could not create the daily validation marker.", true);
                 return false;
@@ -837,13 +837,13 @@ namespace Dukascopy {
         }
 
         std::error_code error;
-        std::filesystem::remove(validationPath, error);
+        Common::Storage::DeleteFile(validationPath, error);
         if (error) {
             Logger::Error(std::format("Could not replace validation marker: {}", error.message()), true);
             return false;
         }
 
-        std::filesystem::rename(temporaryPath, validationPath, error);
+        Common::Storage::RenameFile(temporaryPath, validationPath, error);
         if (error) {
             Logger::Error(std::format("Could not install validation marker: {}", error.message()), true);
             return false;
@@ -867,28 +867,28 @@ namespace Dukascopy {
         const std::filesystem::path commitPath = BuildCommitPath(corpusPath);
 
         std::error_code error;
-        const bool corpusOriginallyExisted = std::filesystem::exists(corpusPath, error);
+        const bool corpusOriginallyExisted = Common::Storage::FileExists(corpusPath, error);
         if (error) {
             Logger::Error(std::format("Could not inspect {}: {}", corpusPath.string(), error.message()), true);
             return false;
         }
 
-        const bool recordsOriginallyExisted = std::filesystem::exists(recordsPath, error);
+        const bool recordsOriginallyExisted = Common::Storage::FileExists(recordsPath, error);
         if (error) {
             Logger::Error(std::format("Could not inspect {}: {}", recordsPath.string(), error.message()), true);
             return false;
         }
 
-        if (std::filesystem::exists(corpusBackup, error) ||
-            std::filesystem::exists(recordsBackup, error) ||
-            std::filesystem::exists(transactionPath, error) ||
-            std::filesystem::exists(commitPath, error) || error) {
+        if (Common::Storage::FileExists(corpusBackup, error) ||
+            Common::Storage::FileExists(recordsBackup, error) ||
+            Common::Storage::FileExists(transactionPath, error) ||
+            Common::Storage::FileExists(commitPath, error) || error) {
             Logger::Error("A daily export transaction artifact already exists; refusing to overwrite it.", true);
             return false;
         }
 
         {
-            std::ofstream transactionFile(transactionPath, std::ios::out | std::ios::trunc);
+            auto transactionFile = Common::Storage::OpenOutputFile(transactionPath, std::ios::out | std::ios::trunc);
             if (transactionFile.is_open() == false) {
                 Logger::Error("Could not create daily export transaction marker.", true);
                 return false;
@@ -903,7 +903,7 @@ namespace Dukascopy {
         }
 
         if (corpusOriginallyExisted) {
-            std::filesystem::rename(corpusPath, corpusBackup, error);
+            Common::Storage::RenameFile(corpusPath, corpusBackup, error);
             if (error) {
                 Logger::Error(std::format("Could not back up {}: {}", corpusPath.string(), error.message()), true);
                 RecoverInterruptedDayCommit(corpusPath, recordsPath);
@@ -912,7 +912,7 @@ namespace Dukascopy {
         }
 
         if (recordsOriginallyExisted) {
-            std::filesystem::rename(recordsPath, recordsBackup, error);
+            Common::Storage::RenameFile(recordsPath, recordsBackup, error);
             if (error) {
                 Logger::Error(std::format("Could not back up {}: {}", recordsPath.string(), error.message()), true);
                 RecoverInterruptedDayCommit(corpusPath, recordsPath);
@@ -920,9 +920,9 @@ namespace Dukascopy {
             }
         }
 
-        std::filesystem::rename(corpusTemporary, corpusPath, error);
+        Common::Storage::RenameFile(corpusTemporary, corpusPath, error);
         if (!error) {
-            std::filesystem::rename(recordsTemporary, recordsPath, error);
+            Common::Storage::RenameFile(recordsTemporary, recordsPath, error);
         }
 
         if (error) {
@@ -932,7 +932,7 @@ namespace Dukascopy {
         }
 
         {
-            std::ofstream commitFile(commitPath, std::ios::out | std::ios::trunc);
+            auto commitFile = Common::Storage::OpenOutputFile(commitPath, std::ios::out | std::ios::trunc);
             if (commitFile.is_open() == false) {
                 Logger::Error("Could not create daily export commit marker.", true);
                 RecoverInterruptedDayCommit(corpusPath, recordsPath);
@@ -972,13 +972,13 @@ namespace Dukascopy {
         }
 
         std::error_code error;
-        std::filesystem::create_directories(outputPath.parent_path(), error);
+        Common::Storage::CreateDirectory(outputPath.parent_path(), error);
         if (error) {
             Logger::Error(std::format("Could not create corpus directory: {}", error.message()), true);
             return false;
         }
 
-        std::ofstream corpusFileStream(outputPath, std::ios::out | std::ios::trunc);
+        auto corpusFileStream = Common::Storage::OpenOutputFile(outputPath, std::ios::out | std::ios::trunc);
 
         if (corpusFileStream.is_open() == false) {
             Logger::Error(std::format("Could not open corpus file: {}", outputPath.string()), true);
@@ -1032,13 +1032,13 @@ namespace Dukascopy {
         }
 
         std::error_code error;
-        std::filesystem::create_directories(outputPath.parent_path(), error);
+        Common::Storage::CreateDirectory(outputPath.parent_path(), error);
         if (error) {
             Logger::Error(std::format("Could not create records directory: {}", error.message()), true);
             return false;
         }
 
-        std::ofstream recFileStream(
+        auto recFileStream = Common::Storage::OpenOutputFile(
             outputPath,
             std::ios::binary | std::ios::out | std::ios::trunc
         );

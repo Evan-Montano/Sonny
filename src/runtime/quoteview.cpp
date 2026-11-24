@@ -119,7 +119,7 @@ namespace Runtime {
         }
 
         const std::string quoteTime = state.has_quote
-            ? Common::DateTime(static_cast<Common::UnixTimestamp>(state.latest_timestamp_ms / 1000)).ToString_Time()
+            ? Common::DateTime::FromTimestampMilliseconds(state.latest_timestamp_ms).ToString_Time()
             : "--:--:--";
 
         const ftxui::Element bookPanel = ftxui::window(

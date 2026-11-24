@@ -139,9 +139,8 @@ namespace Core {
 
     HalfHourMultiIndex::HalfHourIndex_Direction::HalfHourIndex_Direction(
         const std::size_t &numOfSeconds,
-        std::size_t inputWindowSeconds,
-        std::optional<WeekdayGroup> weekdayGroup
-    ) : HalfHourIndex(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_DIRECTION, weekdayGroup) {
+        std::size_t inputWindowSeconds
+    ) : HalfHourIndex(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_DIRECTION) {
     }
 
     void HalfHourMultiIndex::HalfHourIndex_Direction::AddVectorsToIndex(
@@ -150,12 +149,6 @@ namespace Core {
         const std::size_t recordOffset
     ) {
         const std::array<char, 8> tradingDay = ToShortLocationArray(recFilePath);
-
-        // A weekday-group index takes only its own weekdays' sessions. Every window in a .rec file
-        // starts in that file's New York session, so the file's date is the window's weekday.
-        if (this->_weekdayGroup.has_value() && this->_weekdayGroup->Contains(TradingDayWeekday(tradingDay)) == false) {
-            return;
-        }
 
         const std::size_t numVectors = segment.size() - _inputWindowSeconds + 1;
 
@@ -166,7 +159,7 @@ namespace Core {
         for (std::size_t offset = 0; offset < numVectors; ++offset) {
             for (std::size_t windowIndex = 0; windowIndex < this->_inputWindowSeconds; ++windowIndex) {
                 const MLRecord &record = segment[offset + windowIndex];
-                
+
                 // DIRECTION SPECIFIC
                 // As we parse the incoming historical span, we only care about the actual direction that the
                 // quote delta moved, either positive, negative, or zero(no change)
@@ -201,9 +194,8 @@ namespace Core {
 
         Logger::Info(
             std::format(
-                "Added {} vectors. Direction index ({}) now contains {} vectors",
+                "Added {} vectors. Direction index now contains {} vectors",
                 numVectors,
-                this->_weekdayGroup.has_value() ? this->_weekdayGroup->name : ALL_DAYS_DIRECTION_LABEL,
                 this->_index.ntotal
             ),
             true
@@ -214,98 +206,21 @@ namespace Core {
     // HalfHourMultiIndex Implementation
     // =================================== //
 
-    HalfHourMultiIndex::SubIndexSelection HalfHourMultiIndex::SubIndexSelection::ForSearch(
-        const DirectionSearchMode mode,
-        const std::optional<WeekdayGroup> &weekdayGroup
-    ) {
-        SubIndexSelection selection{
-            .magnitude = true,
-            .all_days_direction = SearchesAllDaysDirection(mode)
-        };
-
-        if (SearchesWeekdayDirection(mode)) {
-            if (weekdayGroup.has_value() == false) {
-                throw std::invalid_argument("This direction search mode needs a weekday group.");
-            }
-
-            selection.weekday_groups.push_back(*weekdayGroup);
-        }
-
-        return selection;
-    }
-
-    HalfHourMultiIndex::SubIndexSelection HalfHourMultiIndex::SubIndexSelection::ToBuild(
-        const std::size_t numOfSeconds,
-        const std::size_t inputWindowSeconds,
-        const DirectionSearchMode mode,
-        const std::span<const WeekdayGroup> weekdayGroups,
-        const bool reuseExisting
-    ) {
-        const auto needed = [&](const std::optional<std::string_view> type, const std::optional<WeekdayGroup> &group = std::nullopt) {
-            return reuseExisting == false || HalfHourIndex::FilesExist(numOfSeconds, inputWindowSeconds, type, group) == false;
-        };
-
-        SubIndexSelection selection{
-            .magnitude = needed(HalfHourIndex::INX_TYPE_MAGNITUDE),
-            .all_days_direction = SearchesAllDaysDirection(mode) && needed(HalfHourIndex::INX_TYPE_DIRECTION)
-        };
-
-        if (SearchesWeekdayDirection(mode)) {
-            for (const WeekdayGroup &group : weekdayGroups) {
-                if (needed(HalfHourIndex::INX_TYPE_DIRECTION, group)) {
-                    selection.weekday_groups.push_back(group);
-                }
-            }
-        }
-
-        return selection;
-    }
-
-    bool HalfHourMultiIndex::SubIndexSelection::Empty() const {
-        return magnitude == false && all_days_direction == false && weekday_groups.empty();
-    }
-
-    HalfHourMultiIndex::HalfHourMultiIndex(
-        const std::size_t &numOfSeconds, 
-        std::size_t inputWindowSeconds) 
-        : HalfHourMultiIndex(numOfSeconds, inputWindowSeconds, SubIndexSelection{}) {
-    }
-
     HalfHourMultiIndex::HalfHourMultiIndex(
         const std::size_t &numOfSeconds,
-        const std::size_t inputWindowSeconds,
-        const SubIndexSelection &subIndexes)
-        : _inputWindowSeconds(inputWindowSeconds) {
-        if (subIndexes.magnitude) {
-            _index_magnitude.emplace(numOfSeconds, inputWindowSeconds);
-        }
-
-        if (subIndexes.all_days_direction) {
-            _index_direction.emplace(numOfSeconds, inputWindowSeconds);
-        }
-
-        for (const WeekdayGroup &group : subIndexes.weekday_groups) {
-            _weekday_direction_indexes.push_back(
-                std::make_unique<HalfHourIndex_Direction>(numOfSeconds, inputWindowSeconds, group)
-            );
-        }
+        const std::size_t inputWindowSeconds)
+        : _index_magnitude(numOfSeconds, inputWindowSeconds),
+          _index_direction(numOfSeconds, inputWindowSeconds),
+          _inputWindowSeconds(inputWindowSeconds) {
     }
 
     void HalfHourMultiIndex::SetNormalizationParameters(const NormalizationParameters &parameters) {
-        if (this->_index_magnitude.has_value() == false) {
-            throw std::logic_error("This index does not hold a magnitude sub-index.");
-        }
-
-        this->_index_magnitude->SetNormalizationParameters(parameters);
+        this->_index_magnitude.SetNormalizationParameters(parameters);
         // The direction index does not contain normalization parameters due to the nature of the data.
     }
 
     const NormalizationParameters &HalfHourMultiIndex::GetNormalizationParameters() const {
-        if (this->_index_magnitude.has_value() == false) {
-            throw std::logic_error("This index does not hold a magnitude sub-index.");
-        }
-
-        return this->_index_magnitude->GetNormalizationParameters();
+        return this->_index_magnitude.GetNormalizationParameters();
     }
 
     void HalfHourMultiIndex::AddVectorsToIndex(
@@ -314,30 +229,8 @@ namespace Core {
         const std::size_t recordOffset
     ) {
         if (segment.size() >= this->_inputWindowSeconds) {
-            if (this->_index_magnitude.has_value()) {
-                this->_index_magnitude->AddVectorsToIndex(
-                    segment,
-                    recFilePath,
-                    recordOffset
-                );
-            }
-
-            if (this->_index_direction.has_value()) {
-                this->_index_direction->AddVectorsToIndex(
-                    segment,
-                    recFilePath,
-                    recordOffset
-                );
-            }
-
-            // Each weekday-group index keeps only the days of its own group.
-            for (const std::unique_ptr<HalfHourIndex_Direction> &weekdayIndex : this->_weekday_direction_indexes) {
-                weekdayIndex->AddVectorsToIndex(
-                    segment,
-                    recFilePath,
-                    recordOffset
-                );
-            }
+            this->_index_magnitude.AddVectorsToIndex(segment, recFilePath, recordOffset);
+            this->_index_direction.AddVectorsToIndex(segment, recFilePath, recordOffset);
         }
         else {
             Logger::Warning(
@@ -350,72 +243,26 @@ namespace Core {
         }
     }
 
-    
+
 
     bool HalfHourMultiIndex::FilesExist(const std::size_t numOfSeconds, const std::size_t inputWindowSeconds) {
-        return FilesExist(numOfSeconds, inputWindowSeconds, SubIndexSelection{});
+        return HalfHourIndex::FilesExist(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_MAGNITUDE) &&
+            HalfHourIndex::FilesExist(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_DIRECTION);
     }
 
-    bool HalfHourMultiIndex::FilesExist(
-        const std::size_t numOfSeconds,
-        const std::size_t inputWindowSeconds,
-        const SubIndexSelection &subIndexes
-    ) {
-        bool exist =
-            (subIndexes.magnitude == false ||
-                HalfHourIndex::FilesExist(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_MAGNITUDE)) &&
-            (subIndexes.all_days_direction == false ||
-                HalfHourIndex::FilesExist(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_DIRECTION));
-
-        for (const WeekdayGroup &group : subIndexes.weekday_groups) {
-            exist = exist && HalfHourIndex::FilesExist(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_DIRECTION, group);
-        }
-
-        return exist;
-    }
-
-    void HalfHourMultiIndex::DeleteFiles(
-        const std::size_t numOfSeconds,
-        const std::size_t inputWindowSeconds,
-        const SubIndexSelection &subIndexes
-    ) {
-        if (subIndexes.magnitude) {
-            HalfHourIndex::DeleteFiles(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_MAGNITUDE);
-        }
-
-        if (subIndexes.all_days_direction) {
-            HalfHourIndex::DeleteFiles(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_DIRECTION);
-        }
-
-        for (const WeekdayGroup &group : subIndexes.weekday_groups) {
-            HalfHourIndex::DeleteFiles(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_DIRECTION, group);
-        }
+    void HalfHourMultiIndex::DeleteFiles(const std::size_t numOfSeconds, const std::size_t inputWindowSeconds) {
+        HalfHourIndex::DeleteFiles(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_MAGNITUDE);
+        HalfHourIndex::DeleteFiles(numOfSeconds, inputWindowSeconds, HalfHourIndex::INX_TYPE_DIRECTION);
     }
 
     HalfHourMultiIndex::MultiQueryResult HalfHourMultiIndex::Query(std::span<const MLRecord> query, std::size_t maxResults) const {
-        if (this->_index_magnitude.has_value() == false) {
-            throw std::logic_error("Cannot query a segment without its magnitude sub-index.");
-        }
-
-        if (this->_weekday_direction_indexes.size() > 1) {
-            throw std::logic_error("A segment can be queried with at most one weekday group loaded.");
-        }
-
         MultiQueryResult res{};
         MultiQuery multiQuery = this->CreateMultiQuery(query);
 
-        res.MagnitudeResults = this->_index_magnitude->Query(multiQuery.MagnitudeQuery, maxResults);
+        res.MagnitudeResults = this->_index_magnitude.Query(multiQuery.MagnitudeQuery, maxResults);
 
-        // Weighted once; every direction index of this window uses the same coordinate weights.
         ApplyDirectionTemporalWeights(multiQuery.DirectionQuery, _inputWindowSeconds);
-
-        if (this->_index_direction.has_value()) {
-            res.DirectionResults = this->_index_direction->Query(multiQuery.DirectionQuery, maxResults);
-        }
-
-        if (this->_weekday_direction_indexes.empty() == false) {
-            res.WeekdayDirectionResults = this->_weekday_direction_indexes.front()->Query(multiQuery.DirectionQuery, maxResults);
-        }
+        res.DirectionResults = this->_index_direction.Query(multiQuery.DirectionQuery, maxResults);
 
         return res;
     }
@@ -438,7 +285,7 @@ namespace Core {
             magnitudeQuery.push_back({std::abs(rec.mid_delta)});
         }
 
-        res.MagnitudeQuery = this->_index_magnitude->NormalizeQuery(magnitudeQuery);    
+        res.MagnitudeQuery = this->_index_magnitude.NormalizeQuery(magnitudeQuery);
 
         return res;
     }

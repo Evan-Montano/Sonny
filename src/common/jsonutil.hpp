@@ -83,6 +83,17 @@ namespace Common {
 
         // METHODS
 
+        /** @brief Test for a key without copying or converting its value (including null). */
+        bool Contains(const std::string& key) const { return jsonData.contains(key); }
+
+        /** @brief Inspect the root value; use At(key) to inspect a nested value. */
+        bool IsNumber() const noexcept { return jsonData.is_number(); }
+        bool IsBoolean() const noexcept { return jsonData.is_boolean(); }
+        bool IsNull() const noexcept { return jsonData.is_null(); }
+        bool IsString() const noexcept { return jsonData.is_string(); }
+        bool IsArray() const noexcept { return jsonData.is_array(); }
+        bool IsObject() const noexcept { return jsonData.is_object(); }
+
         /**
          * @brief Set a value associated with a key.
          *

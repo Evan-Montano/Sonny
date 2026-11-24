@@ -38,7 +38,7 @@
  */
 class HalfHourIndex_Test : public ::testing::Test {
 protected:
-    static constexpr std::size_t WINDOW = 10;
+    static constexpr std::size_t WINDOW = Core::INPUT_WINDOW_CONFIGURATIONS.front();
     static constexpr std::size_t SEGMENT_START = 0;
 
     std::filesystem::path previousWorkingDirectory_;
@@ -210,8 +210,8 @@ TEST_F(HalfHourIndex_Test, PathsSeparateWindowsAndSubIndexTypes) {
     using Core::HalfHourIndex;
 
     EXPECT_EQ(IndexPath(0, 30, HalfHourIndex::INX_TYPE_MAGNITUDE), std::filesystem::path("storage/indexes/30s/m/0930-1000.index"));
-    EXPECT_EQ(IndexPath(1800, 10, HalfHourIndex::INX_TYPE_DIRECTION), std::filesystem::path("storage/indexes/10s/d/1000-1030.index"));
-    EXPECT_EQ(MetadataPath(0, 60, HalfHourIndex::INX_TYPE_DIRECTION), std::filesystem::path("storage/metadata/60s/d/0930-1000.meta"));
+    EXPECT_EQ(IndexPath(1800, 20, HalfHourIndex::INX_TYPE_DIRECTION), std::filesystem::path("storage/indexes/20s/d/1000-1030.index"));
+    EXPECT_EQ(MetadataPath(0, 45, HalfHourIndex::INX_TYPE_DIRECTION), std::filesystem::path("storage/metadata/45s/d/0930-1000.meta"));
     EXPECT_EQ(
         NormalizationPath(0, 45, HalfHourIndex::INX_TYPE_MAGNITUDE),
         std::filesystem::path("storage/metadata/45s/m/0930-1000.normalization.json")
@@ -272,8 +272,8 @@ TEST_F(HalfHourIndex_Test, DirectionVectorsUseWeightsBasedOnTheirConfiguredDimen
     }
 }
 
-TEST_F(HalfHourIndex_Test, SixtySecondDirectionIndexUsesMatchingTemporalWeightsForStorageAndQueries) {
-    constexpr std::size_t window = 60;
+TEST_F(HalfHourIndex_Test, LongestConfiguredDirectionIndexUsesMatchingTemporalWeightsForStorageAndQueries) {
+    constexpr std::size_t window = Core::MAX_INPUT_WINDOW_SECONDS;
     std::vector<Core::MLRecord> records;
     records.reserve(window);
 
@@ -305,7 +305,7 @@ TEST_F(HalfHourIndex_Test, SixtySecondDirectionIndexUsesMatchingTemporalWeightsF
     const float oldestScale = static_cast<float>(std::sqrt(0.4));
     const float newestScale = static_cast<float>(std::sqrt(2.2));
     EXPECT_FLOAT_EQ(directionVectors.front().front(), oldestScale);
-    EXPECT_FLOAT_EQ(directionVectors.front().back(), -newestScale);
+    EXPECT_FLOAT_EQ(directionVectors.front().back(), records.back().mid_delta * newestScale);
 
     const auto magnitudeVectors = ReadStoredVectors(
         IndexPath(SEGMENT_START, window, Core::HalfHourIndex::INX_TYPE_MAGNITUDE)
@@ -317,7 +317,9 @@ TEST_F(HalfHourIndex_Test, SixtySecondDirectionIndexUsesMatchingTemporalWeightsF
     }
 
     std::vector<Core::MLRecord> query = records;
-    constexpr std::array<std::size_t, 5> flippedPositions{0, 15, 30, 45, 59};
+    constexpr std::array<std::size_t, 5> flippedPositions{
+        0, window / 4, window / 2, 3 * window / 4, window - 1
+    };
     double expectedSquaredDistance = 0.0;
     for (const std::size_t position : flippedPositions) {
         query[position].mid_delta = -query[position].mid_delta;
@@ -598,6 +600,36 @@ TEST_F(HalfHourIndex_Test, LoadingAnIndexDoesNotRewriteItsFiles) {
     EXPECT_EQ(std::filesystem::last_write_time(path), before);
 }
 
+TEST_F(HalfHourIndex_Test, BothIndexesRetainEveryTradingDayAfterReload) {
+    constexpr std::size_t window = Core::DEFAULT_INPUT_WINDOW_SECONDS;
+    const std::array<std::filesystem::path, 5> days{
+        "2026-08-31.rec", "2026-09-01.rec", "2026-09-02.rec", "2026-09-03.rec", "2026-09-04.rec"
+    };
+    std::vector<Core::MLRecord> records = MakeRecords(window);
+
+    {
+        Core::HalfHourMultiIndex index(SEGMENT_START, window);
+        index.SetNormalizationParameters(MakeParameters());
+        for (const auto& day : days) {
+            index.AddVectorsToIndex(records, day, 0);
+        }
+    }
+
+    ASSERT_TRUE(Core::HalfHourMultiIndex::FilesExist(SEGMENT_START, window));
+    const Core::HalfHourMultiIndex reloaded(SEGMENT_START, window);
+    const auto results = reloaded.Query(records, days.size());
+
+    ASSERT_EQ(results.MagnitudeResults.size(), days.size());
+    ASSERT_EQ(results.DirectionResults.size(), days.size());
+    for (std::size_t i = 0; i < days.size(); ++i) {
+        const auto expectedDay = Core::HalfHourIndex::ToShortLocationArray(days[i]);
+        EXPECT_EQ(results.MagnitudeResults[i].tradingDayId, expectedDay);
+        EXPECT_EQ(results.DirectionResults[i].tradingDayId, expectedDay);
+        EXPECT_NEAR(results.MagnitudeResults[i].distance, 0.0F, 1e-5F);
+        EXPECT_NEAR(results.DirectionResults[i].distance, 0.0F, 1e-5F);
+    }
+}
+
 TEST_F(HalfHourIndex_Test, FilesExistRequiresEveryFileOfBothSubIndexes) {
     using Core::HalfHourIndex;
 
@@ -610,7 +642,7 @@ TEST_F(HalfHourIndex_Test, FilesExistRequiresEveryFileOfBothSubIndexes) {
     EXPECT_TRUE(HalfHourIndex::FilesExist(SEGMENT_START, WINDOW, HalfHourIndex::INX_TYPE_DIRECTION));
 
     // Another window or segment is unaffected.
-    EXPECT_FALSE(Core::HalfHourMultiIndex::FilesExist(SEGMENT_START, 30));
+    EXPECT_FALSE(Core::HalfHourMultiIndex::FilesExist(SEGMENT_START, Core::INPUT_WINDOW_CONFIGURATIONS[1]));
     EXPECT_FALSE(Core::HalfHourMultiIndex::FilesExist(1800, WINDOW));
 
     const std::array<std::filesystem::path, 5> requiredFiles{
@@ -661,7 +693,7 @@ TEST_F(HalfHourIndex_Test, RejectsNormalizationFromAnotherInputWindow) {
     const std::string configured = std::format("\"input_window_seconds\":{}", WINDOW);
     const std::size_t position = json.find(configured);
     ASSERT_NE(position, std::string::npos);
-    json.replace(position, configured.size(), "\"input_window_seconds\":30");
+    json.replace(position, configured.size(), std::format("\"input_window_seconds\":{}", Core::MAX_INPUT_WINDOW_SECONDS));
 
     std::ofstream output(path, std::ios::trunc);
     output << json;
@@ -680,7 +712,9 @@ TEST(InputConfigTests, InputVectorDimensionIsOneFeaturePerSecond) {
         EXPECT_TRUE(Core::IsSupportedInputWindow(window));
     }
 
-    EXPECT_FALSE(Core::IsSupportedInputWindow(25));
+    for (const std::size_t unsupported : {0u, 10u, 15u, 25u, 60u}) {
+        EXPECT_FALSE(Core::IsSupportedInputWindow(unsupported)) << unsupported;
+    }
 }
 
 TEST(InputConfigTests, EachQueryUsesTheMostRecentConfiguredRecords) {
@@ -704,7 +738,9 @@ TEST(InputConfigTests, LatestInputWindowRejectsUnsupportedOrShortInput) {
     const std::span<const Core::MLRecord> span(records);
 
     EXPECT_THROW(Core::LatestInputWindow(span, 25), std::invalid_argument);
-    EXPECT_THROW(Core::LatestInputWindow(span.first(9), 10), std::invalid_argument);
+    for (const std::size_t window : Core::INPUT_WINDOW_CONFIGURATIONS) {
+        EXPECT_THROW(Core::LatestInputWindow(span.first(window - 1), window), std::invalid_argument);
+    }
 }
 
 TEST(InputConfigTests, InputQueueKeepsOnlyTheMostRecentConfiguredRecords) {
@@ -723,4 +759,35 @@ TEST(InputConfigTests, HistoricalFutureBeginsAfterConfiguredInputWindow) {
     for (const std::size_t window : Core::INPUT_WINDOW_CONFIGURATIONS) {
         EXPECT_EQ(Core::HistoricalFutureStart(100, window), 100 + window);
     }
+}
+
+TEST_F(HalfHourIndex_Test, RebuildAbortsIfDirectionIndexCannotBeDeleted) {
+    const auto directionPath = IndexPath(SEGMENT_START, WINDOW, Core::HalfHourIndex::INX_TYPE_DIRECTION);
+    const auto metadataPath = MetadataPath(SEGMENT_START, WINDOW, Core::HalfHourIndex::INX_TYPE_DIRECTION);
+    BuildIndex(MakeRecords(WINDOW));
+    struct RestorePermissions {
+        std::filesystem::path path;
+        std::filesystem::perms permissions;
+        ~RestorePermissions() {
+            std::error_code ignored;
+            std::filesystem::permissions(path, permissions, ignored);
+        }
+    } restore{directionPath.parent_path(), std::filesystem::status(directionPath.parent_path()).permissions()};
+    std::filesystem::permissions(restore.path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+    // Some CI hosts run as root; verify the restriction before attempting the rebuild.
+    std::error_code probe;
+    std::filesystem::remove(directionPath, probe);
+    if (!probe) GTEST_SKIP() << "This account bypasses directory write restrictions.";
+    bool replacementConstructed = false;
+    EXPECT_THROW({
+        Core::HalfHourMultiIndex::DeleteFiles(SEGMENT_START, WINDOW);
+        replacementConstructed = true;
+        Core::HalfHourMultiIndex index(SEGMENT_START, WINDOW);
+        index.SetNormalizationParameters(MakeParameters());
+        auto records = MakeRecords(WINDOW);
+        index.AddVectorsToIndex(records, recordFixturePath_, 0);
+    }, std::filesystem::filesystem_error);
+    EXPECT_FALSE(replacementConstructed);
+    EXPECT_EQ(ReadStoredVectors(directionPath).size(), 1u);
+    EXPECT_EQ(std::filesystem::file_size(metadataPath), 12u);
 }

@@ -75,6 +75,8 @@ target_include_directories(sonny_common
 )
 
 target_link_libraries(sonny_common
+    PUBLIC
+        nlohmann_json::nlohmann_json
     PRIVATE
         PkgConfig::LIBSECRET
         ftxui::screen
@@ -117,7 +119,7 @@ target_compile_definitions(sonny_client
         SONNY_BROWSER_CLIENT_PATH="${PROJECT_SOURCE_DIR}/src/client/browserclient.js"
 )
 target_link_libraries(sonny_client
-    PUBLIC sonny_common CURL::libcurl nlohmann_json::nlohmann_json
+    PUBLIC sonny_common CURL::libcurl
     PRIVATE PahoMqttCpp::paho-mqttpp3-static
 )
 
@@ -145,7 +147,7 @@ target_include_directories(sonny_webull
 )
 
 target_link_libraries(sonny_webull
-    PUBLIC sonny_common sonny_client nlohmann_json::nlohmann_json
+    PUBLIC sonny_common sonny_client
     PRIVATE OpenSSL::Crypto protobuf::libprotobuf
 )
 
@@ -182,7 +184,6 @@ target_link_libraries(sonny
         sonny_runtime
         sonny_client
         CURL::libcurl
-        nlohmann_json::nlohmann_json
         OpenMP::OpenMP_CXX
         ftxui::screen
         ftxui::dom

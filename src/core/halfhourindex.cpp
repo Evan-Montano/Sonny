@@ -2,14 +2,13 @@
 // Class and method implementations for all things pertaining to the building and querying of market futures.
 
 #include "halfhourindex.hpp"
+#include "../common/jsonutil.hpp"
 #include "../common/storage.hpp"
 #include "../common/logger.hpp"
 #include "transformer.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <format>
-#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -20,7 +19,7 @@ namespace Core {
 
     std::string HalfHourIndex::GetHalfHourName(const std::size_t numOfSeconds) {
         const std::size_t bucket = numOfSeconds / SECONDS_PER_HALF_HOUR;
-        
+
         if (bucket >= TOTAL_HALF_HOURS) {
             throw std::out_of_range(
                 std::format("Invalid half-hour offset: {}", numOfSeconds)
@@ -48,14 +47,12 @@ namespace Core {
     namespace {
 
         /**
-         * @brief Appends the optional sub-index type and weekday-group directories to a window's base path:
-         * <base>/<N>s[/<type>[/weekdays/<group>]]. All-week indexes keep the layout they had before groups.
+         * @brief Appends the window length and optional sub-index type to a base path: <base>/<N>s[/<type>].
          */
         std::filesystem::path SubIndexDirectory(
             const std::filesystem::path &basePath,
             const std::size_t inputWindowSeconds,
-            const std::optional<std::string_view> indexType,
-            const std::optional<WeekdayGroup> &weekdayGroup
+            const std::optional<std::string_view> indexType
         ) {
             std::filesystem::path directory = basePath / std::format("{}s", inputWindowSeconds);
 
@@ -63,90 +60,7 @@ namespace Core {
                 directory /= *indexType;
             }
 
-            if (weekdayGroup.has_value()) {
-                directory = directory / HalfHourIndex::WEEKDAY_GROUPS_DIRECTORY / weekdayGroup->name;
-            }
-
             return directory;
-        }
-
-        /**
-         * @brief Writes JSON to a temporary file and renames it into place, so readers never see a partial file.
-         */
-        void WriteJsonFileAtomically(const Common::JsonUtility &json, const std::filesystem::path &path, const std::string_view description) {
-            std::filesystem::create_directories(path.parent_path());
-
-            // Write to a temporary file first.
-            std::filesystem::path temporaryPath = path;
-            temporaryPath += ".tmp";
-
-            {
-                std::ofstream file(
-                    temporaryPath,
-                    std::ios::binary | std::ios::trunc
-                );
-
-                if (file.is_open() == false) {
-                    throw std::runtime_error(
-                        std::format("Unable to open {} for writing: {}", description, temporaryPath.string())
-                    );
-                }
-
-                file << json.ToString();
-                file.flush();
-
-                if (file.good() == false) {
-                    throw std::runtime_error(
-                        std::format("Failed writing {}: {}", description, temporaryPath.string())
-                    );
-                }
-            }
-
-            // Rename the completed file into place.
-            std::error_code error;
-
-            std::filesystem::rename(
-                temporaryPath,
-                path,
-                error
-            );
-
-            // Fallback for platforms that don't replace existing destinations.
-            if (error) {
-                std::error_code removeError;
-
-                std::filesystem::remove(
-                    path,
-                    removeError
-                );
-
-                error.clear();
-
-                std::filesystem::rename(
-                    temporaryPath,
-                    path,
-                    error
-                );
-            }
-
-            if (error) {
-                std::filesystem::remove(temporaryPath);
-
-                throw std::runtime_error(
-                    std::format("Failed to install {}: {}", description, error.message())
-                );
-            }
-        }
-
-        std::vector<std::string> WeekdayNames(const WeekdayGroup &group) {
-            std::vector<std::string> names{};
-
-            for (const std::chrono::weekday day : group.Weekdays()) {
-                names.emplace_back(WeekdayName(day));
-            }
-
-            std::sort(names.begin(), names.end());
-            return names;
         }
 
     }
@@ -154,10 +68,9 @@ namespace Core {
     std::filesystem::path HalfHourIndex::GetIndexPath(
         const std::size_t numOfSeconds,
         const std::size_t inputWindowSeconds,
-        std::optional<std::string_view> indexType,
-        const std::optional<WeekdayGroup> &weekdayGroup
+        std::optional<std::string_view> indexType
     ) {
-        return SubIndexDirectory(Common::Storage::INDEXES_BASE_PATH, inputWindowSeconds, indexType, weekdayGroup) /
+        return SubIndexDirectory(Common::Storage::INDEXES_BASE_PATH, inputWindowSeconds, indexType) /
             std::format(
                 "{}.index",
                 GetHalfHourName(numOfSeconds)
@@ -167,10 +80,9 @@ namespace Core {
     std::filesystem::path HalfHourIndex::GetMetadataPath(
         const std::size_t numOfSeconds,
         const std::size_t inputWindowSeconds,
-        std::optional<std::string_view> indexType,
-        const std::optional<WeekdayGroup> &weekdayGroup
+        std::optional<std::string_view> indexType
     ) {
-        return SubIndexDirectory(Common::Storage::METADATA_BASE_PATH, inputWindowSeconds, indexType, weekdayGroup) /
+        return SubIndexDirectory(Common::Storage::METADATA_BASE_PATH, inputWindowSeconds, indexType) /
             std::format(
                 "{}.meta",
                 GetHalfHourName(numOfSeconds)
@@ -180,136 +92,51 @@ namespace Core {
     std::filesystem::path HalfHourIndex::GetNormalizationPath(
         const std::size_t numOfSeconds,
         const std::size_t inputWindowSeconds,
-        std::optional<std::string_view> indexType,
-        const std::optional<WeekdayGroup> &weekdayGroup
+        std::optional<std::string_view> indexType
     ) {
-        const std::filesystem::path metadataPath = GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType, weekdayGroup);
+        const std::filesystem::path metadataPath = GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType);
         return metadataPath.parent_path() / (metadataPath.stem().string() + ".normalization.json");
-    }
-
-    std::filesystem::path HalfHourIndex::GetWeekdayManifestPath(
-        const std::size_t numOfSeconds,
-        const std::size_t inputWindowSeconds,
-        std::optional<std::string_view> indexType,
-        const WeekdayGroup &weekdayGroup
-    ) {
-        const std::filesystem::path metadataPath = GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType, weekdayGroup);
-        return metadataPath.parent_path() / (metadataPath.stem().string() + ".weekdays.json");
     }
 
     bool HalfHourIndex::FilesExist(
         const std::size_t numOfSeconds,
         const std::size_t inputWindowSeconds,
-        std::optional<std::string_view> indexType,
-        const std::optional<WeekdayGroup> &weekdayGroup
+        std::optional<std::string_view> indexType
     ) {
         // The direction index does not use normalization-parameter files.
         const bool requiresNormalization = (indexType.has_value() && *indexType == INX_TYPE_DIRECTION) == false;
 
-        const bool filesExist = Common::Storage::FileExists(GetIndexPath(numOfSeconds, inputWindowSeconds, indexType, weekdayGroup)) &&
-            Common::Storage::FileExists(GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType, weekdayGroup)) &&
+        return Common::Storage::FileExists(GetIndexPath(numOfSeconds, inputWindowSeconds, indexType)) &&
+            Common::Storage::FileExists(GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType)) &&
             (requiresNormalization == false ||
-                Common::Storage::FileExists(GetNormalizationPath(numOfSeconds, inputWindowSeconds, indexType, weekdayGroup)));
-
-        if (filesExist == false || weekdayGroup.has_value() == false) {
-            return filesExist;
-        }
-
-        const std::filesystem::path manifestPath = GetWeekdayManifestPath(numOfSeconds, inputWindowSeconds, indexType, *weekdayGroup);
-
-        if (Common::Storage::FileExists(manifestPath) == false) {
-            return false;
-        }
-
-        try {
-            ValidateWeekdayManifest(manifestPath, inputWindowSeconds, *weekdayGroup);
-        }
-        catch (const std::exception &error) {
-            Logger::Warning(std::format("Weekday index is not usable for its configured group: {}", error.what()));
-            return false;
-        }
-
-        return true;
+                Common::Storage::FileExists(GetNormalizationPath(numOfSeconds, inputWindowSeconds, indexType)));
     }
 
     void HalfHourIndex::DeleteFiles(
         const std::size_t numOfSeconds,
         const std::size_t inputWindowSeconds,
-        std::optional<std::string_view> indexType,
-        const std::optional<WeekdayGroup> &weekdayGroup
+        std::optional<std::string_view> indexType
     ) {
-        Common::Storage::DeleteFile(GetIndexPath(numOfSeconds, inputWindowSeconds, indexType, weekdayGroup));
-        Common::Storage::DeleteFile(GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType, weekdayGroup));
-        Common::Storage::DeleteFile(GetNormalizationPath(numOfSeconds, inputWindowSeconds, indexType, weekdayGroup));
-
-        if (weekdayGroup.has_value()) {
-            Common::Storage::DeleteFile(GetWeekdayManifestPath(numOfSeconds, inputWindowSeconds, indexType, *weekdayGroup));
+        for (const auto& path : {
+            GetIndexPath(numOfSeconds, inputWindowSeconds, indexType),
+            GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType),
+            GetNormalizationPath(numOfSeconds, inputWindowSeconds, indexType)
+        }) {
+            std::error_code error;
+            Common::Storage::DeleteFile(path, error);
+            if (error) {
+                throw std::filesystem::filesystem_error("Cannot clear index files before rebuilding", path, error);
+            }
         }
-    }
-
-    void HalfHourIndex::ValidateWeekdayManifest(
-        const std::filesystem::path &manifestPath,
-        const std::size_t inputWindowSeconds,
-        const WeekdayGroup &weekdayGroup
-    ) {
-        if (Common::Storage::FileExists(manifestPath) == false) {
-            throw std::runtime_error(std::format(
-                "Weekday group manifest missing: {}. The weekday indexes must be rebuilt.",
-                manifestPath.string()
-            ));
-        }
-
-        const Common::JsonUtility json = Common::JsonUtility::FromFile(manifestPath);
-
-        if (json.Get<int>("schema_version") != 1) {
-            throw std::runtime_error(std::format("Unsupported weekday group manifest version: {}", manifestPath.string()));
-        }
-
-        if (json.Get<std::size_t>("input_window_seconds") != inputWindowSeconds) {
-            throw std::runtime_error(std::format(
-                "{} was built for a {}-second input window, not {} seconds.",
-                manifestPath.string(),
-                json.Get<std::size_t>("input_window_seconds"),
-                inputWindowSeconds
-            ));
-        }
-
-        const std::string storedGroup = json.Get<std::string>("weekday_group");
-        std::vector<std::string> storedWeekdays = json.Get<std::vector<std::string>>("weekdays");
-        std::sort(storedWeekdays.begin(), storedWeekdays.end());
-
-        if (storedGroup != weekdayGroup.name || storedWeekdays != WeekdayNames(weekdayGroup)) {
-            throw std::runtime_error(std::format(
-                "{} holds weekday group \"{}\" with different weekdays than the configured \"{}\"; "
-                "rebuild the weekday indexes after changing DIRECTION_WEEKDAY_GROUPS.",
-                manifestPath.string(),
-                storedGroup,
-                weekdayGroup.name
-            ));
-        }
-    }
-
-    void HalfHourIndex::SaveWeekdayManifestToDisk() const {
-        Common::JsonUtility json{};
-
-        json.Set("schema_version", 1);
-        json.Set("input_window_seconds", _inputWindowSeconds);
-        json.Set("index_type", std::string(_indexType.value_or("")));
-        json.Set("weekday_group", std::string(_weekdayGroup->name));
-        json.Set("weekdays", WeekdayNames(*_weekdayGroup));
-
-        WriteJsonFileAtomically(json, _weekdayManifestPath, "weekday group manifest");
-
-        Logger::Info(std::format("Saved weekday group manifest: {}", _weekdayManifestPath.string()), true);
     }
 
     std::filesystem::path HalfHourIndex::GetRecordFilePathFromWindowLocation(const std::array<char,8> &yyyymmdd) {
         const std::string date(yyyymmdd.data(), yyyymmdd.size());
-        const std::string formattedDate = 
-            date.substr(0, 4) + "-" + 
-            date.substr(4, 2) + "-" + 
+        const std::string formattedDate =
+            date.substr(0, 4) + "-" +
+            date.substr(4, 2) + "-" +
             date.substr(6, 2);
-        
+
         return Common::Storage::RECORDS_BASE_PATH / (formattedDate + ".rec");
     }
 
@@ -362,17 +189,15 @@ namespace Core {
     HalfHourIndex::HalfHourIndex(
         const std::size_t& numOfSeconds,
         const std::size_t inputWindowSeconds,
-        std::optional<std::string_view> indexType,
-        std::optional<WeekdayGroup> weekdayGroup
+        std::optional<std::string_view> indexType
     )
         : _inputWindowSeconds(inputWindowSeconds),
         _indexType(indexType),
         _dimension(static_cast<int>(InputVectorDimension(inputWindowSeconds))),
         _index(_dimension),
-        _weekdayGroup(weekdayGroup),
-        _indexPath(GetIndexPath(numOfSeconds, inputWindowSeconds, indexType, weekdayGroup)),
-        _metadataPath(GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType, weekdayGroup)),
-        _normalizationPath(GetNormalizationPath(numOfSeconds, inputWindowSeconds, indexType, weekdayGroup))
+        _indexPath(GetIndexPath(numOfSeconds, inputWindowSeconds, indexType)),
+        _metadataPath(GetMetadataPath(numOfSeconds, inputWindowSeconds, indexType)),
+        _normalizationPath(GetNormalizationPath(numOfSeconds, inputWindowSeconds, indexType))
     {
         if (IsSupportedInputWindow(inputWindowSeconds) == false) {
             throw std::invalid_argument(
@@ -380,20 +205,11 @@ namespace Core {
             );
         }
 
-        if (weekdayGroup.has_value()) {
-            _weekdayManifestPath = GetWeekdayManifestPath(numOfSeconds, inputWindowSeconds, indexType, *weekdayGroup);
-        }
-
         Initialize();
     }
 
     void HalfHourIndex::Initialize() {
         if (Common::Storage::FileExists(this->_indexPath)) {
-            // Checked before reading the vectors: a weekday index from another grouping must never be searched.
-            if (this->_weekdayGroup.has_value()) {
-                ValidateWeekdayManifest(this->_weekdayManifestPath, this->_inputWindowSeconds, *this->_weekdayGroup);
-            }
-
             Logger::Info(
                 std::format(
                     "Loading FAISS index: {}",
@@ -515,11 +331,6 @@ namespace Core {
                 if (this->_indexType.has_value() && *this->_indexType == INX_TYPE_MAGNITUDE) {
                     SaveNormalizationParametersToDisk();
                 }
-
-                // Last, so the manifest only exists once the index and metadata are on disk.
-                if (this->_weekdayGroup.has_value()) {
-                    SaveWeekdayManifestToDisk();
-                }
             }
             catch (const std::exception& e) {
                 Logger::Error(
@@ -534,83 +345,15 @@ namespace Core {
     }
 
     void HalfHourIndex::LoadMetadata() {
-        Logger::Info(
-            std::format("Loading metadata: {}", this->_metadataPath.string()),
-            true
-        );
-
-        this->_windowLocations.reserve(SECONDS_PER_HALF_HOUR);
-
-        std::ifstream metaFile(this->_metadataPath, std::ios::binary);
-
-        if (metaFile && metaFile.is_open()) {
-            WindowLocation loc{};
-            while (metaFile.read(reinterpret_cast<char*>(&loc), sizeof(loc))) {
-                this->_windowLocations.push_back(loc);
-            }
-            if (metaFile.eof()) {
-                Logger::Info("Successfully loaded metadata", true);
-            }
-
-            metaFile.close();
-        }
-        else {
-            Logger::Error("Failed to load metadata file", true);
-        }
+        Logger::Info(std::format("Loading metadata: {}", _metadataPath.string()), true);
+        _windowLocations = Common::Storage::ReadBinaryRecords<WindowLocation>(_metadataPath);
+        Logger::Info("Successfully loaded metadata", true);
     }
 
     void HalfHourIndex::SaveMetadataToDisk() {
-        Logger::Info(
-            std::format("Saving metadata: {}", this->_metadataPath.string()),
-            true
-        );
-
-        if (Common::Storage::FileExists(this->_metadataPath.parent_path()) == false) {
-            Common::Storage::CreateDirectory(this->_metadataPath.parent_path());
-        }
-
-        if (Common::Storage::FileExists(this->_metadataPath)) {
-            Common::Storage::DeleteFile(this->_metadataPath);
-        }
-
-        std::ofstream metaFile(this->_metadataPath, std::ios::binary);
-
-        if (metaFile && metaFile.is_open()) {
-            for (const WindowLocation &loc : this->_windowLocations) {
-                metaFile.write(reinterpret_cast<const char*>(&loc), sizeof(WindowLocation));
-
-                if (!metaFile) {
-                    Logger::Error(
-                        std::format(
-                            "Failed while writing metadata: {}",
-                            this->_metadataPath.string()
-                        ),
-                        true
-                    );
-                    metaFile.close();
-                    break;
-                }
-            }
-
-            metaFile.close();
-
-            Logger::Info(
-                std::format(
-                    "Successfully saved {} metadata entries",
-                    this->_windowLocations.size()
-                ),
-                true
-            );
-        }
-        else {
-            Logger::Error(
-                std::format(
-                    "Failed to open metadata file for writing: {}",
-                    this->_metadataPath.string()
-                ),
-                true
-            );
-        }
+        Common::Storage::CreateDirectory(_metadataPath.parent_path());
+        Common::Storage::WriteBinaryRecords<WindowLocation>(_metadataPath, _windowLocations);
+        Logger::Info(std::format("Successfully saved {} metadata entries", _windowLocations.size()), true);
     }
 
     void HalfHourIndex::LoadNormalizationParameters() {
@@ -718,7 +461,7 @@ namespace Core {
         json.Set("mid_delta_mean", _normalizationParameters.mid_delta_mean);
         json.Set("mid_delta_stddev", _normalizationParameters.mid_delta_stddev);
 
-        WriteJsonFileAtomically(json, _normalizationPath, "normalization JSON");
+        Common::Storage::WriteFileAtomically(_normalizationPath, json.ToString());
 
         Logger::Info(
             std::format(
@@ -769,7 +512,7 @@ namespace Core {
                 "Cannot query an index without normalization parameters."
             );
         }
-        
+
         std::vector<QueryResult> res{};
 
         if (normalizedQuery.size() == static_cast<std::size_t>(_dimension)) {
@@ -793,7 +536,7 @@ namespace Core {
 
                 for (std::size_t i = 0; i < static_cast<std::size_t>(resultCount); ++i) {
                     const faiss::idx_t id = ids[i];
-                    
+
                     if (id < 0 || static_cast<std::size_t>(id) >= this->_windowLocations.size()) {
                         Logger::Error(
                             std::format("Missing metadata for FAISS vector ID {}", id)

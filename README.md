@@ -6,7 +6,7 @@ The project is under active development. Its financial predictive usefulness has
 
 ## Engineering Statistics
 
-Collected **November 19, 2026** from local artifacts and the current working source. Exact counts, commands, configuration, evaluation tables, and uncertainty are recorded in [Engineering Metrics](docs/ENGINEERING_METRICS.md).
+Collected **November 19, 2026** from local artifacts and the current working source.
 
 | Metric | Verified value |
 |---|---|
@@ -31,7 +31,7 @@ Storage uses binary units (GiB = 2³⁰ bytes, MiB = 2²⁰ bytes). Disk sizes a
 - Exact nearest-neighbor search through FAISS, with selective half-hour loading and cross-segment ranking.
 - TLS MQTT quote ingestion, signed HTTPS subscriptions, Protobuf decoding, and read-only Secret Service credential lookup.
 - Synchronized rolling input snapshots, historical-future lookup, weighted magnitude/direction forecasts, and subsequent-observation evaluation.
-- Configurable experiments for input windows, match caps, and weekday-group direction indexes. Only the 20-second AllDays indexes exist in the measured storage snapshot.
+- Configurable experiments for input windows and match caps. Magnitude and direction indexes each include every trading day; only the 20-second indexes exist in the measured storage snapshot.
 
 ## Architecture and Data Flow
 
@@ -96,9 +96,9 @@ The implementation integrates FAISS **`IndexFlatL2`**, which performs exact squa
 
 Magnitude queries use the segment's saved normalization. Cross-segment magnitude distances are rescaled using a pooled standard deviation before ranking. Direction coordinates are `sign(delta) × sqrt(weight)`, with the current weight increasing linearly from **0.4 to 2.2** from oldest to newest second. Both stored vectors and queries use this transform. Candidates remain separate by representation; the runtime requests 128 per segment/index, merges and deduplicates them, then retains up to 32 usable matches with five seconds of historical future.
 
-Paths are `storage/indexes/<N>s/{m,d}/<HHMM-HHMM>.index` and matching files under `storage/metadata/`. Each vector has a 12-byte location (record offset and eight-character trading date). Magnitude indexes also have normalization JSON. Optional weekday direction indexes use `d/weekdays/<group>/` and grouping manifests; `AllDays`, `WeekdayGroups`, and `Compare` modes are implemented, with separate comparison streams.
+Paths are `storage/indexes/<N>s/{m,d}/<HHMM-HHMM>.index` and matching files under `storage/metadata/`. Each vector has a 12-byte location (record offset and eight-character trading date). Magnitude indexes also have normalization JSON. Both sub-indexes include every trading day and produce one forecast stream per input window and match count.
 
-The measured runtime loaded three magnitude/direction pairs, not the entire 26-index collection. Their vector and location payloads total **2.10 GiB by calculation**, excluding capacity, allocation, cache, libraries, and other process costs; this is **not measured RSS**. A historical-day cache loads `.rec` files lazily and clears at a 4,096-day cap. See the [memory evidence](docs/ENGINEERING_METRICS.md#memory-and-residency) for limits and tradeoffs.
+The measured runtime loaded three magnitude/direction pairs, not the entire 26-index collection. Their vector and location payloads total **2.10 GiB by calculation**, excluding capacity, allocation, cache, libraries, and other process costs; this is **not measured RSS**. A historical-day cache loads `.rec` files lazily and clears at a 4,096-day cap.
 
 ## Live Runtime and Concurrency
 
@@ -106,7 +106,7 @@ The Webull client connects with TLS MQTT 3.1.1, then binds a signed HTTPS subscr
 
 Two primary processing paths separate quote aggregation from periodic prediction. There are also UI, logger, stream-management, and Paho library execution threads; “two paths” is not a total process thread count. Paho invokes the quote handler through its callback bridge. The aggregator keeps the last quote per second, drops earlier-second arrivals, and emits a second only when a later quote arrives. Up to five quiet seconds are filled with zero deltas and marked unobserved; longer gaps or unusable books reset continuity.
 
-The rolling window retains 20 records in the current mode. Only full, changed windows are snapshotted. The prediction loop waits five seconds between computations, so this is not a fixed five-second end-to-end deadline. Single-window mode preloads indexes while quotes accumulate. Escape requests stop; a scope guard stops/joins the stream-management worker before callback-captured pipeline state is destroyed, and remaining forecasts are flushed.
+The rolling window retains 30 records in the current single-window mode. Only full, changed windows are snapshotted. The prediction loop waits five seconds between computations, so this is not a fixed five-second end-to-end deadline. Single-window mode preloads indexes while quotes accumulate. Escape requests stop; a scope guard stops/joins the stream-management worker before callback-captured pipeline state is destroyed, and remaining forecasts are flushed.
 
 ## Forecasting Methodology and Evaluation
 
@@ -124,7 +124,7 @@ At the five-second horizon (111 samples per row, USD midpoint change):
 | 16 | $0.065825 | $0.099955 | $0.108449 | 66/111 (59.46%) |
 | 32 | $0.063459 | $0.099955 | $0.111824 | 64/111 (57.66%) |
 
-¹Magnitude MAE compares the separately logged estimated magnitude with the absolute observed move. Signed MAE includes directional mistakes. The majority-direction baseline at five seconds is 56/111 (**50.45%**), computed retrospectively from this sample. The full [report](docs/ENGINEERING_METRICS.md#forecast-evaluation) includes all horizons, baseline definitions, error reductions, and precision limits.
+¹Magnitude MAE compares the separately logged estimated magnitude with the absolute observed move. Signed MAE includes directional mistakes. The majority-direction baseline at five seconds is 56/111 (**50.45%**), computed retrospectively from this sample.
 
 Magnitude error is lower than the zero-move baseline in this sample; **signed forecast MAE is worse than that baseline for every tested cap and horizon**. A zero-magnitude baseline is weak; no constant historical-magnitude or persistence baseline was logged. The short sandbox run, related forecasts, configuration selection, and lack of transaction-cost/execution analysis prevent claims of reliable predictive advantage or profitability.
 
@@ -459,8 +459,6 @@ Sonny currently uses:
 - **Paho MQTT C++ / C** (fetched and built statically with TLS by CMake)
 - **libsecret** (read-only Secret Service access)
 
-See [docs/webull-streaming.md](docs/webull-streaming.md) for OpenAPI application setup, Secret Service provisioning, and live/sandbox quote-stream details.
-
 Linux builds are configured as **Debug** builds with debugging symbols and optimizations disabled, for now while development is still in progress.
 
 The top-level CMake file currently forces `Debug` and `-g -O0`; passing `-DCMAKE_BUILD_TYPE=Release` does not override that assignment. FAISS is built separately with the Release command above. Dependency clone commands follow upstream HEAD; retain source revisions for repeatable builds. No clean dependency rebuild was performed for this documentation review.
@@ -471,17 +469,16 @@ Configuration is primarily compile-time; rebuild after changing these settings. 
 
 | Source | Current settings and effect |
 |---|---|
-| [setup.hpp](src/core/setup.hpp) | Historical range February 17, 2017–November 10, 2026; `REUSE_EXISTING_INDEXES=false`, so Update Indexes rebuilds selected indexes |
-| [inputconfig.hpp](src/core/inputconfig.hpp) | Supported windows: 10/15/20/30/45/60 seconds; single 20-second window active; maximum 3 resident segments |
-| [weekdayconfig.hpp](src/core/weekdayconfig.hpp) | `AllDays` active; five single-weekday groups available; `Compare` keeps all-week and weekday results separate |
+| [setup.hpp](src/core/setup.hpp) | Historical range starts February 17, 2017 and ends at the current date/time captured when the application starts; `REUSE_EXISTING_INDEXES=false`, so Update Indexes rebuilds selected indexes |
+| [inputconfig.hpp](src/core/inputconfig.hpp) | Supported windows: 20/30/45 seconds; single 30-second window active; maximum 3 resident segments |
 | [predictionexperiment.hpp](src/runtime/predictionexperiment.hpp) | 8/16/32 match caps; 128 search candidates per sub-index/segment |
 | [predictionanalytics.hpp](src/runtime/predictionanalytics.hpp) | Evaluation horizons 1–5 seconds |
 
 From **Setup**, choose **Download Missing Records (Keeps Existing)** to acquire absent or invalid days, then **Update Indexes** for the active configuration. Download/rebuild operations can take substantial time. **Run All Setup Processes (Clears Everything)** deletes corpus, record, and index directories before rebuilding; **Download Historical Records (Clears Existing)** replaces daily exports. **Clear Log File** truncates the current day's evidence after a UI confirmation. Keep experiment logs before using it.
 
-Use **Sandbox → Sandbox Webull SPY Quote Stream** to start the current runtime and **Escape** to return. Streaming requires the selected environment's `app_key` and `app_secret` in an unlocked Linux Secret Service provider; an access token is used if provisioned. Follow [Webull streaming setup](docs/webull-streaming.md) for the existing provisioning commands. Build and unit tests do not require credentials.
+Use **Sandbox → Sandbox Webull SPY Quote Stream** to start the current runtime and **Escape** to return. Streaming requires the selected environment's `app_key` and `app_secret` in an unlocked Linux Secret Service provider; an access token is used if provisioned. Build and unit tests do not require credentials.
 
-“Update Indexes” builds only active input windows and selected direction families. With reuse enabled, completeness checks do not fingerprint source records or direction-weight settings; rebuild after changing data, date ranges, or vector construction. Weekday manifests do validate the configured grouping. Log files are appended under `storage/logs/<local-date>.log` and may be explicitly cleared through the UI. Historical storage, dependencies, and logs are not bundled as public experiment artifacts.
+“Update Indexes” builds magnitude and direction indexes for active input windows. With reuse enabled, complete pairs are kept and missing or incomplete pairs are rebuilt. Completeness checks do not fingerprint source records or direction-weight settings; rebuild after changing data, date ranges, or vector construction. Log files are appended under `storage/logs/<local-date>.log` and may be explicitly cleared through the UI. Historical storage, dependencies, and logs are not bundled as public experiment artifacts.
 
 The helper scripts provide the same workflow: `./build.sh` configures/builds Sonny using existing dependencies; `./tests.sh` runs CTest; `./full-build.sh` deletes dependency/application build directories, rebuilds, installs, and tests. The full script expects FAISS and Protobuf source directories to exist.
 
@@ -494,7 +491,7 @@ ctest --test-dir build --output-on-failure
 ./tests.sh
 ```
 
-GoogleTest cases cover date/time and JSON helpers, vector construction and normalization, index persistence and ranking, segment selection, weekday grouping, Webull signing/schema behavior, aggregation, rolling snapshots, historical lookup, and forecast construction. Tests use small fixtures and temporary storage; they do not establish external service reliability, forecast quality, or runtime throughput. The [metrics report](docs/ENGINEERING_METRICS.md#verification) records the dated test result and verification scope. `npm test` is a placeholder, not the C++ test runner.
+GoogleTest cases cover date/time and JSON helpers, vector construction and normalization, index persistence and ranking, segment selection, Webull signing/schema behavior, aggregation, rolling snapshots, historical lookup, and forecast construction. Tests use small fixtures and temporary storage; they do not establish external service reliability, forecast quality, or runtime throughput. `npm test` is a placeholder, not the C++ test runner.
 
 ## Engineering Highlights
 
@@ -508,4 +505,4 @@ GoogleTest cases cover date/time and JSON helpers, vector construction and norma
 
 Financial predictive usefulness remains unestablished. Production out-of-sample validation, stronger baselines, longer retained experiments, and forecast availability timing remain necessary. Exact flat search duplicates overlapping vectors and trades search coverage against memory; there is no compressed index or disk-backed search. Runtime RSS, query latency distributions, quote rates, construction times, and isolated evaluation throughput remain unmeasured.
 
-Historical sessions use a fixed regular-session length without a holiday/early-close calendar. The live clock rejects premarket/weekends but clamps after-hours timestamps to the final session second rather than rejecting them. The record format has no portable schema header, and experiment/index provenance is incomplete. Detailed limitations and proposed instrumentation are in [Engineering Metrics](docs/ENGINEERING_METRICS.md#unavailable-measurements-and-next-instrumentation).
+Historical sessions use a fixed regular-session length without a holiday/early-close calendar. The live clock rejects premarket/weekends but clamps after-hours timestamps to the final session second rather than rejecting them. The record format has no portable schema header, and experiment/index provenance is incomplete.

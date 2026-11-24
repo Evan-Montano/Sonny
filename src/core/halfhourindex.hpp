@@ -5,7 +5,6 @@
 
 #include "structures.hpp"
 #include "inputconfig.hpp"
-#include "weekdayconfig.hpp"
 
 #include <array>
 #include <cstddef>
@@ -83,11 +82,6 @@ namespace Core {
          */
         NormalizationParameters _normalizationParameters{};
 
-        /**
-         * @brief Weekday group this index is restricted to; nullopt for the all-week index.
-         */
-        std::optional<WeekdayGroup> _weekdayGroup{std::nullopt};
-
     private:
         // MEMBERS
 
@@ -133,11 +127,6 @@ namespace Core {
          */
         std::optional<std::string_view> _indexType{std::nullopt};
 
-        /**
-         * @brief Path of the weekday-group manifest; empty for all-week indexes.
-         */
-        std::filesystem::path _weekdayManifestPath;
-
         // METHODS
 
         /**
@@ -157,8 +146,7 @@ namespace Core {
         static std::filesystem::path GetIndexPath(
             std::size_t numOfSeconds,
             std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS,
-            std::optional<std::string_view> indexType = std::nullopt,
-            const std::optional<WeekdayGroup> &weekdayGroup = std::nullopt
+            std::optional<std::string_view> indexType = std::nullopt
         );
 
         /**
@@ -170,8 +158,7 @@ namespace Core {
         static std::filesystem::path GetMetadataPath(
             std::size_t numOfSeconds,
             std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS,
-            std::optional<std::string_view> indexType = std::nullopt,
-            const std::optional<WeekdayGroup> &weekdayGroup = std::nullopt
+            std::optional<std::string_view> indexType = std::nullopt
         );
 
         /**
@@ -209,8 +196,7 @@ namespace Core {
         static std::filesystem::path GetNormalizationPath(
             std::size_t numOfSeconds,
             std::size_t inputWindowSeconds = DEFAULT_INPUT_WINDOW_SECONDS,
-            std::optional<std::string_view> indexType = std::nullopt,
-            const std::optional<WeekdayGroup> &weekdayGroup = std::nullopt
+            std::optional<std::string_view> indexType = std::nullopt
         );
 
         /**
@@ -224,34 +210,6 @@ namespace Core {
          * 
          */
         void SaveNormalizationParametersToDisk() const;
-
-        /**
-         * @brief Path of the manifest recording which weekdays a weekday-group index holds.
-         * Lives beside the .meta file as "<segment>.weekdays.json".
-         */
-        static std::filesystem::path GetWeekdayManifestPath(
-            std::size_t numOfSeconds,
-            std::size_t inputWindowSeconds,
-            std::optional<std::string_view> indexType,
-            const WeekdayGroup &weekdayGroup
-        );
-
-        /**
-         * @brief Throws unless the manifest at manifestPath was written for this input window and
-         * exactly this group (same name, same weekdays). Guards against loading an index built for
-         * an earlier grouping that reused the name.
-         */
-        static void ValidateWeekdayManifest(
-            const std::filesystem::path &manifestPath,
-            std::size_t inputWindowSeconds,
-            const WeekdayGroup &weekdayGroup
-        );
-
-        /**
-         * @brief Writes the weekday-group manifest. Written after the index and metadata, so its
-         * presence also marks the index as completely saved.
-         */
-        void SaveWeekdayManifestToDisk() const;
 
         // FRIENDS AND TEST OVERLOADS
         friend class ::HalfHourIndex_Test;
@@ -278,15 +236,11 @@ namespace Core {
          * @param numOfSeconds Number of seconds since the start of the market day.
          * @param inputWindowSeconds The index dimension size. This also represents the query vector size.
          * @param indexType Type of index this is referring to. See HalfHourMultiIndex for more context.
-         * @param weekdayGroup Weekday group the index is restricted to; nullopt for the all-week index.
-         * A weekday-group index is stored apart from the all-week one (see GetIndexPath) and carries a
-         * manifest that must match this group when it is loaded.
          */
         HalfHourIndex(
             const std::size_t &numOfSeconds,
             std::size_t inputWindowSeconds,
-            std::optional<std::string_view> indexType = std::nullopt,
-            std::optional<WeekdayGroup> weekdayGroup = std::nullopt
+            std::optional<std::string_view> indexType = std::nullopt
         );
 
         // DESTRUCTOR
@@ -305,12 +259,6 @@ namespace Core {
          */
         static constexpr std::string_view INX_TYPE_MAGNITUDE = "m";
         static constexpr std::string_view INX_TYPE_DIRECTION = "d";
-
-        /**
-         * @brief Directory, under an index type, that holds one subdirectory per weekday group.
-         * Keeps weekday-group indexes apart from the all-week index files of the same type.
-         */
-        static constexpr std::string_view WEEKDAY_GROUPS_DIRECTORY = "weekdays";
 
         // METHODS
 
@@ -349,26 +297,23 @@ namespace Core {
          *
          * @param numOfSeconds Any second inside the segment, measured from the market open.
          * @param inputWindowSeconds Input window configuration the index was built for.
-         * @param weekdayGroup Weekday group of the index; nullopt for the all-week index. A weekday-group
-         * index also needs a manifest that matches the group (checked, with a warning when it does not).
          * @return true if all three files are present.
          */
         static bool FilesExist(
             std::size_t numOfSeconds,
             std::size_t inputWindowSeconds,
-            std::optional<std::string_view> indexType = std::nullopt,
-            const std::optional<WeekdayGroup> &weekdayGroup = std::nullopt
+            std::optional<std::string_view> indexType = std::nullopt
         );
 
         /**
-         * @brief Deletes every file of one segment's index (index, metadata, normalization, manifest),
+         * @brief Deletes every file of one segment's index (index, metadata, normalization),
          * so it can be rebuilt from scratch. Missing files are ignored.
+         * @throws std::filesystem::filesystem_error If a file cannot be removed; rebuilding must stop.
          */
         static void DeleteFiles(
             std::size_t numOfSeconds,
             std::size_t inputWindowSeconds,
-            std::optional<std::string_view> indexType,
-            const std::optional<WeekdayGroup> &weekdayGroup = std::nullopt
+            std::optional<std::string_view> indexType
         );
 
         /**

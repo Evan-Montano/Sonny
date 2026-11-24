@@ -13,13 +13,12 @@ namespace Core {
          * 
          */
         const Common::DateTime BEGIN_DATE(2017, Common::FEB, 17);
-        // const Common::DateTime BEGIN_DATE(2026, Common::NOV, 2);
 
         /**
          * @brief End date for export data.
          * 
          */
-        const Common::DateTime END_DATE(2026, Common::NOV, 10);
+        const Common::DateTime END_DATE = Common::DateTime::GetCurrentDateTime();
 
         /**
         * @brief Total number of calendar days in the configured setup range.
@@ -30,14 +29,10 @@ namespace Core {
         const long TOTAL_DAYS = END_DATE - BEGIN_DATE + 1;
 
         /**
-         * @brief When true, "Update Indexes" keeps index segments whose files are already complete
-         * and builds only the missing ones (and weekday-group indexes whose manifest no longer
-         * matches their group). Set to false to rebuild every selected index from scratch, e.g. after
-         * changing BEGIN_DATE/END_DATE, the vector construction, or the direction temporal weights:
-         * reuse checks that the files are complete, not what they were built from.
-         *
-         * Either way, only the active input windows (Core::ActiveInputWindows) and the sub-indexes the
-         * direction search mode needs (Core::DIRECTION_SEARCH_MODE) are touched.
+         * @brief When true, "Update Indexes" reuses complete magnitude/direction pairs and rebuilds
+         * missing or incomplete pairs. Set to false to rebuild every active input window from scratch
+         * after changing the source records, date range, vector construction, or temporal weights.
+         * Completeness checks do not track what the indexes were built from.
          */
         inline constexpr bool REUSE_EXISTING_INDEXES = false;
 

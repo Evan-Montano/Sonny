@@ -6,6 +6,7 @@
 #include "mqttwrapper.hpp"
 #include "simplecurlwrapper.hpp"
 #include "../common/jsonutil.hpp"
+#include "../common/datetime.hpp"
 #include "../common/logger.hpp"
 #include "../common/secretstore.hpp"
 #include "webull/marketdata.pb.h"
@@ -13,7 +14,6 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
-#include <nlohmann/json.hpp>
 
 #include <charconv>
 #include <cmath>
@@ -207,8 +207,7 @@ namespace Client {
         /* ========================================================================================================== */
 
         std::string UtcTimestamp() {
-            return std::format("{:%Y-%m-%dT%H:%M:%SZ}",
-                               std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
+            return Common::DateTime::GetCurrentDateTime(Common::TimeZone::UTC).ToString_UTC();
         }
 
         /* ========================================================================================================== */
@@ -264,8 +263,10 @@ namespace Client {
 
                 std::string code;
                 for (const char* key : {"code", "error_code"}) {
-                    nlohmann::json value;
-                    if (json.TryGet(key, value) && (value.is_number() || value.is_boolean())) code = value.dump();
+                    if (json.Contains(key)) {
+                        const Common::JsonUtility value = json.At(key);
+                        if (value.IsNumber() || value.IsBoolean()) code = value.ToString();
+                    }
                 }
 
                 std::string message;
@@ -457,10 +458,14 @@ namespace Client {
     /* ============================================================================================================== */
 
     std::string BuildWebullSubscriptionBody(const std::string& session_id) {
-        return nlohmann::json({
-            {"session_id", session_id}, {"symbols", {"SPY"}}, {"category", "US_ETF"},
-            {"sub_types", {"QUOTE"}}, {"grab", "true"}, {"overnight_required", false}
-        }).dump(-1, ' ', false, nlohmann::json::error_handler_t::strict);
+        Common::JsonUtility body;
+        body.Set("session_id", session_id);
+        body.Set("symbols", std::vector<std::string>{"SPY"});
+        body.Set("category", "US_ETF");
+        body.Set("sub_types", std::vector<std::string>{"QUOTE"});
+        body.Set("grab", "true");
+        body.Set("overnight_required", false);
+        return body.ToString();
     }
 
     /* ============================================================================================================== */

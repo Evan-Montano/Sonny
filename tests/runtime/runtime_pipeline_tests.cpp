@@ -93,21 +93,13 @@ TEST(MarketClockTests, ClampsAfterHoursToTheLastSessionSecond) {
     EXPECT_EQ(Runtime::GetSecondsSinceMarketOpen(closeMs), Runtime::SESSION_SECONDS - 1);
 }
 
-TEST(MarketClockTests, NewYorkWeekdayFollowsTheEasternDateAcrossDst) {
-    const auto eastern = [](const std::uint16_t year, const std::uint8_t month, const std::uint8_t day, const std::uint8_t hour, const std::uint8_t minute) {
-        return static_cast<std::int64_t>(Common::DateTime(year, month, day, hour, minute, 0, true).GetTimestamp()) * 1000;
-    };
-
-    EXPECT_EQ(Runtime::GetNewYorkWeekday(THURSDAY_OPEN_MS), std::chrono::Thursday);
-    EXPECT_EQ(Runtime::GetNewYorkWeekday(SUMMER_MONDAY_OPEN_MS), std::chrono::Monday);
-
-    // Late evening in New York is already the next day in UTC; the Eastern date decides.
-    EXPECT_EQ(Runtime::GetNewYorkWeekday(eastern(2026, Common::MAR, 9, 22, 30)), std::chrono::Monday);  // EDT, day after DST began
-    EXPECT_EQ(Runtime::GetNewYorkWeekday(eastern(2026, Common::JAN, 5, 23, 59)), std::chrono::Monday);  // EST
-    EXPECT_EQ(Runtime::GetNewYorkWeekday(eastern(2026, Common::NOV, 2, 21, 0)), std::chrono::Monday);   // day after DST ended
-
-    // 2026-03-10 02:30 UTC is Monday 22:30 EDT.
-    EXPECT_EQ(Runtime::GetNewYorkWeekday(1773109800LL * 1000), std::chrono::Monday);
+TEST(MarketClockTests, SignedMillisecondsKeepTheSessionBoundaryBeforeTheEpoch) {
+    const Common::DateTime open(1969, Common::DEC, 29, 9, 30, 0, Common::TimeZone::NewYork);
+    const auto timestamp = open.GetTimestampMilliseconds();
+    EXPECT_FALSE(Runtime::GetSecondsSinceMarketOpen(timestamp - 1).has_value());
+    EXPECT_EQ(Runtime::GetSecondsSinceMarketOpen(timestamp), 0u);
+    EXPECT_EQ(Runtime::GetSecondsSinceMarketOpen(timestamp + 999), 0u);
+    EXPECT_EQ(Runtime::GetSecondsSinceMarketOpen(timestamp + 1000), 1u);
 }
 
 TEST(MarketClockTests, WindowStartRejectsWindowsThatReachIntoPreMarket) {
@@ -414,8 +406,8 @@ TEST(ForecastTests, RejectsEmptyMatches) {
  */
 class PredictionExperimentTests : public ::testing::Test {
 protected:
-    static constexpr Core::DirectionSearchMode ALL_DAYS = Core::DirectionSearchMode::AllDays;
-
+    static constexpr std::size_t WINDOW = Core::INPUT_WINDOW_CONFIGURATIONS.front();
+    static constexpr std::size_t OTHER_WINDOW = Core::INPUT_WINDOW_CONFIGURATIONS[1];
     static constexpr std::size_t SEGMENT_COUNT = Core::SessionMultiIndex::SEGMENT_COUNT;
     static constexpr std::size_t SECONDS_PER_SEGMENT = Core::SessionMultiIndex::SECONDS_PER_SEGMENT;
 
@@ -473,10 +465,7 @@ protected:
      * @brief Mirrors Setup::ExecuteUpdateIndexes for one input window: every segment gets its own
      * normalization parameters and the windows that start inside it, newest day first.
      */
-    void BuildIndexes(
-        const std::size_t inputWindowSeconds,
-        const Core::HalfHourMultiIndex::SubIndexSelection& subIndexes = {}
-    ) const {
+    void BuildIndexes(const std::size_t inputWindowSeconds) const {
         for (std::size_t segment = 0; segment < SEGMENT_COUNT; ++segment) {
             const std::size_t segmentOffset = segment * SECONDS_PER_SEGMENT;
 
@@ -488,19 +477,17 @@ protected:
                 );
             };
 
-            Core::HalfHourMultiIndex index(segmentOffset, inputWindowSeconds, subIndexes);
+            Core::HalfHourMultiIndex index(segmentOffset, inputWindowSeconds);
 
-            if (subIndexes.magnitude) {
-                Core::NormalizationAccumulator accumulator{};
-                for (const auto& [date, records] : days_) {
-                    for (Core::MLRecord record : segmentOf(records)) {
-                        record.mid_delta = std::abs(record.mid_delta);
-                        accumulator.AddRecord(record);
-                    }
+            Core::NormalizationAccumulator accumulator{};
+            for (const auto& [date, records] : days_) {
+                for (Core::MLRecord record : segmentOf(records)) {
+                    record.mid_delta = std::abs(record.mid_delta);
+                    accumulator.AddRecord(record);
                 }
-
-                index.SetNormalizationParameters(accumulator.GetParameters());
             }
+
+            index.SetNormalizationParameters(accumulator.GetParameters());
 
             for (auto day = days_.rbegin(); day != days_.rend(); ++day) {
                 std::vector<Core::MLRecord> records = segmentOf(day->second);
@@ -572,74 +559,74 @@ protected:
 };
 
 TEST_F(PredictionExperimentTests, SingleWindowModeForecastsOnlyTheSelectedWindow) {
-    BuildIndexes(10);
-    BuildIndexes(15);
+    BuildIndexes(WINDOW);
+    BuildIndexes(OTHER_WINDOW);
 
-    Runtime::PredictionExperiment experiment(Core::SelectInputWindows(false, 15), SEGMENT_COUNT, ALL_DAYS);
-    EXPECT_EQ(experiment.InputWindows(), std::vector<std::size_t>{15});
+    Runtime::PredictionExperiment experiment(Core::SelectInputWindows(false, OTHER_WINDOW), SEGMENT_COUNT);
+    EXPECT_EQ(experiment.InputWindows(), std::vector<std::size_t>{OTHER_WINDOW});
 
     const auto rows = experiment.RunSnapshot(MakeSnapshot(days_[0].second, 5000, 5000));
 
     // One consolidated row for the window, not one per half-hour segment.
     ASSERT_EQ(rows.size(), 1u);
-    ASSERT_TRUE(HasEveryForecast(rows[0].all_days));
+    ASSERT_TRUE(HasEveryForecast(rows[0]));
 
     // The cap is applied to the pooled matches: each forecast uses exactly its match count.
     for (std::size_t i = 0; i < Runtime::PREDICTION_MATCH_COUNTS.size(); ++i) {
-        EXPECT_EQ(rows[0].all_days[i]->historical_matches, Runtime::PREDICTION_MATCH_COUNTS[i]);
+        EXPECT_EQ(rows[0][i]->historical_matches, Runtime::PREDICTION_MATCH_COUNTS[i]);
     }
 }
 
 TEST_F(PredictionExperimentTests, AllWindowsModeForecastsEachConfiguredWindowIndependently) {
     // Only two of the configured windows have indexes.
-    BuildIndexes(10);
-    BuildIndexes(15);
+    BuildIndexes(WINDOW);
+    BuildIndexes(OTHER_WINDOW);
 
     const Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(days_[0].second, 5000, 5000);
 
-    Runtime::PredictionExperiment allWindows(Core::SelectInputWindows(true, 60), SEGMENT_COUNT, ALL_DAYS);
+    Runtime::PredictionExperiment allWindows(Core::SelectInputWindows(true, Core::MAX_INPUT_WINDOW_SECONDS), SEGMENT_COUNT);
     const auto rows = allWindows.RunSnapshot(snapshot);
 
     ASSERT_EQ(rows.size(), Core::INPUT_WINDOW_CONFIGURATIONS.size());
-    ASSERT_EQ(allWindows.InputWindows()[0], 10u);
-    ASSERT_EQ(allWindows.InputWindows()[1], 15u);
+    ASSERT_EQ(allWindows.InputWindows()[0], WINDOW);
+    ASSERT_EQ(allWindows.InputWindows()[1], OTHER_WINDOW);
 
     // Windows without indexes are unavailable; they do not stop or alter the others.
-    EXPECT_TRUE(HasEveryForecast(rows[0].all_days));
-    EXPECT_TRUE(HasEveryForecast(rows[1].all_days));
+    EXPECT_TRUE(HasEveryForecast(rows[0]));
+    EXPECT_TRUE(HasEveryForecast(rows[1]));
     for (std::size_t window = 2; window < rows.size(); ++window) {
-        EXPECT_TRUE(HasNoForecast(rows[window].all_days)) << allWindows.InputWindows()[window] << "s";
+        EXPECT_TRUE(HasNoForecast(rows[window])) << allWindows.InputWindows()[window] << "s";
     }
 
     // Each window's forecast is exactly what it produces when run alone.
     for (const std::size_t slot : {std::size_t{0}, std::size_t{1}}) {
-        Runtime::PredictionExperiment alone({allWindows.InputWindows()[slot]}, SEGMENT_COUNT, ALL_DAYS);
+        Runtime::PredictionExperiment alone({allWindows.InputWindows()[slot]}, SEGMENT_COUNT);
         const auto aloneRows = alone.RunSnapshot(snapshot);
 
         ASSERT_EQ(aloneRows.size(), 1u);
         for (std::size_t i = 0; i < Runtime::PREDICTION_MATCH_COUNTS.size(); ++i) {
-            ASSERT_TRUE(aloneRows[0].all_days[i].has_value());
-            EXPECT_EQ(aloneRows[0].all_days[i]->cumulative_changes, rows[slot].all_days[i]->cumulative_changes);
+            ASSERT_TRUE(aloneRows[0][i].has_value());
+            EXPECT_EQ(aloneRows[0][i]->cumulative_changes, rows[slot][i]->cumulative_changes);
         }
     }
 
     // The two windows are different searches, not copies of one result.
-    EXPECT_NE(rows[0].all_days.back()->cumulative_changes, rows[1].all_days.back()->cumulative_changes);
+    EXPECT_NE(rows[0].back()->cumulative_changes, rows[1].back()->cumulative_changes);
 }
 
 TEST_F(PredictionExperimentTests, MatchesComeFromAnySegmentWhateverTheTimeOfDay) {
-    BuildIndexes(10);
+    BuildIndexes(WINDOW);
 
     // The live window repeats a historical window from the 14:30-15:00 segment (segment 10),
     // but arrives a few minutes after the open (segment 0).
     const std::vector<Core::MLRecord>& day = days_[1].second;
     const std::size_t historicalLastSecond = 10 * SECONDS_PER_SEGMENT + 700;
 
-    Runtime::PredictionExperiment experiment({10}, SEGMENT_COUNT, ALL_DAYS);
+    Runtime::PredictionExperiment experiment({WINDOW}, SEGMENT_COUNT);
     const auto rows = experiment.RunSnapshot(MakeSnapshot(day, historicalLastSecond, 300));
 
     ASSERT_EQ(rows.size(), 1u);
-    ASSERT_TRUE(HasEveryForecast(rows[0].all_days));
+    ASSERT_TRUE(HasEveryForecast(rows[0]));
 
     // An exact magnitude match outweighs every other match by many orders of magnitude, so the
     // forecast's size is the size of what followed that window. It is only found if segment 10 was searched.
@@ -652,7 +639,7 @@ TEST_F(PredictionExperimentTests, MatchesComeFromAnySegmentWhateverTheTimeOfDay)
         }
 
         // A split direction vote zeroes the forecast; its size cannot be read back then.
-        const double forecast = rows[0].all_days.back()->cumulative_changes[i];
+        const double forecast = rows[0].back()->cumulative_changes[i];
         if (forecast != 0.0) {
             EXPECT_NEAR(std::abs(forecast), std::abs(cumulative), 1e-6) << Runtime::PredictionEvaluationHorizons[i] << "s";
             ++comparedHorizons;
@@ -663,44 +650,44 @@ TEST_F(PredictionExperimentTests, MatchesComeFromAnySegmentWhateverTheTimeOfDay)
 }
 
 TEST_F(PredictionExperimentTests, MissingSegmentsDoNotStopTheForecast) {
-    BuildIndexes(10);
+    BuildIndexes(WINDOW);
 
     // Segment 3 loses a file, and segment 8 loses everything.
-    std::filesystem::remove("storage/indexes/10s/d/1100-1130.index");
+    std::filesystem::remove(std::format("storage/indexes/{}s/d/1100-1130.index", WINDOW));
     for (const char* type : {"m", "d"}) {
-        std::filesystem::remove(std::format("storage/indexes/10s/{}/1330-1400.index", type));
-        std::filesystem::remove(std::format("storage/metadata/10s/{}/1330-1400.meta", type));
+        std::filesystem::remove(std::format("storage/indexes/{}s/{}/1330-1400.index", WINDOW, type));
+        std::filesystem::remove(std::format("storage/metadata/{}s/{}/1330-1400.meta", WINDOW, type));
     }
 
-    Runtime::PredictionExperiment experiment({10}, SEGMENT_COUNT, ALL_DAYS);
+    Runtime::PredictionExperiment experiment({WINDOW}, SEGMENT_COUNT);
     const auto rows = experiment.RunSnapshot(MakeSnapshot(days_[0].second, 5000, 5000));
 
     ASSERT_EQ(rows.size(), 1u);
-    EXPECT_TRUE(HasEveryForecast(rows[0].all_days));
+    EXPECT_TRUE(HasEveryForecast(rows[0]));
 
     // The missing segments were skipped, not recreated empty.
-    EXPECT_FALSE(std::filesystem::exists("storage/indexes/10s/d/1100-1130.index"));
-    EXPECT_FALSE(std::filesystem::exists("storage/indexes/10s/m/1330-1400.index"));
+    EXPECT_FALSE(std::filesystem::exists(std::format("storage/indexes/{}s/d/1100-1130.index", WINDOW)));
+    EXPECT_FALSE(std::filesystem::exists(std::format("storage/indexes/{}s/m/1330-1400.index", WINDOW)));
 }
 
 TEST_F(PredictionExperimentTests, WindowWithoutAnyIndexIsUnavailable) {
-    Runtime::PredictionExperiment experiment({10}, SEGMENT_COUNT, ALL_DAYS);
+    Runtime::PredictionExperiment experiment({WINDOW}, SEGMENT_COUNT);
 
     const Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(days_[0].second, 5000, 5000);
     const auto rows = experiment.RunSnapshot(snapshot);
 
     ASSERT_EQ(rows.size(), 1u);
-    EXPECT_TRUE(HasNoForecast(rows[0].all_days));
+    EXPECT_TRUE(HasNoForecast(rows[0]));
     EXPECT_FALSE(std::filesystem::exists("storage/indexes"));
 
     // Later cycles stay unavailable without failing.
-    EXPECT_TRUE(HasNoForecast(experiment.RunSnapshot(snapshot)[0].all_days));
+    EXPECT_TRUE(HasNoForecast(experiment.RunSnapshot(snapshot)[0]));
 }
 
 TEST_F(PredictionExperimentTests, SkipsSnapshotsOutsideTheSession) {
-    BuildIndexes(10);
+    BuildIndexes(WINDOW);
 
-    Runtime::PredictionExperiment experiment({10}, SEGMENT_COUNT, ALL_DAYS);
+    Runtime::PredictionExperiment experiment({WINDOW}, SEGMENT_COUNT);
 
     // Pre-market: no historical session to compare against.
     Runtime::LiveInputWindow::Snapshot preMarket = MakeSnapshot(days_[0].second, 5000, 5000);
@@ -710,7 +697,7 @@ TEST_F(PredictionExperimentTests, SkipsSnapshotsOutsideTheSession) {
     // A window that still reaches back before the open has no row filled in.
     const auto earlyRows = experiment.RunSnapshot(MakeSnapshot(days_[0].second, 5000, 5));
     ASSERT_EQ(earlyRows.size(), 1u);
-    EXPECT_TRUE(HasNoForecast(earlyRows[0].all_days));
+    EXPECT_TRUE(HasNoForecast(earlyRows[0]));
 }
 
 TEST_F(PredictionExperimentTests, RejectsAnUnconfiguredInputWindow) {
@@ -718,13 +705,13 @@ TEST_F(PredictionExperimentTests, RejectsAnUnconfiguredInputWindow) {
 }
 
 TEST_F(PredictionExperimentTests, RejectsALimitOfNoSegments) {
-    EXPECT_THROW(Runtime::PredictionExperiment({10}, 0), std::invalid_argument);
+    EXPECT_THROW(Runtime::PredictionExperiment({WINDOW}, 0), std::invalid_argument);
 }
 
 // === SEGMENT LIMIT AND PRELOAD === //
 
 TEST_F(PredictionExperimentTests, LimitedSegmentsAreTheOnesNearestTheTimeOfDay) {
-    BuildIndexes(10);
+    BuildIndexes(WINDOW);
 
     // The live window repeats a historical window from the 14:30-15:00 segment (segment 10).
     const std::vector<Core::MLRecord>& day = days_[1].second;
@@ -735,54 +722,54 @@ TEST_F(PredictionExperimentTests, LimitedSegmentsAreTheOnesNearestTheTimeOfDay) 
 
     // Eight segments in the last half hour are 12:00 to the close, which includes segment 10.
     {
-        Runtime::PredictionExperiment experiment({10}, 8, ALL_DAYS);
+        Runtime::PredictionExperiment experiment({WINDOW}, 8);
         const auto rows = experiment.RunSnapshot(MakeSnapshot(day, historicalLastSecond, lastHalfHour));
-        ASSERT_TRUE(HasEveryForecast(rows[0].all_days));
-        EXPECT_TRUE(FoundExactMatch(rows[0].all_days, day, historicalLastSecond));
+        ASSERT_TRUE(HasEveryForecast(rows[0]));
+        EXPECT_TRUE(FoundExactMatch(rows[0], day, historicalLastSecond));
     }
 
     // Eight segments after the open are 09:30 to 13:30, which does not.
     {
-        Runtime::PredictionExperiment experiment({10}, 8, ALL_DAYS);
+        Runtime::PredictionExperiment experiment({WINDOW}, 8);
         const auto rows = experiment.RunSnapshot(MakeSnapshot(day, historicalLastSecond, afterTheOpen));
-        ASSERT_TRUE(HasEveryForecast(rows[0].all_days));
-        EXPECT_FALSE(FoundExactMatch(rows[0].all_days, day, historicalLastSecond));
+        ASSERT_TRUE(HasEveryForecast(rows[0]));
+        EXPECT_FALSE(FoundExactMatch(rows[0], day, historicalLastSecond));
     }
 
     // A tighter limit late in the day still reaches one segment back.
     {
-        Runtime::PredictionExperiment experiment({10}, 4, ALL_DAYS);
+        Runtime::PredictionExperiment experiment({WINDOW}, 4);
         const auto rows = experiment.RunSnapshot(MakeSnapshot(day, historicalLastSecond, 11 * SECONDS_PER_SEGMENT + 100));
-        ASSERT_TRUE(HasEveryForecast(rows[0].all_days));
-        EXPECT_TRUE(FoundExactMatch(rows[0].all_days, day, historicalLastSecond));
+        ASSERT_TRUE(HasEveryForecast(rows[0]));
+        EXPECT_TRUE(FoundExactMatch(rows[0], day, historicalLastSecond));
     }
 }
 
 TEST_F(PredictionExperimentTests, LoadedSegmentsMoveWithTheSession) {
-    BuildIndexes(10);
+    BuildIndexes(WINDOW);
 
     const std::vector<Core::MLRecord>& day = days_[1].second;
     const std::size_t historicalLastSecond = 10 * SECONDS_PER_SEGMENT + 700;
 
-    Runtime::PredictionExperiment experiment({10}, 2, ALL_DAYS);
+    Runtime::PredictionExperiment experiment({WINDOW}, 2);
 
     // Early on, segment 10 is far outside the two loaded segments.
     auto rows = experiment.RunSnapshot(MakeSnapshot(day, historicalLastSecond, 300));
-    ASSERT_TRUE(HasEveryForecast(rows[0].all_days));
-    EXPECT_FALSE(FoundExactMatch(rows[0].all_days, day, historicalLastSecond));
+    ASSERT_TRUE(HasEveryForecast(rows[0]));
+    EXPECT_FALSE(FoundExactMatch(rows[0], day, historicalLastSecond));
 
     // Once the session reaches segment 10, the loaded pair has moved there.
     rows = experiment.RunSnapshot(MakeSnapshot(day, historicalLastSecond, 10 * SECONDS_PER_SEGMENT + 900));
-    ASSERT_TRUE(HasEveryForecast(rows[0].all_days));
-    EXPECT_TRUE(FoundExactMatch(rows[0].all_days, day, historicalLastSecond));
+    ASSERT_TRUE(HasEveryForecast(rows[0]));
+    EXPECT_TRUE(FoundExactMatch(rows[0], day, historicalLastSecond));
 }
 
 TEST_F(PredictionExperimentTests, PreloadReadsTheIndexesBeforeTheFirstSnapshot) {
-    BuildIndexes(10);
+    BuildIndexes(WINDOW);
 
     const Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(days_[0].second, 5000, 5000);
 
-    Runtime::PredictionExperiment preloaded({10}, 3, ALL_DAYS);
+    Runtime::PredictionExperiment preloaded({WINDOW}, 3);
     preloaded.Preload(snapshot.last_timestamp_ms);
 
     // With the index files gone, only an experiment that already holds them can forecast.
@@ -791,16 +778,16 @@ TEST_F(PredictionExperimentTests, PreloadReadsTheIndexesBeforeTheFirstSnapshot) 
 
     const auto rows = preloaded.RunSnapshot(snapshot);
     ASSERT_EQ(rows.size(), 1u);
-    EXPECT_TRUE(HasEveryForecast(rows[0].all_days));
+    EXPECT_TRUE(HasEveryForecast(rows[0]));
 
-    Runtime::PredictionExperiment notPreloaded({10}, 3, ALL_DAYS);
-    EXPECT_TRUE(HasNoForecast(notPreloaded.RunSnapshot(snapshot)[0].all_days));
+    Runtime::PredictionExperiment notPreloaded({WINDOW}, 3);
+    EXPECT_TRUE(HasNoForecast(notPreloaded.RunSnapshot(snapshot)[0]));
 }
 
 TEST_F(PredictionExperimentTests, PreloadBeforeTheOpenReadsTheOpeningSegments) {
-    BuildIndexes(10);
+    BuildIndexes(WINDOW);
 
-    Runtime::PredictionExperiment experiment({10}, 2, ALL_DAYS);
+    Runtime::PredictionExperiment experiment({WINDOW}, 2);
     experiment.Preload(THURSDAY_OPEN_MS - 60LL * 60 * 1000);
 
     std::filesystem::remove_all("storage/indexes");
@@ -809,215 +796,38 @@ TEST_F(PredictionExperimentTests, PreloadBeforeTheOpenReadsTheOpeningSegments) {
     // The first forecast of the session is served from what was preloaded.
     const auto rows = experiment.RunSnapshot(MakeSnapshot(days_[0].second, 5000, 300));
     ASSERT_EQ(rows.size(), 1u);
-    EXPECT_TRUE(HasEveryForecast(rows[0].all_days));
+    EXPECT_TRUE(HasEveryForecast(rows[0]));
 }
 
-// === WEEKDAY DIRECTION GROUPS === //
+TEST_F(PredictionExperimentTests, LoadedIndexesAndForecastsAreReusedAcrossTradingDays) {
+    constexpr std::size_t window = Core::DEFAULT_INPUT_WINDOW_SECONDS;
+    constexpr std::size_t lastSecond = 5000;
+    BuildIndexes(window);
 
-/**
- * @brief The prediction-experiment fixture with a full trading week of records: Monday 2026-08-31
- * to Friday 2026-09-04, oldest first.
- */
-class WeekdayExperimentTests : public PredictionExperimentTests {
-protected:
-    static constexpr std::size_t LIMIT = 3;
-    static constexpr std::size_t LIVE_SECOND = 5000;
+    Runtime::LiveInputWindow::Snapshot snapshot{
+        .records = std::vector<Core::MLRecord>(
+            days_[0].second.begin() + lastSecond + 1 - window,
+            days_[0].second.begin() + lastSecond + 1
+        ),
+        .last_timestamp_ms = THURSDAY_OPEN_MS + static_cast<std::int64_t>(lastSecond) * 1000
+    };
+    Runtime::PredictionExperiment experiment({window}, 3);
+    experiment.Preload(snapshot.last_timestamp_ms);
 
-    void SetUp() override {
-        PredictionExperimentTests::SetUp();
-
-        days_ = {
-            {"2026-08-31", MakeDay(5)},
-            {"2026-09-01", MakeDay(1)},
-            {"2026-09-02", MakeDay(2)},
-            {"2026-09-03", MakeDay(3)},
-            {"2026-09-04", MakeDay(4)},
-        };
-
-        for (const auto& [date, records] : days_) {
-            std::ofstream file(std::filesystem::path("storage/records") / (date + ".rec"), std::ios::binary | std::ios::trunc);
-            file.write(
-                reinterpret_cast<const char*>(records.data()),
-                static_cast<std::streamsize>(records.size() * sizeof(Core::MLRecord))
-            );
-        }
-    }
-
-    static Core::HalfHourMultiIndex::SubIndexSelection WithGroups(std::vector<Core::WeekdayGroup> groups) {
-        return Core::HalfHourMultiIndex::SubIndexSelection{.weekday_groups = std::move(groups)};
-    }
-
-    static std::vector<Core::WeekdayGroup> AllGroups() {
-        return {Core::DIRECTION_WEEKDAY_GROUPS.begin(), Core::DIRECTION_WEEKDAY_GROUPS.end()};
-    }
-
-    /**
-     * @brief The same live window, stamped LIVE_SECOND seconds after the open of a New York session date.
-     */
-    Runtime::LiveInputWindow::Snapshot SnapshotOn(const std::uint8_t month, const std::uint8_t day) const {
-        Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(days_[3].second, LIVE_SECOND, LIVE_SECOND);
-        const Common::DateTime open(2026, month, day, 9, 30, 0, true);
-        snapshot.last_timestamp_ms = (static_cast<std::int64_t>(open.GetTimestamp()) + static_cast<std::int64_t>(LIVE_SECOND)) * 1000;
-        return snapshot;
-    }
-
-    Runtime::PredictionExperiment::WindowForecasts Run(
-        const Core::DirectionSearchMode mode,
-        const Runtime::LiveInputWindow::Snapshot& snapshot
-    ) const {
-        Runtime::PredictionExperiment experiment({10}, LIMIT, mode);
-        const auto rows = experiment.RunSnapshot(snapshot);
-        EXPECT_EQ(rows.size(), 1u);
-        return rows.empty() ? Runtime::PredictionExperiment::WindowForecasts{} : rows[0];
-    }
-
-    static void ExpectSameForecasts(
-        const Runtime::PredictionExperiment::ForecastRow& actual,
-        const Runtime::PredictionExperiment::ForecastRow& expected
-    ) {
-        for (std::size_t i = 0; i < Runtime::PREDICTION_MATCH_COUNTS.size(); ++i) {
-            ASSERT_TRUE(actual[i].has_value() && expected[i].has_value()) << Runtime::PREDICTION_MATCH_COUNTS[i];
-            EXPECT_EQ(actual[i]->historical_matches, expected[i]->historical_matches);
-            EXPECT_EQ(actual[i]->as_of_timestamp_ms, expected[i]->as_of_timestamp_ms);
-            EXPECT_EQ(actual[i]->cumulative_changes, expected[i]->cumulative_changes) << Runtime::PREDICTION_MATCH_COUNTS[i];
-        }
-    }
-
-    const Core::WeekdayGroup MONDAY = Core::DIRECTION_WEEKDAY_GROUPS[0];
-    const Core::WeekdayGroup TUESDAY = Core::DIRECTION_WEEKDAY_GROUPS[1];
-};
-
-TEST_F(WeekdayExperimentTests, LiveQueriesSearchTheCurrentWeekdaysGroup) {
-    BuildIndexes(10, WithGroups(AllGroups()));
-
-    Runtime::PredictionExperiment experiment({10}, LIMIT, Core::DirectionSearchMode::WeekdayGroups);
-
-    const auto monday = experiment.RunSnapshot(SnapshotOn(Common::AUG, 31));
-    ASSERT_EQ(monday.size(), 1u);
-    EXPECT_EQ(monday[0].weekday_group_name, "Monday");
-    EXPECT_TRUE(HasEveryForecast(monday[0].weekday_group));
-    EXPECT_TRUE(HasNoForecast(monday[0].all_days));
-
-    // The next weekday's snapshot releases Monday's indexes and loads Tuesday's: Monday's files are
-    // gone, and the forecast is exactly what a fresh Tuesday search produces.
-    std::filesystem::remove_all("storage/indexes/10s/d/weekdays/Monday");
-
-    const auto tuesday = experiment.RunSnapshot(SnapshotOn(Common::SEP, 1));
-    ASSERT_EQ(tuesday.size(), 1u);
-    EXPECT_EQ(tuesday[0].weekday_group_name, "Tuesday");
-    EXPECT_TRUE(HasNoForecast(tuesday[0].all_days));
-    ExpectSameForecasts(tuesday[0].weekday_group, Run(Core::DirectionSearchMode::WeekdayGroups, SnapshotOn(Common::SEP, 1)).weekday_group);
-}
-
-TEST_F(WeekdayExperimentTests, WeekdayStreamIsTheBaselineRestrictedToItsGroupsDays) {
-    // Magnitude from every day, plus Monday's weekday direction index.
-    BuildIndexes(10, Core::HalfHourMultiIndex::SubIndexSelection{.all_days_direction = false, .weekday_groups = {MONDAY}});
-
-    // An all-week direction index built from Monday's session only.
-    const auto week = days_;
-    days_ = {week[0]};
-    BuildIndexes(10, Core::HalfHourMultiIndex::SubIndexSelection{.magnitude = false, .all_days_direction = true});
-    days_ = week;
-
-    // Same query, weighting, match weighting, match counts, and forecast: only the days differ.
-    const auto snapshot = SnapshotOn(Common::AUG, 31);
-    const auto weekday = Run(Core::DirectionSearchMode::WeekdayGroups, snapshot);
-    const auto baselineOnMondays = Run(Core::DirectionSearchMode::AllDays, snapshot);
-
-    EXPECT_EQ(weekday.weekday_group_name, "Monday");
-    ExpectSameForecasts(weekday.weekday_group, baselineOnMondays.all_days);
-}
-
-TEST_F(WeekdayExperimentTests, CompareModeProducesTwoIndependentStreamsFromOneQuery) {
-    BuildIndexes(10, WithGroups(AllGroups()));
-
-    const auto snapshot = SnapshotOn(Common::SEP, 1);
-    const auto compare = Run(Core::DirectionSearchMode::Compare, snapshot);
-
-    EXPECT_EQ(compare.weekday_group_name, "Tuesday");
-
-    // Each stream is exactly what its mode produces alone: nothing is merged between them.
-    ExpectSameForecasts(compare.all_days, Run(Core::DirectionSearchMode::AllDays, snapshot).all_days);
-    ExpectSameForecasts(compare.weekday_group, Run(Core::DirectionSearchMode::WeekdayGroups, snapshot).weekday_group);
-
-    // And they are different searches, not copies of one result.
-    std::vector<std::array<double, Runtime::PredictionEvaluationHorizons.size()>> allDays, weekday;
-    for (std::size_t i = 0; i < Runtime::PREDICTION_MATCH_COUNTS.size(); ++i) {
-        allDays.push_back(compare.all_days[i]->cumulative_changes);
-        weekday.push_back(compare.weekday_group[i]->cumulative_changes);
-    }
-    EXPECT_NE(allDays, weekday);
-}
-
-TEST_F(WeekdayExperimentTests, MissingWeekdayIndexesNeverFallBackToTheAllWeekIndexes) {
-    // Only Monday has weekday indexes.
-    BuildIndexes(10, WithGroups({MONDAY}));
-
-    const auto tuesdayWeekday = Run(Core::DirectionSearchMode::WeekdayGroups, SnapshotOn(Common::SEP, 1));
-    EXPECT_EQ(tuesdayWeekday.weekday_group_name, "Tuesday");
-    EXPECT_TRUE(HasNoForecast(tuesdayWeekday.weekday_group));
-    EXPECT_TRUE(HasNoForecast(tuesdayWeekday.all_days));
-
-    // Compare searches the same segments for both streams, so neither runs without Tuesday's indexes.
-    const auto tuesdayCompare = Run(Core::DirectionSearchMode::Compare, SnapshotOn(Common::SEP, 1));
-    EXPECT_TRUE(HasNoForecast(tuesdayCompare.weekday_group));
-    EXPECT_TRUE(HasNoForecast(tuesdayCompare.all_days));
-
-    // Nothing was created for the missing group.
-    EXPECT_FALSE(std::filesystem::exists("storage/indexes/10s/d/weekdays/Tuesday"));
-
-    // Monday still has both.
-    const auto mondayCompare = Run(Core::DirectionSearchMode::Compare, SnapshotOn(Common::AUG, 31));
-    EXPECT_TRUE(HasEveryForecast(mondayCompare.weekday_group));
-    EXPECT_TRUE(HasEveryForecast(mondayCompare.all_days));
-
-    // AllDays mode does not need any weekday index.
-    const auto tuesdayAllDays = Run(Core::DirectionSearchMode::AllDays, SnapshotOn(Common::SEP, 1));
-    EXPECT_TRUE(HasEveryForecast(tuesdayAllDays.all_days));
-    EXPECT_TRUE(HasNoForecast(tuesdayAllDays.weekday_group));
-    EXPECT_TRUE(tuesdayAllDays.weekday_group_name.empty());
-}
-
-TEST_F(WeekdayExperimentTests, IndexesBuiltForAnotherGroupingAreNotSearched) {
-    BuildIndexes(10, WithGroups(AllGroups()));
-
-    // "Tuesday" now also means Wednesday, so the Tuesday-only indexes on disk are stale.
-    const auto regrouped = std::to_array<Core::WeekdayGroup>({
-        {"Monday", {std::chrono::Monday}},
-        {"Tuesday", {std::chrono::Tuesday, std::chrono::Wednesday}},
-        {"ThursdayFriday", {std::chrono::Thursday, std::chrono::Friday}},
-    });
-
-    Runtime::PredictionExperiment experiment({10}, LIMIT, Core::DirectionSearchMode::WeekdayGroups, regrouped);
-    const auto rows = experiment.RunSnapshot(SnapshotOn(Common::SEP, 1));
-
-    ASSERT_EQ(rows.size(), 1u);
-    EXPECT_EQ(rows[0].weekday_group_name, "Tuesday");
-    EXPECT_TRUE(HasNoForecast(rows[0].weekday_group));
-}
-
-TEST_F(WeekdayExperimentTests, RejectsInvalidWeekdayGroups) {
-    const auto overlapping = std::to_array<Core::WeekdayGroup>({
-        {"Early", {std::chrono::Monday, std::chrono::Tuesday, std::chrono::Wednesday}},
-        {"Late", {std::chrono::Wednesday, std::chrono::Thursday, std::chrono::Friday}},
-    });
-
-    EXPECT_THROW(Runtime::PredictionExperiment({10}, LIMIT, Core::DirectionSearchMode::Compare, overlapping), std::invalid_argument);
-}
-
-TEST_F(WeekdayExperimentTests, PreloadOnAWeekendWaitsForTheFirstTradingWeekday) {
-    BuildIndexes(10, WithGroups(AllGroups()));
-
-    Runtime::PredictionExperiment experiment({10}, LIMIT, Core::DirectionSearchMode::Compare);
-    const Common::DateTime saturday(2026, Common::SEP, 5, 12, 0, 0, true);
-    EXPECT_NO_THROW(experiment.Preload(static_cast<std::int64_t>(saturday.GetTimestamp()) * 1000));
-
-    // Nothing was held, so with the files gone there is nothing to search.
+    // A later trading day must use the same loaded indexes, even when the files are gone.
     std::filesystem::remove_all("storage/indexes");
     std::filesystem::remove_all("storage/metadata");
+    const auto thursday = experiment.RunSnapshot(snapshot);
+    ASSERT_EQ(thursday.size(), 1u);
+    ASSERT_TRUE(HasEveryForecast(thursday[0]));
 
-    const auto rows = experiment.RunSnapshot(SnapshotOn(Common::AUG, 31));
-    ASSERT_EQ(rows.size(), 1u);
-    EXPECT_TRUE(HasNoForecast(rows[0].weekday_group));
-    EXPECT_TRUE(HasNoForecast(rows[0].all_days));
+    const Common::DateTime mondayOpen(2026, Common::SEP, 7, 9, 30, 0, true);
+    snapshot.last_timestamp_ms = (static_cast<std::int64_t>(mondayOpen.GetTimestamp()) + lastSecond) * 1000;
+    const auto monday = experiment.RunSnapshot(snapshot);
+    ASSERT_EQ(monday.size(), 1u);
+    ASSERT_TRUE(HasEveryForecast(monday[0]));
+    for (std::size_t i = 0; i < Runtime::PREDICTION_MATCH_COUNTS.size(); ++i) {
+        EXPECT_EQ(monday[0][i]->as_of_timestamp_ms, snapshot.last_timestamp_ms);
+        EXPECT_EQ(monday[0][i]->cumulative_changes, thursday[0][i]->cumulative_changes);
+    }
 }

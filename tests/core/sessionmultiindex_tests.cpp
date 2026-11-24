@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <limits>
 #include <optional>
 #include <span>
@@ -31,7 +32,7 @@ namespace {
     using Core::HalfHourIndex;
     using Core::SessionMultiIndex;
 
-    constexpr std::size_t WINDOW = 10;
+    constexpr std::size_t WINDOW = Core::INPUT_WINDOW_CONFIGURATIONS.front();
 
     std::array<char, 8> Day(const std::string& yyyymmdd) {
         std::array<char, 8> day{};
@@ -162,11 +163,11 @@ TEST(InputWindowSelectionTests, SingleWindowModeRejectsAnUnconfiguredWindow) {
 }
 
 TEST(InputWindowSelectionTests, AllWindowsModeSelectsEveryConfiguredWindowInOrder) {
-    const std::vector<std::size_t> expected(Core::INPUT_WINDOW_CONFIGURATIONS.begin(), Core::INPUT_WINDOW_CONFIGURATIONS.end());
+    const std::vector<std::size_t> expected{20, 30, 45};
 
     // The selected window is ignored while every window runs.
-    EXPECT_EQ(Core::SelectInputWindows(true, 60), expected);
-    EXPECT_EQ(Core::SelectInputWindows(true, 10), expected);
+    EXPECT_EQ(Core::SelectInputWindows(true, Core::INPUT_WINDOW_CONFIGURATIONS.back()), expected);
+    EXPECT_EQ(Core::SelectInputWindows(true, Core::INPUT_WINDOW_CONFIGURATIONS.front()), expected);
 }
 
 TEST(InputWindowSelectionTests, ActiveWindowsFollowTheConfiguredSettings) {
@@ -490,8 +491,8 @@ TEST_F(SessionMultiIndexTests, MagnitudeAndDirectionAreRankedIndependently) {
 }
 
 TEST_F(SessionMultiIndexTests, MagnitudeDistancesAreComparedOnOneScaleAcrossSegments) {
-    // Segment 1 (stddev 1) holds the window that is genuinely nearer: squared raw distance 10 × 0.2² = 0.4.
-    // Segment 4 (stddev 10) holds a farther one: squared raw distance 10 × 0.5² = 2.5.
+    // Segment 1 (stddev 1) holds the window that is genuinely nearer: squared raw distance WINDOW × 0.2².
+    // Segment 4 (stddev 10) holds a farther one: squared raw distance WINDOW × 0.5².
     const Core::NormalizationParameters quiet = MakeParameters(0.0, 1.0);
     const Core::NormalizationParameters volatileSegment = MakeParameters(0.0, 10.0);
 
@@ -507,8 +508,8 @@ TEST_F(SessionMultiIndexTests, MagnitudeDistancesAreComparedOnOneScaleAcrossSegm
         const float quietDistance = quietIndex.Query(Flat(1.0f), 1).MagnitudeResults.front().distance;
         const float volatileDistance = volatileIndex.Query(Flat(1.0f), 1).MagnitudeResults.front().distance;
 
-        EXPECT_NEAR(quietDistance, 0.4f, 1e-4f);
-        EXPECT_NEAR(volatileDistance, 0.025f, 1e-5f);
+        EXPECT_NEAR(quietDistance, WINDOW * 0.2f * 0.2f, 1e-4f);
+        EXPECT_NEAR(volatileDistance, WINDOW * 0.05f * 0.05f, 1e-5f);
         ASSERT_LT(volatileDistance, quietDistance);
     }
 
@@ -519,14 +520,14 @@ TEST_F(SessionMultiIndexTests, MagnitudeDistancesAreComparedOnOneScaleAcrossSegm
     EXPECT_EQ(SegmentOf(results.MagnitudeResults[0]), 1u);
     EXPECT_EQ(SegmentOf(results.MagnitudeResults[1]), 4u);
 
-    // On the common scale the two distances keep their raw proportion (2.5 / 0.4)...
+    // On the common scale the two distances keep their raw proportion (0.5² / 0.2²)...
     EXPECT_NEAR(results.MagnitudeResults[1].distance / results.MagnitudeResults[0].distance, 6.25f, 1e-3f);
 
     // ...and are expressed in units of the pooled standard deviation.
     const std::vector<Core::NormalizationParameters> parameters{quiet, volatileSegment};
     const double reference = SessionMultiIndex::PooledStandardDeviation(parameters);
-    EXPECT_NEAR(results.MagnitudeResults[0].distance, 0.4 / (reference * reference), 1e-6);
-    EXPECT_NEAR(results.MagnitudeResults[1].distance, 2.5 / (reference * reference), 1e-6);
+    EXPECT_NEAR(results.MagnitudeResults[0].distance, WINDOW * 0.2 * 0.2 / (reference * reference), 1e-6);
+    EXPECT_NEAR(results.MagnitudeResults[1].distance, WINDOW * 0.5 * 0.5 / (reference * reference), 1e-6);
 }
 
 TEST_F(SessionMultiIndexTests, SegmentNormalizationMeansDoNotAffectTheRanking) {
@@ -634,7 +635,7 @@ TEST_F(SessionMultiIndexTests, CommonMagnitudeScaleFollowsTheLoadedSegments) {
 
     // Alone, a segment is its own reference: its distances are exactly what it reports itself.
     index.LoadSegments(Segments(4, 4));
-    EXPECT_NEAR(index.Query(Flat(1.0f), 1).MagnitudeResults.front().distance, 0.025f, 1e-5f);
+    EXPECT_NEAR(index.Query(Flat(1.0f), 1).MagnitudeResults.front().distance, WINDOW * 0.05f * 0.05f, 1e-5f);
 
     // With a second segment loaded, both are re-expressed in units of their pooled standard deviation.
     index.LoadSegments(std::vector<std::size_t>{1, 4});
@@ -645,7 +646,7 @@ TEST_F(SessionMultiIndexTests, CommonMagnitudeScaleFollowsTheLoadedSegments) {
     const auto results = index.Query(Flat(1.0f), 2);
     ASSERT_EQ(results.MagnitudeResults.size(), 2u);
     EXPECT_EQ(SegmentOf(results.MagnitudeResults[0]), 1u);
-    EXPECT_NEAR(results.MagnitudeResults[1].distance, 2.5 / (reference * reference), 1e-6);
+    EXPECT_NEAR(results.MagnitudeResults[1].distance, WINDOW * 0.5 * 0.5 / (reference * reference), 1e-6);
 }
 
 TEST_F(SessionMultiIndexTests, RejectsSegmentsOutsideTheSession) {
@@ -702,8 +703,8 @@ TEST_F(SessionMultiIndexTests, MissingSegmentsAreSkippedAndNeverCreated) {
     }
 
     // Constructing an index for a missing segment would save an empty one on destruction.
-    EXPECT_FALSE(std::filesystem::exists("storage/indexes/10s/m/1000-1030.index"));
-    EXPECT_FALSE(std::filesystem::exists("storage/indexes/10s/d/1530-1600.index"));
+    EXPECT_FALSE(std::filesystem::exists(std::format("storage/indexes/{}s/m/1000-1030.index", WINDOW)));
+    EXPECT_FALSE(std::filesystem::exists(std::format("storage/indexes/{}s/d/1530-1600.index", WINDOW)));
     EXPECT_FALSE(Core::HalfHourMultiIndex::FilesExist(1 * SessionMultiIndex::SECONDS_PER_SEGMENT, WINDOW));
 }
 
@@ -712,7 +713,7 @@ TEST_F(SessionMultiIndexTests, SegmentMissingOneOfItsFilesIsSkippedWhole) {
     BuildSegment(1, {{.records = Flat(1.1f)}});
 
     // Without its direction index, segment 1 contributes to neither sub-index.
-    std::filesystem::remove("storage/indexes/10s/d/1000-1030.index");
+    std::filesystem::remove(std::format("storage/indexes/{}s/d/1000-1030.index", WINDOW));
 
     const SessionMultiIndex index = LoadEverySegment();
     EXPECT_EQ(index.LoadedSegmentCount(), 1u);
@@ -729,7 +730,7 @@ TEST_F(SessionMultiIndexTests, SegmentThatFailsToLoadIsSkipped) {
 
     // Replace segment 1's magnitude index with one built for another input window.
     faiss::IndexFlatL2 incompatibleIndex(static_cast<int>(WINDOW) + 5);
-    faiss::write_index(&incompatibleIndex, "storage/indexes/10s/m/1000-1030.index");
+    faiss::write_index(&incompatibleIndex, std::format("storage/indexes/{}s/m/1000-1030.index", WINDOW).c_str());
 
     const SessionMultiIndex index = LoadEverySegment();
     EXPECT_EQ(index.LoadedSegmentCount(), 1u);

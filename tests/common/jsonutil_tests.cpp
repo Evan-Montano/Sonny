@@ -422,3 +422,23 @@ TEST(JsonUtilityToStringTests, ReturnsNestedJsonString)
         R"({"name":"Sonny"})"
     );
 }
+TEST(JsonUtilityInspectionTests, DistinguishesSafeDiagnosticTypesWithoutNumericConversion) {
+    const Common::JsonUtility json(R"({"large":18446744073709551615,"negative":-5,"float":1.25,"boolean":false,"string":"secret","null":null,"array":[],"object":{}})");
+    EXPECT_TRUE(json.IsObject());
+    for (const std::string key : {"large", "negative", "float"}) {
+        EXPECT_TRUE(json.At(key).IsNumber());
+        EXPECT_FALSE(json.At(key).IsBoolean());
+    }
+    EXPECT_EQ(json.At("large").ToString(), "18446744073709551615");
+    EXPECT_TRUE(json.At("boolean").IsBoolean());
+    EXPECT_FALSE(json.At("boolean").IsNumber());
+    EXPECT_EQ(json.At("boolean").ToString(), "false");
+    EXPECT_TRUE(json.At("string").IsString());
+    EXPECT_FALSE(json.At("string").IsNumber());
+    EXPECT_TRUE(json.At("null").IsNull());
+    EXPECT_TRUE(json.At("array").IsArray());
+    EXPECT_TRUE(json.At("object").IsObject());
+    EXPECT_TRUE(json.Contains("null"));
+    EXPECT_FALSE(json.Contains("missing"));
+    EXPECT_FALSE(json.At("null").Contains("key"));
+}

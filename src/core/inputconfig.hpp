@@ -17,10 +17,9 @@ namespace Core {
      * @brief Every input-window length (in seconds) the runtime compares side by side.
      * Each length has its own set of indexes under storage/indexes/<N>s/.
      */
-    inline constexpr std::array<std::size_t, 6> INPUT_WINDOW_CONFIGURATIONS{
-        // 10, 15, 20, 30, 45, 60
-        10, 15, 20, 30, 45, 60
-    };
+    inline constexpr auto INPUT_WINDOW_CONFIGURATIONS = std::to_array<std::size_t>({
+        20, 30, 45
+    });
 
     /**
      * @brief Longest configured window, used as the live buffer size when every window is active.
@@ -43,7 +42,7 @@ namespace Core {
 
     static_assert(
         IsSupportedInputWindow(DEFAULT_INPUT_WINDOW_SECONDS),
-        "INPUT_WINDOW_SECONDS must be 10, 15, 20, 30, 45, or 60."
+        "DEFAULT_INPUT_WINDOW_SECONDS must be an entry in INPUT_WINDOW_CONFIGURATIONS."
     );
 
     /**
@@ -61,7 +60,7 @@ namespace Core {
      * @brief The one input window the live runtime uses while USE_ALL_INPUT_WINDOWS is false.
      * Must be an entry in INPUT_WINDOW_CONFIGURATIONS.
      */
-    inline constexpr std::size_t SELECTED_INPUT_WINDOW_SECONDS = 20;
+    inline constexpr std::size_t SELECTED_INPUT_WINDOW_SECONDS = DEFAULT_INPUT_WINDOW_SECONDS;
 
     static_assert(
         IsSupportedInputWindow(SELECTED_INPUT_WINDOW_SECONDS),
@@ -87,10 +86,8 @@ namespace Core {
      * Each index stores every overlapping window in full, so memory grows with the input window.
      * With the current corpus (about 4.09 million windows per segment) one segment costs roughly
      * 34 MB per second of input window for its two indexes and their metadata:
-     * about 2.1 GB at 60s, 1.1 GB at 30s, and 0.4 GB at 10s. Multiply by the selected per-window
+     * about 1.6 GB at 45s, 1.1 GB at 30s, and 0.7 GB at 20s. Multiply by the selected per-window
      * limit and the number of active windows to get the total. Values above 13 behave as 13.
-     * A weekday-group direction index holds only its group's days (about a fifth of the all-week
-     * direction index for a one-day group), so Compare mode adds roughly that much per segment.
      */
     inline constexpr std::size_t MAX_LOADED_SEGMENTS = 3;
 

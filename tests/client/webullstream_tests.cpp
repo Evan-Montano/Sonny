@@ -1,7 +1,9 @@
 #include "client/webullstream.hpp"
+#include "common/jsonutil.hpp"
 
 #include <gtest/gtest.h>
-#include <nlohmann/json.hpp>
+#include <string>
+#include <vector>
 
 TEST(WebullEnvironmentTests, EndpointsAndSecretScopeStayPaired) {
     const auto& live = Client::GetWebullEnvironmentConfig(Client::WebullEnvironment::Live);
@@ -15,13 +17,15 @@ TEST(WebullEnvironmentTests, EndpointsAndSecretScopeStayPaired) {
 }
 
 TEST(WebullSubscriptionTests, BuildsQuoteSubscriptionWithSharedSessionId) {
-    const auto body = nlohmann::json::parse(Client::BuildWebullSubscriptionBody("session-unique"));
-    EXPECT_EQ(body.at("session_id"), "session-unique");
-    EXPECT_EQ(body.at("symbols"), nlohmann::json::array({"SPY"}));
-    EXPECT_EQ(body.at("category"), "US_ETF");
-    EXPECT_EQ(body.at("sub_types"), nlohmann::json::array({"QUOTE"}));
-    EXPECT_EQ(body.at("grab"), "true");
-    EXPECT_FALSE(body.at("overnight_required"));
+    const std::string serialized = Client::BuildWebullSubscriptionBody("session-unique");
+    EXPECT_EQ(serialized, R"({"category":"US_ETF","grab":"true","overnight_required":false,"session_id":"session-unique","sub_types":["QUOTE"],"symbols":["SPY"]})");
+    const Common::JsonUtility body(serialized);
+    EXPECT_EQ(body.Get<std::string>("session_id"), "session-unique");
+    EXPECT_EQ(body.Get<std::vector<std::string>>("symbols"), std::vector<std::string>{"SPY"});
+    EXPECT_EQ(body.Get<std::string>("category"), "US_ETF");
+    EXPECT_EQ(body.Get<std::vector<std::string>>("sub_types"), std::vector<std::string>{"QUOTE"});
+    EXPECT_EQ(body.Get<std::string>("grab"), "true");
+    EXPECT_FALSE(body.Get<bool>("overnight_required"));
 }
 
 TEST(WebullSigningTests, MatchesOfficialSignatureExample) {

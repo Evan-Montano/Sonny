@@ -32,15 +32,20 @@ namespace Common {
     inline static constexpr std::uint8_t NOV = 11;
     inline static constexpr std::uint8_t DEC = 12;
     
-    using UnixTimestamp = std::uint64_t;
+    // Seconds since the Unix epoch; signed so dates before 1970 remain representable.
+    using UnixTimestamp = std::int64_t;
 
-    // A date + time class. Members are accessed through get/set methods
-    // in order to keep all data in sync in real-time always.
+    enum class TimeZone { Local, NewYork, UTC };
+
+    // Calendar years 1..32767 must be representable in both UTC and the display zone.
+    // Invalid dates/times are rejected; failed setters leave the previous value intact.
     class DateTime {
     public:
         // CONSTRUCTOR
         explicit DateTime(const UnixTimestamp &ts = 0,
                           const bool &newYorkTime = false);
+
+        explicit DateTime(UnixTimestamp ts, TimeZone zone);
 
         explicit DateTime(
             const std::uint16_t &year = 1970,
@@ -52,9 +57,19 @@ namespace Common {
             const bool &newYorkTime = false
         );
 
+        DateTime(std::uint16_t year, std::uint8_t month, std::uint8_t day,
+                 std::uint8_t hour, std::uint8_t minute, std::uint8_t second, TimeZone zone);
+
         // METHODS
         [[nodiscard]] const UnixTimestamp &GetTimestamp() const;
         void SetTimestamp(const UnixTimestamp &ts);
+
+        /** @brief Construct from signed milliseconds, flooring negative timestamps to seconds. */
+        static DateTime FromTimestampMilliseconds(std::int64_t timestampMs, TimeZone zone = TimeZone::Local);
+        /** @brief Full Unix timestamp, including the retained fractional second. */
+        [[nodiscard]] std::int64_t GetTimestampMilliseconds() const;
+        /** @brief Current wall-clock Unix timestamp in milliseconds. */
+        static std::int64_t GetCurrentTimestampMilliseconds();
 
         [[nodiscard]] const std::uint16_t &GetYear() const;
         void SetYear(const std::uint16_t &year);
@@ -78,10 +93,13 @@ namespace Common {
         [[nodiscard]] std::string ToString_DT() const;
         [[nodiscard]] std::string ToString_Date() const;
         [[nodiscard]] std::string ToString_Time() const;
+        /** @brief Format the instant as UTC ISO 8601, independent of the display time zone. */
+        [[nodiscard]] std::string ToString_UTC() const;
 
         [[nodiscard]] bool IsWeekday() const;
 
         static DateTime GetCurrentDateTime(const bool& newYorkTime = false);
+        static DateTime GetCurrentDateTime(TimeZone zone);
 
         // OPERATORS
         void NextDay();
@@ -103,11 +121,14 @@ namespace Common {
         std::uint8_t Minute;
         std::uint8_t Second;
 
-        bool NewYorkTime;
+        TimeZone Zone;
+        std::uint16_t Millisecond{0};
 
         // METHODS
         void CalculateDateTime();
         void CalculateTimestamp();
+        void SetCalendar(std::uint16_t year, std::uint8_t month, std::uint8_t day,
+                         std::uint8_t hour, std::uint8_t minute, std::uint8_t second);
     };
 
     struct DateTimeRange {
