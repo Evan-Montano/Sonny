@@ -16,20 +16,22 @@ namespace Runtime {
      * @brief One live second of market data.
      */
     struct LiveRecord {
+        // MEMBERS
+
         /**
          * @brief Midpoint and spread change since the previous second.
          */
-        Core::MLRecord record{};
+        Core::MLRecord Record{};
 
         /**
-         * @brief A timestamp inside the second this record describes (timestamp_ms / 1000 is that second).
+         * @brief A timestamp inside the second this record describes (TimestampMs / 1000 is that second).
          */
-        std::int64_t timestamp_ms{};
+        std::int64_t TimestampMs{};
 
         /**
          * @brief False when no quote arrived during the second and the previous price was carried forward.
          */
-        bool observed = true;
+        bool Observed = true;
     };
 
     /**
@@ -105,22 +107,22 @@ namespace Runtime {
         /**
          * @brief Receives completed seconds.
          */
-        RecordCallback on_record_;
+        RecordCallback OnRecord;
 
         /**
          * @brief Receives continuity resets.
          */
-        ResetCallback on_reset_;
+        ResetCallback OnReset;
 
         /**
          * @brief Latest quote of the second currently being collected.
          */
-        std::optional<Client::WebullQuote> active_quote_;
+        std::optional<Client::WebullQuote> ActiveQuote;
 
         /**
          * @brief Closing quote of the last finalized second; deltas are measured from it.
          */
-        std::optional<Client::WebullQuote> baseline_quote_;
+        std::optional<Client::WebullQuote> BaselineQuote;
     };
 
 }

@@ -160,6 +160,8 @@ namespace Common {
         class Settings {
         public:
 
+            // METHODS
+
             /**
              * @brief Get the singleton Settings instance.
              *
@@ -203,7 +205,7 @@ namespace Common {
              */
             template<typename T>
             void Set(const std::string &key, const T &value) {
-                json.Set(key, value);
+                Json.Set(key, value);
             }
 
             /**
@@ -216,7 +218,7 @@ namespace Common {
              */
             template<typename T>
             T Get(const std::string &key) const {
-                return json.Get<T>(key);
+                return Json.Get<T>(key);
             }
 
             /**
@@ -227,6 +229,8 @@ namespace Common {
              * @return false if the setting did not exist.
              */
             bool Remove(const std::string &key);
+
+            // MEMBERS
 
             /**
              * @brief Begin date for export data.
@@ -240,6 +244,8 @@ namespace Common {
 
         private:
 
+            // CONSTRUCTOR
+
             /**
              * @brief Construct the Settings object and load settings from disk.
              */
@@ -252,6 +258,8 @@ namespace Common {
             Settings(Settings&&) = delete;
             Settings &operator=(Settings&&) = delete;
 
+            // MEMBERS
+
             /**
              * @brief Base path for settings directory.
              */
@@ -263,16 +271,19 @@ namespace Common {
             const std::string SETTINGS_FILE_NAME = "sonny_settings.json";
 
             /**
+             * @brief JSON representation of the application settings.
+             */
+            Common::JsonUtility Json{};
+
+            // METHODS
+
+            /**
              * @brief Path to the settings file.
              */
             std::filesystem::path SettingsFilePath() const {
                 return SETTINGS_BASE_PATH / SETTINGS_FILE_NAME;
             }
 
-            /**
-             * @brief JSON representation of the application settings.
-             */
-            Common::JsonUtility json{};
         };
 
     }

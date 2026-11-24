@@ -24,16 +24,16 @@ namespace Core {
 
         /**
          * @brief Child class of HalfHourIndex. The information building this
-         * index is the ABSOLUTE MAGNITUDE of mid_delta changes in a one-second
+         * index is the ABSOLUTE MAGNITUDE of MidDelta changes in a one-second
          * interval.
          */
         class HalfHourIndex_Magnitude : public HalfHourIndex {
-        private:
-
         public:
             // CONSTRUCTORS
 
             HalfHourIndex_Magnitude(const std::size_t &numOfSeconds, std::size_t inputWindowSeconds);
+
+            // METHODS
 
             /**
             * @brief Takes in a span of MLRecord structs and adds them to the faiss index and calls method(s) to track metadata.
@@ -67,12 +67,10 @@ namespace Core {
 
         /**
          * @brief Child class of HalfHourIndex. The information building this
-         * index is the DIRECTION of mid_delta changes in a one-second
+         * index is the DIRECTION of MidDelta changes in a one-second
          * interval.
          */
         class HalfHourIndex_Direction : public HalfHourIndex {
-        private:
-
         public:
             // CONSTRUCTORS
 
@@ -100,12 +98,12 @@ namespace Core {
         // MEMBERS
 
         /**
-         * @brief Sub-index containing data for only mid_delta magnitude.
+         * @brief Sub-index containing data for only MidDelta magnitude.
          */
         HalfHourIndex_Magnitude _index_magnitude;
 
         /**
-         * @brief Sub-index containing data for only mid_delta direction.
+         * @brief Sub-index containing data for only MidDelta direction.
          * 
          */
         HalfHourIndex_Direction _index_direction;
@@ -116,7 +114,12 @@ namespace Core {
          */
         std::size_t _inputWindowSeconds{DEFAULT_INPUT_WINDOW_SECONDS};
 
+        /**
+         * @brief Holds the magnitude and direction query vectors for one input window.
+         */
         struct MultiQuery {
+            // MEMBERS
+
             std::vector<float> MagnitudeQuery;
             std::vector<float> DirectionQuery;
         };
@@ -148,6 +151,8 @@ namespace Core {
          * the magnitude index and directional index.
          */
         struct MultiQueryResult {
+            // MEMBERS
+
             std::vector<HalfHourIndex::QueryResult> MagnitudeResults;
             std::vector<HalfHourIndex::QueryResult> DirectionResults;
         };

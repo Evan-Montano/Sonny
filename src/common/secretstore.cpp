@@ -31,7 +31,7 @@ namespace Common {
 
     SecretResult SecretStore::GetWebullSecret(SecretEnvironment environment, std::string_view name) {
         SecretResult result;
-        result.credential_name = std::string(name);
+        result.CredentialName = std::string(name);
         GError* error = nullptr;
         gchar* secret = secret_password_lookup_sync(
             &WebullSchema,
@@ -40,7 +40,7 @@ namespace Common {
             "application", "sonny",
             "provider", "webull",
             "environment", EnvironmentName(environment).c_str(),
-            "name", result.credential_name.c_str(),
+            "name", result.CredentialName.c_str(),
             nullptr
         );
 
@@ -60,11 +60,11 @@ namespace Common {
                 (error->domain == G_IO_ERROR &&
                     (error->code == G_IO_ERROR_NOT_CONNECTED || error->code == G_IO_ERROR_CONNECTION_CLOSED)) ||
                 lower.find("not available") != std::string::npos || lower.find("no such interface") != std::string::npos;
-            result.error = locked ? SecretError::Locked :
+            result.Error = locked ? SecretError::Locked :
                 (service_unavailable ? SecretError::ServiceUnavailable : SecretError::LookupFailed);
-            result.detail = result.error == SecretError::Locked
+            result.Detail = result.Error == SecretError::Locked
                 ? "Secret Service is locked. Unlock the desktop keyring and retry."
-                : (result.error == SecretError::ServiceUnavailable
+                : (result.Error == SecretError::ServiceUnavailable
                     ? "Secret Service is unavailable. Start a compatible desktop keyring and retry."
                     : "Secret Service lookup failed.");
             g_error_free(error);
@@ -73,14 +73,14 @@ namespace Common {
         }
 
         if (secret == nullptr || *secret == '\0') {
-            result.error = SecretError::Missing;
-            result.detail = "Secret is not provisioned.";
+            result.Error = SecretError::Missing;
+            result.Detail = "Secret is not provisioned.";
             if (secret != nullptr) secret_password_free(secret);
             return result;
         }
 
-        result.value.assign(secret);
-        result.has_value = true;
+        result.Value.assign(secret);
+        result.HasValue = true;
         secret_password_free(secret);
         return result;
     }

@@ -14,35 +14,51 @@
 namespace {
     namespace Storage = Common::Storage;
 
+    /**
+     * @brief Applies temporary filesystem permissions and restores them on scope exit.
+     */
     class ScopedPermissions {
-        std::filesystem::path path_;
-        std::filesystem::perms original_;
+        // MEMBERS
+
+        std::filesystem::path Path;
+        std::filesystem::perms Original;
     public:
+        // CONSTRUCTOR
+
         ScopedPermissions(const std::filesystem::path& path, std::filesystem::perms permissions)
-            : path_(path), original_(std::filesystem::status(path).permissions()) {
+            : Path(path), Original(std::filesystem::status(path).permissions()) {
             std::filesystem::permissions(path, permissions);
         }
+        // DESTRUCTOR
+
         ~ScopedPermissions() {
             std::error_code ignored;
-            std::filesystem::permissions(path_, original_, ignored);
+            std::filesystem::permissions(Path, Original, ignored);
         }
     };
 
+    /**
+     * @brief Isolates filesystem utility tests in a temporary working directory.
+     */
     class StorageTests : public ::testing::Test {
     protected:
-        std::filesystem::path previous_;
-        std::filesystem::path directory_;
+        // MEMBERS
+
+        std::filesystem::path Previous;
+        std::filesystem::path Directory;
+
+        // METHODS
 
         void SetUp() override {
-            previous_ = std::filesystem::current_path();
-            directory_ = std::filesystem::temp_directory_path() /
+            Previous = std::filesystem::current_path();
+            Directory = std::filesystem::temp_directory_path() /
                 ("sonny_storage_tests_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-            std::filesystem::create_directories(directory_);
-            std::filesystem::current_path(directory_);
+            std::filesystem::create_directories(Directory);
+            std::filesystem::current_path(Directory);
         }
         void TearDown() override {
-            std::filesystem::current_path(previous_);
-            std::filesystem::remove_all(directory_);
+            std::filesystem::current_path(Previous);
+            std::filesystem::remove_all(Directory);
         }
     };
 }
@@ -212,7 +228,7 @@ TEST_F(StorageTests, AtomicStagingDescriptorsAreCloseOnExec) {
         for (const auto& entry : std::filesystem::directory_iterator("/proc/self/fd")) {
             std::error_code error;
             const auto target = std::filesystem::read_symlink(entry.path(), error);
-            if (error || target.parent_path() != directory_) continue;
+            if (error || target.parent_path() != Directory) continue;
             const int flags = ::fcntl(std::stoi(entry.path().filename().string()), F_GETFD);
             if (flags < 0) continue; // The writer closed it while it was being inspected.
             observed = true;

@@ -124,36 +124,40 @@ namespace Runtime {
         void FlushIncomplete();
 
     private:
+        // TYPES
+
         /**
          * @brief Everything owned by one input-window configuration.
          */
         struct WindowSlot {
+            // MEMBERS
+
             /**
              * @brief Number of seconds in this configuration's query.
              */
-            std::size_t input_window_seconds{};
+            std::size_t InputWindowSeconds{};
 
             /**
              * @brief Segment the loaded set was last chosen around; set even if nothing could be
              * loaded, to avoid retrying every cycle.
              */
-            std::optional<std::size_t> centered_segment;
+            std::optional<std::size_t> CenteredSegment;
 
             /**
              * @brief The loaded half-hour segments of this window; nullptr until first needed.
              */
-            std::unique_ptr<Core::SessionMultiIndex> index;
+            std::unique_ptr<Core::SessionMultiIndex> Index;
 
             /**
              * @brief One scorer per entry in PREDICTION_MATCH_COUNTS.
              */
-            std::array<PredictionAnalytics, PREDICTION_MATCH_COUNTS.size()> analytics;
+            std::array<PredictionAnalytics, PREDICTION_MATCH_COUNTS.size()> Analytics;
         };
 
         // METHODS
 
         /**
-         * @brief Make sure slot.index holds the segments nearest currentSegment, up to the limit, with
+         * @brief Make sure slot.Index holds the segments nearest currentSegment, up to the limit, with
          * both magnitude and direction indexes. Does nothing while currentSegment is unchanged.
          */
         void EnsureIndexLoaded(WindowSlot& slot, std::size_t currentSegment);
@@ -208,22 +212,22 @@ namespace Runtime {
         /**
          * @brief The input windows being run. Never changes after construction.
          */
-        std::vector<std::size_t> input_windows_;
+        std::vector<std::size_t> ConfiguredInputWindows;
 
         /**
          * @brief Most half-hour segments each window keeps in memory at once.
          */
-        std::size_t max_loaded_segments_;
+        std::size_t MaxLoadedSegments;
 
         /**
-         * @brief One slot per entry in input_windows_, in the same order. Never resized after construction.
+         * @brief One slot per entry in ConfiguredInputWindows, in the same order. Never resized after construction.
          */
-        std::vector<WindowSlot> slots_;
+        std::vector<WindowSlot> Slots;
 
         /**
          * @brief Source of the futures that follow each historical match.
          */
-        HistoricalRecordStore historical_records_;
+        HistoricalRecordStore HistoricalRecords;
     };
 
 }

@@ -25,44 +25,44 @@ namespace Runtime {
         /**
          * @brief Label for the Webull environment shown in the title bar.
          */
-        std::string environment = "SANDBOX";
+        std::string Environment = "SANDBOX";
 
-        std::string status = "Waiting for market data";
-        std::string symbol = "SPY";
+        std::string Status = "Waiting for market data";
+        std::string Symbol = "SPY";
 
         /**
          * @brief True once a quote with both sides of the book has arrived.
          */
-        bool has_quote = false;
+        bool HasQuote = false;
 
         /**
          * @brief True once at least one one-second record has been produced.
          */
-        bool has_delta = false;
+        bool HasDelta = false;
 
-        double best_bid = 0.0;
-        double best_ask = 0.0;
-        double mid_price = 0.0;
-        double spread = 0.0;
-        double latest_delta = 0.0;
+        double BestBid = 0.0;
+        double BestAsk = 0.0;
+        double MidPrice = 0.0;
+        double Spread = 0.0;
+        double LatestDelta = 0.0;
 
         /**
          * @brief Sum of every one-second midpoint change since the view opened.
          */
-        double session_delta = 0.0;
+        double SessionDelta = 0.0;
 
-        std::int64_t latest_timestamp_ms = 0;
-        std::uint64_t quote_count = 0;
+        std::int64_t LatestTimestampMs = 0;
+        std::uint64_t QuoteCount = 0;
 
         /**
          * @brief Records currently held by the live input window.
          */
-        std::size_t window_size = 0;
+        std::size_t WindowSize = 0;
 
         /**
          * @brief (Unix second, midpoint change) pairs covering the last MAX_INPUT_WINDOW_SECONDS.
          */
-        std::deque<std::pair<std::int64_t, double>> recent_deltas;
+        std::deque<std::pair<std::int64_t, double>> RecentDeltas;
 
         // METHODS
 

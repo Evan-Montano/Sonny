@@ -41,39 +41,39 @@ namespace Runtime {
         const bool window_elapsed
     ) {
         PredictionEvaluationReport report{
-            .forecast = pending.forecast,
-            .window_elapsed = window_elapsed
+            .Forecast = pending.Forecast,
+            .WindowElapsed = window_elapsed
         };
 
-        for (std::size_t i = 0; i < pending.future.size(); ++i) {
-            if (pending.future[i].has_value() && pending.future[i]->observed) {
-                ++report.observed_seconds;
+        for (std::size_t i = 0; i < pending.Future.size(); ++i) {
+            if (pending.Future[i].has_value() && pending.Future[i]->Observed) {
+                ++report.ObservedSeconds;
             }
         }
 
         for (std::size_t horizon_index = 0; horizon_index < PredictionEvaluationHorizons.size(); ++horizon_index) {
             const std::size_t horizon = PredictionEvaluationHorizons[horizon_index];
-            PredictionHorizonEvaluation& evaluation = report.horizons[horizon_index];
-            evaluation.horizon_seconds = horizon;
-            evaluation.predicted_change = pending.forecast.cumulative_changes[horizon_index];
+            PredictionHorizonEvaluation& evaluation = report.Horizons[horizon_index];
+            evaluation.HorizonSeconds = horizon;
+            evaluation.PredictedChange = pending.Forecast.CumulativeChanges[horizon_index];
 
             double actual_change = 0.0;
             bool complete = true;
             for (std::size_t i = 0; i < horizon; ++i) {
-                const std::optional<Observation>& observation = pending.future[i];
-                if (observation.has_value() == false || observation->observed == false) {
+                const std::optional<Observation>& observation = pending.Future[i];
+                if (observation.has_value() == false || observation->Observed == false) {
                     complete = false;
                     continue;
                 }
 
-                actual_change += observation->mid_delta;
-                ++evaluation.observed_seconds;
+                actual_change += observation->MidDelta;
+                ++evaluation.ObservedSeconds;
             }
 
             if (complete) {
                 // Avoid reporting tiny floating-point residue as a directional move.
                 if (std::abs(actual_change) < DirectionEpsilon) actual_change = 0.0;
-                evaluation.actual_change = actual_change;
+                evaluation.ActualChange = actual_change;
             }
         }
 
@@ -81,27 +81,27 @@ namespace Runtime {
     }
 
     std::vector<PredictionEvaluationReport> PredictionAnalytics::SubmitForecast(PredictionForecast forecast) {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(Mutex);
 
-        PendingForecast pending{.forecast = std::move(forecast)};
-        const std::int64_t anchor_second = ToSecond(pending.forecast.as_of_timestamp_ms);
+        PendingForecast pending{.Forecast = std::move(forecast)};
+        const std::int64_t anchor_second = ToSecond(pending.Forecast.AsOfTimestampMs);
         const std::int64_t end_second = anchor_second + static_cast<std::int64_t>(PredictionEvaluationWindow);
 
         // The prediction cycle takes time, so some of this forecast's future may already have arrived.
-        for (const Observation& observation : history_) {
-            const std::int64_t offset = observation.second - anchor_second;
+        for (const Observation& observation : History) {
+            const std::int64_t offset = observation.Second - anchor_second;
             if (offset < 1 || offset > static_cast<std::int64_t>(PredictionEvaluationWindow)) continue;
-            std::optional<Observation>& slot = pending.future[static_cast<std::size_t>(offset - 1)];
-            if (slot.has_value() == false || (observation.observed && !slot->observed)) {
+            std::optional<Observation>& slot = pending.Future[static_cast<std::size_t>(offset - 1)];
+            if (slot.has_value() == false || (observation.Observed && !slot->Observed)) {
                 slot = observation;
             }
         }
 
-        if (latest_second_.has_value() && *latest_second_ >= end_second) {
+        if (LatestSecond.has_value() && *LatestSecond >= end_second) {
             return {BuildReport(pending, true)};
         }
 
-        pending_.push_back(std::move(pending));
+        Pending.push_back(std::move(pending));
         return {};
     }
 
@@ -110,36 +110,36 @@ namespace Runtime {
         const double mid_delta,
         const bool observed
     ) {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(Mutex);
 
         const std::int64_t second = ToSecond(timestamp_ms);
         Observation observation{second, mid_delta, observed};
-        latest_second_ = std::max(latest_second_.value_or(second), second);
+        LatestSecond = std::max(LatestSecond.value_or(second), second);
 
-        if (history_.empty() == false && history_.back().second == second) {
-            if (observed || history_.back().observed == false) history_.back() = observation;
+        if (History.empty() == false && History.back().Second == second) {
+            if (observed || History.back().Observed == false) History.back() = observation;
         } else {
-            history_.push_back(observation);
+            History.push_back(observation);
         }
 
-        while (history_.empty() == false && latest_second_.value() - history_.front().second > HistoryWindowSeconds) {
-            history_.pop_front();
+        while (History.empty() == false && LatestSecond.value() - History.front().Second > HistoryWindowSeconds) {
+            History.pop_front();
         }
 
         std::vector<PredictionEvaluationReport> completed;
-        auto pending = pending_.begin();
-        while (pending != pending_.end()) {
-            const std::int64_t anchor_second = ToSecond(pending->forecast.as_of_timestamp_ms);
+        auto pending = Pending.begin();
+        while (pending != Pending.end()) {
+            const std::int64_t anchor_second = ToSecond(pending->Forecast.AsOfTimestampMs);
             const std::int64_t offset = second - anchor_second;
 
             if (offset >= 1 && offset <= static_cast<std::int64_t>(PredictionEvaluationWindow)) {
-                std::optional<Observation>& slot = pending->future[static_cast<std::size_t>(offset - 1)];
-                if (slot.has_value() == false || (observed && !slot->observed)) slot = observation;
+                std::optional<Observation>& slot = pending->Future[static_cast<std::size_t>(offset - 1)];
+                if (slot.has_value() == false || (observed && !slot->Observed)) slot = observation;
             }
 
-            if (latest_second_.value() >= anchor_second + static_cast<std::int64_t>(PredictionEvaluationWindow)) {
+            if (LatestSecond.value() >= anchor_second + static_cast<std::int64_t>(PredictionEvaluationWindow)) {
                 completed.push_back(BuildReport(*pending, true));
-                pending = pending_.erase(pending);
+                pending = Pending.erase(pending);
             } else {
                 ++pending;
             }
@@ -149,27 +149,27 @@ namespace Runtime {
     }
 
     std::vector<PredictionEvaluationReport> PredictionAnalytics::FlushIncomplete() {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(Mutex);
 
         std::vector<PredictionEvaluationReport> incomplete;
-        incomplete.reserve(pending_.size());
-        for (const PendingForecast& pending : pending_) {
+        incomplete.reserve(Pending.size());
+        for (const PendingForecast& pending : Pending) {
             incomplete.push_back(BuildReport(pending, false));
         }
-        pending_.clear();
+        Pending.clear();
         return incomplete;
     }
 
     std::string PredictionAnalytics::FormatReport(const PredictionEvaluationReport& report) {
-        const std::string timestamp = Common::DateTime::FromTimestampMilliseconds(report.forecast.as_of_timestamp_ms).ToString_Time();
+        const std::string timestamp = Common::DateTime::FromTimestampMilliseconds(report.Forecast.AsOfTimestampMs).ToString_Time();
 
         std::string message = std::format(
             "Prediction evaluation @{} | {} matches | {} window | observed {}/{}\n"
             "  {:<8}{:>14}{:>14}{:>14}{:>14}{:>16}{:>10}",
             timestamp,
-            report.forecast.historical_matches,
-            report.window_elapsed ? "complete" : "incomplete",
-            report.observed_seconds,
+            report.Forecast.HistoricalMatches,
+            report.WindowElapsed ? "complete" : "incomplete",
+            report.ObservedSeconds,
             PredictionEvaluationWindow,
             "Horizon",
             "Forecast",
@@ -180,30 +180,30 @@ namespace Runtime {
             "Direction"
         );
 
-        for (const PredictionHorizonEvaluation& horizon : report.horizons) {
-            const std::string label = std::format("{}s", horizon.horizon_seconds);
-            if (horizon.actual_change.has_value()) {
-                const double error = horizon.predicted_change - *horizon.actual_change;
+        for (const PredictionHorizonEvaluation& horizon : report.Horizons) {
+            const std::string label = std::format("{}s", horizon.HorizonSeconds);
+            if (horizon.ActualChange.has_value()) {
+                const double error = horizon.PredictedChange - *horizon.ActualChange;
                 message += std::format(
                     "\n  {:<8}{:>14}{:>14}{:>14}{:>14}{:>16}{:>10}",
                     label,
-                    std::format("${:+.6f}", horizon.predicted_change),
-                    std::format("${:+.6f}", *horizon.actual_change),
+                    std::format("${:+.6f}", horizon.PredictedChange),
+                    std::format("${:+.6f}", *horizon.ActualChange),
                     std::format("${:+.6f}", error),
                     std::format("${:.6f}", std::abs(error)),
-                    std::format("${:.6f}", std::abs(*horizon.actual_change)),
-                    DirectionResult(horizon.predicted_change, *horizon.actual_change)
+                    std::format("${:.6f}", std::abs(*horizon.ActualChange)),
+                    DirectionResult(horizon.PredictedChange, *horizon.ActualChange)
                 );
             } else {
                 message += std::format(
                     "\n  {:<8}{:>14}{:>14}{:>14}{:>14}{:>16}{:>10}",
                     label,
-                    std::format("${:+.6f}", horizon.predicted_change),
+                    std::format("${:+.6f}", horizon.PredictedChange),
                     "INCOMPLETE",
                     "N/A",
                     "N/A",
                     "N/A",
-                    std::format("N/A ({}/{})", horizon.observed_seconds, horizon.horizon_seconds)
+                    std::format("N/A ({}/{})", horizon.ObservedSeconds, horizon.HorizonSeconds)
                 );
             }
         }

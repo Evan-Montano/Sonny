@@ -11,19 +11,19 @@ namespace Runtime {
     // ========== ONE SECOND AGGREGATOR ========== //
 
     OneSecondAggregator::OneSecondAggregator(RecordCallback onRecord, ResetCallback onReset)
-        : on_record_(std::move(onRecord)), on_reset_(std::move(onReset)) {}
+        : OnRecord(std::move(onRecord)), OnReset(std::move(onReset)) {}
 
     std::int64_t OneSecondAggregator::SecondOf(const Client::WebullQuote& quote) {
-        return quote.timestamp_ms / 1000;
+        return quote.TimestampMs / 1000;
     }
 
     void OneSecondAggregator::AddQuote(Client::WebullQuote quote) {
-        if (active_quote_.has_value() == false) {
-            active_quote_ = std::move(quote);
+        if (ActiveQuote.has_value() == false) {
+            ActiveQuote = std::move(quote);
             return;
         }
 
-        const std::int64_t activeSecond = SecondOf(*active_quote_);
+        const std::int64_t activeSecond = SecondOf(*ActiveQuote);
         const std::int64_t quoteSecond = SecondOf(quote);
 
         if (quoteSecond < activeSecond) {
@@ -33,8 +33,8 @@ namespace Runtime {
 
         if (quoteSecond == activeSecond) {
             // Keep the newest snapshot: historical candles use each second's closing quote.
-            if (quote.timestamp_ms >= active_quote_->timestamp_ms) {
-                active_quote_ = std::move(quote);
+            if (quote.TimestampMs >= ActiveQuote->TimestampMs) {
+                ActiveQuote = std::move(quote);
             }
             return;
         }
@@ -46,60 +46,60 @@ namespace Runtime {
             ResetBaseline();
         }
         else {
-            FinalizeSecond(*active_quote_);
+            FinalizeSecond(*ActiveQuote);
             CarryForward(activeSecond + 1, quietSeconds);
         }
 
-        active_quote_ = std::move(quote);
+        ActiveQuote = std::move(quote);
     }
 
     void OneSecondAggregator::FinalizeSecond(const Client::WebullQuote& quote) {
         // Without both sides of the book there is no midpoint, so the price series is broken here.
-        if (quote.asks.empty() || quote.bids.empty()) {
+        if (quote.Asks.empty() || quote.Bids.empty()) {
             ResetBaseline();
             return;
         }
 
         // The first usable second becomes the baseline; there is nothing to diff it against yet.
-        if (baseline_quote_.has_value() == false) {
-            baseline_quote_ = quote;
+        if (BaselineQuote.has_value() == false) {
+            BaselineQuote = quote;
             return;
         }
 
-        const std::optional<Core::MLRecord> record = Core::WebullQuoteToMLRecord(*baseline_quote_, quote);
+        const std::optional<Core::MLRecord> record = Core::WebullQuoteToMLRecord(*BaselineQuote, quote);
 
         if (record.has_value() == false) {
             ResetBaseline();
             return;
         }
 
-        baseline_quote_ = quote;
-        on_record_(LiveRecord{
-            .record = *record,
-            .timestamp_ms = quote.timestamp_ms,
-            .observed = true
+        BaselineQuote = quote;
+        OnRecord(LiveRecord{
+            .Record = *record,
+            .TimestampMs = quote.TimestampMs,
+            .Observed = true
         });
     }
 
     void OneSecondAggregator::CarryForward(const std::int64_t firstSecond, const std::int64_t count) {
-        if (baseline_quote_.has_value() == false) {
+        if (BaselineQuote.has_value() == false) {
             return;
         }
 
         // Zero deltas match how the .rec export fills quiet seconds. The next observed second then
         // carries the full move since the baseline, so the cumulative price path stays exact.
         for (std::int64_t i = 0; i < count; ++i) {
-            on_record_(LiveRecord{
-                .record = Core::MLRecord{.mid_delta = 0.0f},
-                .timestamp_ms = (firstSecond + i) * 1000,
-                .observed = false
+            OnRecord(LiveRecord{
+                .Record = Core::MLRecord{.MidDelta = 0.0f},
+                .TimestampMs = (firstSecond + i) * 1000,
+                .Observed = false
             });
         }
     }
 
     void OneSecondAggregator::ResetBaseline() {
-        baseline_quote_.reset();
-        on_reset_();
+        BaselineQuote.reset();
+        OnReset();
     }
 
     // ========== END ONE SECOND AGGREGATOR ========== //

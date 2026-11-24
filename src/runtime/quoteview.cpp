@@ -72,39 +72,39 @@ namespace Runtime {
     // ========== QUOTE VIEW STATE ========== //
 
     void QuoteViewState::OnQuote(const Client::WebullQuote& quote, const std::uint64_t quoteCount) {
-        const bool hasTopOfBook = quote.asks.empty() == false && quote.bids.empty() == false;
+        const bool hasTopOfBook = quote.Asks.empty() == false && quote.Bids.empty() == false;
 
-        status = hasTopOfBook ? "Live data receiving" : "Receiving quote updates";
-        symbol = quote.symbol.empty() ? "SPY" : quote.symbol;
-        has_quote = hasTopOfBook;
-        best_ask = hasTopOfBook ? quote.asks.front().Price : 0.0;
-        best_bid = hasTopOfBook ? quote.bids.front().Price : 0.0;
-        mid_price = hasTopOfBook ? (best_ask + best_bid) / 2.0 : 0.0;
-        spread = best_ask - best_bid;
-        latest_timestamp_ms = quote.timestamp_ms;
-        quote_count = quoteCount;
+        Status = hasTopOfBook ? "Live data receiving" : "Receiving quote updates";
+        Symbol = quote.Symbol.empty() ? "SPY" : quote.Symbol;
+        HasQuote = hasTopOfBook;
+        BestAsk = hasTopOfBook ? quote.Asks.front().Price : 0.0;
+        BestBid = hasTopOfBook ? quote.Bids.front().Price : 0.0;
+        MidPrice = hasTopOfBook ? (BestAsk + BestBid) / 2.0 : 0.0;
+        Spread = BestAsk - BestBid;
+        LatestTimestampMs = quote.TimestampMs;
+        QuoteCount = quoteCount;
     }
 
     void QuoteViewState::OnRecord(const LiveRecord& record, const std::size_t windowSize) {
-        const double delta = record.record.mid_delta;
-        const std::int64_t second = record.timestamp_ms / 1000;
+        const double delta = record.Record.MidDelta;
+        const std::int64_t second = record.TimestampMs / 1000;
 
-        window_size = windowSize;
-        has_delta = true;
-        latest_delta = delta;
-        session_delta += delta;
+        WindowSize = windowSize;
+        HasDelta = true;
+        LatestDelta = delta;
+        SessionDelta += delta;
 
         // Keep exactly the seconds the longest input window can see.
-        while (recent_deltas.empty() == false &&
-               second - recent_deltas.front().first >= static_cast<std::int64_t>(Core::MAX_INPUT_WINDOW_SECONDS)) {
-            recent_deltas.pop_front();
+        while (RecentDeltas.empty() == false &&
+               second - RecentDeltas.front().first >= static_cast<std::int64_t>(Core::MAX_INPUT_WINDOW_SECONDS)) {
+            RecentDeltas.pop_front();
         }
-        recent_deltas.emplace_back(second, delta);
+        RecentDeltas.emplace_back(second, delta);
     }
 
     void QuoteViewState::OnWindowReset() {
-        window_size = 0;
-        recent_deltas.clear();
+        WindowSize = 0;
+        RecentDeltas.clear();
     }
 
     // ========== END QUOTE VIEW STATE ========== //
@@ -114,21 +114,21 @@ namespace Runtime {
 
     ftxui::Element RenderQuoteView(const QuoteViewState& state) {
         double rollingDelta = 0.0;
-        for (const auto& [second, delta] : state.recent_deltas) {
+        for (const auto& [second, delta] : state.RecentDeltas) {
             rollingDelta += delta;
         }
 
-        const std::string quoteTime = state.has_quote
-            ? Common::DateTime::FromTimestampMilliseconds(state.latest_timestamp_ms).ToString_Time()
+        const std::string quoteTime = state.HasQuote
+            ? Common::DateTime::FromTimestampMilliseconds(state.LatestTimestampMs).ToString_Time()
             : "--:--:--";
 
         const ftxui::Element bookPanel = ftxui::window(
             ftxui::text("TOP OF BOOK") | ftxui::bold,
             ftxui::vbox({
-                ftxui::text(std::format("Bid     {}", PriceOrPlaceholder(state.has_quote, state.best_bid))),
-                ftxui::text(std::format("Ask     {}", PriceOrPlaceholder(state.has_quote, state.best_ask))),
-                ftxui::text(std::format("Mid     {}", PriceOrPlaceholder(state.has_quote, state.mid_price))) | ftxui::bold,
-                ftxui::text(std::format("Spread  {}", PriceOrPlaceholder(state.has_quote, state.spread))),
+                ftxui::text(std::format("Bid     {}", PriceOrPlaceholder(state.HasQuote, state.BestBid))),
+                ftxui::text(std::format("Ask     {}", PriceOrPlaceholder(state.HasQuote, state.BestAsk))),
+                ftxui::text(std::format("Mid     {}", PriceOrPlaceholder(state.HasQuote, state.MidPrice))) | ftxui::bold,
+                ftxui::text(std::format("Spread  {}", PriceOrPlaceholder(state.HasQuote, state.Spread))),
                 ftxui::text(std::format("Last quote  {}", quoteTime))
             })
         ) | ftxui::flex;
@@ -136,15 +136,15 @@ namespace Runtime {
         const ftxui::Element movementPanel = ftxui::window(
             ftxui::text("PRICE MOVEMENT") | ftxui::bold,
             ftxui::vbox({
-                ftxui::text(std::format("Last 1s Δ   {}", DeltaOrPlaceholder(state.has_delta, state.latest_delta)))
-                    | ftxui::color(DirectionColor(state.latest_delta)) | ftxui::bold,
-                ftxui::text(std::format("Session Δ  {}", DeltaOrPlaceholder(state.has_delta, state.session_delta)))
-                    | ftxui::color(DirectionColor(state.session_delta)),
+                ftxui::text(std::format("Last 1s Δ   {}", DeltaOrPlaceholder(state.HasDelta, state.LatestDelta)))
+                    | ftxui::color(DirectionColor(state.LatestDelta)) | ftxui::bold,
+                ftxui::text(std::format("Session Δ  {}", DeltaOrPlaceholder(state.HasDelta, state.SessionDelta)))
+                    | ftxui::color(DirectionColor(state.SessionDelta)),
                 ftxui::text(std::format(
                     "Last {}s Δ {}  ({} obs)",
                     Core::MAX_INPUT_WINDOW_SECONDS,
-                    DeltaOrPlaceholder(state.has_delta, rollingDelta),
-                    state.recent_deltas.size()
+                    DeltaOrPlaceholder(state.HasDelta, rollingDelta),
+                    state.RecentDeltas.size()
                 )) | ftxui::color(DirectionColor(rollingDelta)),
                 ftxui::text("Green = up   Red = down") | ftxui::color(ftxui::Color::GrayDark)
             })
@@ -153,7 +153,7 @@ namespace Runtime {
         const ftxui::Element sparklinePanel = ftxui::window(
             ftxui::text("RECENT ONE-SECOND MIDPOINT CHANGES  (oldest → newest)"),
             ftxui::vbox({
-                RenderSparkline(state.recent_deltas),
+                RenderSparkline(state.RecentDeltas),
                 ftxui::hbox({
                     ftxui::text("−") | ftxui::color(ftxui::Color::Red),
                     ftxui::text(" down   "),
@@ -166,10 +166,10 @@ namespace Runtime {
         const ftxui::Element windowPanel = ftxui::window(
             ftxui::text("ROLLING INPUT WINDOW") | ftxui::bold,
             ftxui::vbox({
-                RenderWindowBar(state.window_size),
+                RenderWindowBar(state.WindowSize),
                 ftxui::text(std::format(
                     "{} / {} one-second records ready for comparison",
-                    state.window_size,
+                    state.WindowSize,
                     Core::LIVE_INPUT_WINDOW_SECONDS
                 )),
                 ftxui::text("Press Escape to return to the menu.") | ftxui::color(ftxui::Color::GrayDark)
@@ -177,14 +177,14 @@ namespace Runtime {
         );
 
         return ftxui::window(
-            ftxui::text(std::format("WEBULL  /  {}  /  {}", state.symbol, state.environment)) | ftxui::bold,
+            ftxui::text(std::format("WEBULL  /  {}  /  {}", state.Symbol, state.Environment)) | ftxui::bold,
             ftxui::vbox({
                 ftxui::hbox({
-                    ftxui::text("●  " + state.status)
-                        | ftxui::color(state.has_quote ? ftxui::Color::Green : ftxui::Color::Yellow)
+                    ftxui::text("●  " + state.Status)
+                        | ftxui::color(state.HasQuote ? ftxui::Color::Green : ftxui::Color::Yellow)
                         | ftxui::bold,
                     ftxui::filler(),
-                    ftxui::text(std::format("{} quote updates", state.quote_count))
+                    ftxui::text(std::format("{} quote updates", state.QuoteCount))
                 }),
                 ftxui::separator(),
                 ftxui::hbox({bookPanel, movementPanel}),

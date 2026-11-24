@@ -22,16 +22,23 @@ namespace Core {
     private:
         // MEMBERS
         
+        /**
+         * @brief Accumulates a running mean and population variance without retaining samples.
+         */
         struct RunningStatistics {
-            std::uint64_t count{};
-            double mean{};
-            double sumSquaredDifferences{};
+            // MEMBERS
+
+            std::uint64_t Count{};
+            double Mean{};
+            double SumSquaredDifferences{};
+
+            // METHODS
 
             void Add(double value);
             double PopulationStdDev() const;
         };
 
-        RunningStatistics midDelta{};
+        RunningStatistics MidDelta{};
 
     public:
         // METHODS
@@ -53,15 +60,14 @@ namespace Core {
     /**
      * @brief Normalizes records in place using supplied parameters.
      *
-     * Only mid_delta and spread_delta are normalized. Volume is preserved as-is.
+     * Only the MidDelta feature is normalized.
      */
     void NormalizeRecordsVector(std::span<MLRecord> records, const NormalizationParameters& parameters);
 
     /**
      * @brief Normalizes records and flattens them into a FAISS-compatible vector.
      *
-     * Feature ordering:
-     * mid_delta, spread_delta.
+     * Each record contributes its normalized MidDelta in input order.
      */
     std::vector<float> NormalizeRecordsToVector(std::span<const MLRecord> records, const NormalizationParameters& parameters);
 

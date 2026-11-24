@@ -19,7 +19,7 @@ namespace Common {
     public:
         // CONSTRUCTORS
 
-        JsonUtility() : jsonData(nlohmann::json::object()) {}
+        JsonUtility() : JsonData(nlohmann::json::object()) {}
 
         /**
          * @brief Construct from a JSON string.
@@ -30,7 +30,7 @@ namespace Common {
          */
         explicit JsonUtility(const std::string& jsonString) {
             try {
-                jsonData = nlohmann::json::parse(jsonString);
+                JsonData = nlohmann::json::parse(jsonString);
             }
             catch (const nlohmann::json::parse_error& e) {
                 throw std::invalid_argument(
@@ -38,6 +38,8 @@ namespace Common {
                 );
             }
         }
+
+        // METHODS
 
         /**
          * @brief Construct from an existing JSON object.
@@ -84,15 +86,15 @@ namespace Common {
         // METHODS
 
         /** @brief Test for a key without copying or converting its value (including null). */
-        bool Contains(const std::string& key) const { return jsonData.contains(key); }
+        bool Contains(const std::string& key) const { return JsonData.contains(key); }
 
         /** @brief Inspect the root value; use At(key) to inspect a nested value. */
-        bool IsNumber() const noexcept { return jsonData.is_number(); }
-        bool IsBoolean() const noexcept { return jsonData.is_boolean(); }
-        bool IsNull() const noexcept { return jsonData.is_null(); }
-        bool IsString() const noexcept { return jsonData.is_string(); }
-        bool IsArray() const noexcept { return jsonData.is_array(); }
-        bool IsObject() const noexcept { return jsonData.is_object(); }
+        bool IsNumber() const noexcept { return JsonData.is_number(); }
+        bool IsBoolean() const noexcept { return JsonData.is_boolean(); }
+        bool IsNull() const noexcept { return JsonData.is_null(); }
+        bool IsString() const noexcept { return JsonData.is_string(); }
+        bool IsArray() const noexcept { return JsonData.is_array(); }
+        bool IsObject() const noexcept { return JsonData.is_object(); }
 
         /**
          * @brief Set a value associated with a key.
@@ -108,7 +110,7 @@ namespace Common {
         template<typename K, typename V>
         void Set(const K& key, const V& value) {
             try {
-                jsonData[key] = value;
+                JsonData[key] = value;
             }
             catch (const nlohmann::json::type_error& e) {
                 throw std::invalid_argument(
@@ -131,9 +133,9 @@ namespace Common {
          */
         template<typename T>
         T Get(const std::string& key) const {
-            if (jsonData.contains(key)) {
+            if (JsonData.contains(key)) {
                 try {
-                    return jsonData.at(key).get<T>();
+                    return JsonData.at(key).get<T>();
                 }
                 catch (const nlohmann::json::type_error& e) {
                     throw std::invalid_argument(
@@ -160,7 +162,7 @@ namespace Common {
         template<typename T>
         T Get() const {
             try {
-                return jsonData.get<T>();
+                return JsonData.get<T>();
             }
             catch (const nlohmann::json::type_error& e) {
                 throw std::invalid_argument(
@@ -182,12 +184,12 @@ namespace Common {
          */
         template<typename T>
         bool TryGet(const std::string& key, T& out) const {
-            if (jsonData.contains(key) == false) {
+            if (JsonData.contains(key) == false) {
                 return false;
             }
 
             try {
-                out = jsonData.at(key).get<T>();
+                out = JsonData.at(key).get<T>();
                 return true;
             }
             catch (const nlohmann::json::type_error&) {
@@ -206,19 +208,19 @@ namespace Common {
          * @throws std::out_of_range If the index is outside the array bounds.
          */
         JsonUtility At(std::size_t index) const {
-            if (jsonData.is_array() == false) {
+            if (JsonData.is_array() == false) {
                 throw std::runtime_error(
                     "JSON Error: Value is not an array."
                 );
             }
 
-            if (index >= jsonData.size()) {
+            if (index >= JsonData.size()) {
                 throw std::out_of_range(
                     "JSON Error: Array index out of range."
                 );
             }
 
-            return JsonUtility(jsonData.at(index), JsonTag{});
+            return JsonUtility(JsonData.at(index), JsonTag{});
         }
 
         /**
@@ -231,13 +233,13 @@ namespace Common {
          * @throws std::out_of_range If the key does not exist.
          */
         JsonUtility At(const std::string& key) const {
-            if (jsonData.contains(key) == false) {
+            if (JsonData.contains(key) == false) {
                 throw std::out_of_range(
                     "JSON Error: Key '" + key + "' not found in JSON data."
                 );
             }
 
-            return JsonUtility(jsonData.at(key), JsonTag{});
+            return JsonUtility(JsonData.at(key), JsonTag{});
         }
 
         /**
@@ -248,11 +250,11 @@ namespace Common {
         * @return false if the key did not exist.
         */
         bool Erase(const std::string& key) {
-            if (jsonData.contains(key) == false) {
+            if (JsonData.contains(key) == false) {
                 return false;
             }
 
-            jsonData.erase(key);
+            JsonData.erase(key);
             return true;
         }
 
@@ -262,15 +264,21 @@ namespace Common {
          * @return JSON data represented as a string.
          */
         std::string ToString() const {
-            return jsonData.dump();
+            return JsonData.dump();
         }
 
     private:
+
+        // MEMBERS
 
         /**
          * @brief Tag type used to construct JsonUtility from existing JSON data.
          */
         struct JsonTag {};
+
+        nlohmann::json JsonData;
+
+        // CONSTRUCTOR
 
         /**
          * @brief Construct from an existing JSON object internally.
@@ -279,11 +287,8 @@ namespace Common {
          * @param tag Internal constructor tag.
          */
         JsonUtility(const nlohmann::json& jsonData, JsonTag)
-            : jsonData(jsonData) {}
+            : JsonData(jsonData) {}
 
-        // MEMBERS
-
-        nlohmann::json jsonData;
     };
 
 }

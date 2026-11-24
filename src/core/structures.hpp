@@ -11,7 +11,9 @@ namespace Core {
      * 
      */
     struct MLRecord {
-        float mid_delta;
+        // MEMBERS
+
+        float MidDelta;
         // float spread_delta;
         // float volume;
     };
@@ -23,10 +25,12 @@ namespace Core {
      * Standard deviations use population statistics (N, not N-1).
      */
     struct NormalizationParameters {
-        std::uint64_t sample_count{};
+        // MEMBERS
 
-        double mid_delta_mean{};
-        double mid_delta_stddev{};
+        std::uint64_t SampleCount{};
+
+        double MidDeltaMean{};
+        double MidDeltaStddev{};
     };
 
 }

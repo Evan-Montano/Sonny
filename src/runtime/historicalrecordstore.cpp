@@ -19,18 +19,18 @@ namespace Runtime {
         date.insert(4, "-");
         date.insert(7, "-");
 
-        if (const auto cached = cache_.find(date); cached != cache_.end()) {
+        if (const auto cached = Cache.find(date); cached != Cache.end()) {
             return &cached->second;
         }
 
-        if (cache_.size() >= MAX_CACHED_DAYS) {
-            cache_.clear();
+        if (Cache.size() >= MAX_CACHED_DAYS) {
+            Cache.clear();
         }
 
         const std::filesystem::path recordPath = Common::Storage::RECORDS_BASE_PATH / (date + ".rec");
         try {
             auto records = Common::Storage::ReadBinaryRecords<Core::MLRecord>(recordPath);
-            return &cache_.emplace(date, std::move(records)).first->second;
+            return &Cache.emplace(date, std::move(records)).first->second;
         }
         catch (const std::exception& error) {
             Logger::Warning(std::format("Unable to load historical record file {}: {}", recordPath.string(), error.what()));

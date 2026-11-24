@@ -32,13 +32,20 @@ namespace Runtime {
          */
         class StreamStopGuard {
         public:
-            explicit StreamStopGuard(Client::WebullStreamingClient& client) : client_(client) {}
-            ~StreamStopGuard() { client_.Stop(); }
+            // CONSTRUCTOR
+
+            explicit StreamStopGuard(Client::WebullStreamingClient& client) : StreamClient(client) {}
             StreamStopGuard(const StreamStopGuard&) = delete;
             StreamStopGuard& operator=(const StreamStopGuard&) = delete;
 
+            // DESTRUCTOR
+
+            ~StreamStopGuard() { StreamClient.Stop(); }
+
         private:
-            Client::WebullStreamingClient& client_;
+            // MEMBERS
+
+            Client::WebullStreamingClient& StreamClient;
         };
 
     }
@@ -61,7 +68,7 @@ namespace Runtime {
         // --- View --- //
         // Declared first so it is torn down last, after the stream has stopped writing to it.
         QuoteViewState viewState{
-            .environment = this->EnvironmentType == Client::WebullEnvironment::Sandbox ? "SANDBOX" : "LIVE"
+            .Environment = this->EnvironmentType == Client::WebullEnvironment::Sandbox ? "SANDBOX" : "LIVE"
         };
 
         auto view = UI::Get().PushView(

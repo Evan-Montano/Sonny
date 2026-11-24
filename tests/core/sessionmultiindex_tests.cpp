@@ -41,11 +41,11 @@ namespace {
     }
 
     HalfHourIndex::QueryResult Candidate(const float distance, const std::string& yyyymmdd, const std::uint32_t recordIndex) {
-        return HalfHourIndex::QueryResult{.distance = distance, .tradingDayId = Day(yyyymmdd), .recordIndex = recordIndex};
+        return HalfHourIndex::QueryResult{.Distance = distance, .TradingDayId = Day(yyyymmdd), .RecordIndex = recordIndex};
     }
 
     Core::NormalizationParameters MakeParameters(const double mean = 0.0, const double stddev = 1.0) {
-        return Core::NormalizationParameters{.sample_count = 100, .mid_delta_mean = mean, .mid_delta_stddev = stddev};
+        return Core::NormalizationParameters{.SampleCount = 100, .MidDeltaMean = mean, .MidDeltaStddev = stddev};
     }
 
     /**
@@ -53,11 +53,11 @@ namespace {
      * With the default parameters its magnitude vector is |value| repeated and its direction vector sign(value) repeated.
      */
     std::vector<Core::MLRecord> Flat(const float value) {
-        return std::vector<Core::MLRecord>(WINDOW, Core::MLRecord{.mid_delta = value});
+        return std::vector<Core::MLRecord>(WINDOW, Core::MLRecord{.MidDelta = value});
     }
 
     std::size_t SegmentOf(const HalfHourIndex::QueryResult& result) {
-        return result.recordIndex / SessionMultiIndex::SECONDS_PER_SEGMENT;
+        return result.RecordIndex / SessionMultiIndex::SECONDS_PER_SEGMENT;
     }
 
     /**
@@ -83,35 +83,45 @@ namespace {
  */
 class SessionMultiIndexTests : public ::testing::Test {
 protected:
-    std::filesystem::path previousWorkingDirectory_;
-    std::filesystem::path tempDirectory_;
+    // MEMBERS
+
+    std::filesystem::path PreviousWorkingDirectory;
+    std::filesystem::path TempDirectory;
+
+    // METHODS
 
     void SetUp() override {
         const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        tempDirectory_ = std::filesystem::temp_directory_path() / ("sonny_session_index_tests_" + std::to_string(timestamp));
+        TempDirectory = std::filesystem::temp_directory_path() / ("sonny_session_index_tests_" + std::to_string(timestamp));
 
-        std::filesystem::create_directories(tempDirectory_);
-        previousWorkingDirectory_ = std::filesystem::current_path();
-        std::filesystem::current_path(tempDirectory_);
+        std::filesystem::create_directories(TempDirectory);
+        PreviousWorkingDirectory = std::filesystem::current_path();
+        std::filesystem::current_path(TempDirectory);
     }
 
     void TearDown() override {
-        std::filesystem::current_path(previousWorkingDirectory_);
-        std::filesystem::remove_all(tempDirectory_);
+        std::filesystem::current_path(PreviousWorkingDirectory);
+        std::filesystem::remove_all(TempDirectory);
     }
+
+    // MEMBERS
 
     /**
      * @brief A window stored in a segment: its records, the day it belongs to, and where it starts.
      */
     struct StoredWindow {
-        std::vector<Core::MLRecord> records;
-        std::string day = "2026-09-01";
+        // MEMBERS
+
+        std::vector<Core::MLRecord> Records;
+        std::string Day = "2026-09-01";
 
         /**
          * @brief Record index of the window; defaults to the first second of its segment.
          */
-        std::optional<std::size_t> recordIndex = std::nullopt;
+        std::optional<std::size_t> RecordIndex = std::nullopt;
     };
+
+    // METHODS
 
     /**
      * @brief Builds and saves (by destruction) one segment's magnitude and direction indexes.
@@ -127,11 +137,11 @@ protected:
         index.SetNormalizationParameters(parameters);
 
         for (const StoredWindow& window : windows) {
-            std::vector<Core::MLRecord> records = window.records;
+            std::vector<Core::MLRecord> records = window.Records;
             index.AddVectorsToIndex(
                 std::span<Core::MLRecord>(records),
-                std::filesystem::path("storage/records") / (window.day + ".rec"),
-                window.recordIndex.value_or(segmentStart)
+                std::filesystem::path("storage/records") / (window.Day + ".rec"),
+                window.RecordIndex.value_or(segmentStart)
             );
         }
     }
@@ -142,7 +152,7 @@ protected:
     static void BuildFarWindowInEverySegmentExcept(const std::vector<std::size_t>& skippedSegments) {
         for (std::size_t segment = 0; segment < SessionMultiIndex::SEGMENT_COUNT; ++segment) {
             if (std::find(skippedSegments.begin(), skippedSegments.end(), segment) == skippedSegments.end()) {
-                BuildSegment(segment, {{.records = Flat(-5.0f)}});
+                BuildSegment(segment, {{.Records = Flat(-5.0f)}});
             }
         }
     }
@@ -248,9 +258,9 @@ TEST(CandidateSelectionTests, KeepsTheNearestAcrossThePooledCandidates) {
     );
 
     ASSERT_EQ(selected.size(), 3u);
-    EXPECT_FLOAT_EQ(selected[0].distance, 1.0f);
-    EXPECT_FLOAT_EQ(selected[1].distance, 2.0f);
-    EXPECT_FLOAT_EQ(selected[2].distance, 3.0f);
+    EXPECT_FLOAT_EQ(selected[0].Distance, 1.0f);
+    EXPECT_FLOAT_EQ(selected[1].Distance, 2.0f);
+    EXPECT_FLOAT_EQ(selected[2].Distance, 3.0f);
 }
 
 TEST(CandidateSelectionTests, TiesPreferTheNewestDayThenTheEarliestRecord) {
@@ -266,14 +276,14 @@ TEST(CandidateSelectionTests, TiesPreferTheNewestDayThenTheEarliestRecord) {
         ASSERT_EQ(selected.size(), 5u);
 
         // A nearer match always wins, however old its day.
-        EXPECT_EQ(selected[0].tradingDayId, Day("20170301"));
+        EXPECT_EQ(selected[0].TradingDayId, Day("20170301"));
 
-        EXPECT_EQ(selected[1].tradingDayId, Day("20260903"));
-        EXPECT_EQ(selected[1].recordIndex, 20u);
-        EXPECT_EQ(selected[2].tradingDayId, Day("20260903"));
-        EXPECT_EQ(selected[2].recordIndex, 9000u);
-        EXPECT_EQ(selected[3].tradingDayId, Day("20260902"));
-        EXPECT_EQ(selected[4].tradingDayId, Day("20250101"));
+        EXPECT_EQ(selected[1].TradingDayId, Day("20260903"));
+        EXPECT_EQ(selected[1].RecordIndex, 20u);
+        EXPECT_EQ(selected[2].TradingDayId, Day("20260903"));
+        EXPECT_EQ(selected[2].RecordIndex, 9000u);
+        EXPECT_EQ(selected[3].TradingDayId, Day("20260902"));
+        EXPECT_EQ(selected[4].TradingDayId, Day("20250101"));
     };
 
     expectOrder(SessionMultiIndex::SelectNearest(candidates, 10));
@@ -297,8 +307,8 @@ TEST(CandidateSelectionTests, TiedCandidatesAtTheCapAreCutDeterministically) {
     const auto selected = SessionMultiIndex::SelectNearest(candidates, 2);
 
     ASSERT_EQ(selected.size(), 2u);
-    EXPECT_EQ(selected[0].tradingDayId, Day("20260904"));
-    EXPECT_EQ(selected[1].tradingDayId, Day("20260903"));
+    EXPECT_EQ(selected[0].TradingDayId, Day("20260904"));
+    EXPECT_EQ(selected[1].TradingDayId, Day("20260903"));
 }
 
 TEST(CandidateSelectionTests, DuplicateWindowIsKeptOnceWithItsSmallestDistance) {
@@ -314,12 +324,12 @@ TEST(CandidateSelectionTests, DuplicateWindowIsKeptOnceWithItsSmallestDistance) 
 
     ASSERT_EQ(selected.size(), 3u);
 
-    EXPECT_FLOAT_EQ(selected[0].distance, 0.5f);
-    EXPECT_EQ(selected[0].tradingDayId, Day("20260901"));
-    EXPECT_EQ(selected[0].recordIndex, 1795u);
+    EXPECT_FLOAT_EQ(selected[0].Distance, 0.5f);
+    EXPECT_EQ(selected[0].TradingDayId, Day("20260901"));
+    EXPECT_EQ(selected[0].RecordIndex, 1795u);
 
-    EXPECT_FLOAT_EQ(selected[1].distance, 1.0f);
-    EXPECT_FLOAT_EQ(selected[2].distance, 1.5f);
+    EXPECT_FLOAT_EQ(selected[1].Distance, 1.0f);
+    EXPECT_FLOAT_EQ(selected[2].Distance, 1.5f);
 }
 
 TEST(CandidateSelectionTests, DuplicatesDoNotUseUpTheCap) {
@@ -335,8 +345,8 @@ TEST(CandidateSelectionTests, DuplicatesDoNotUseUpTheCap) {
     );
 
     ASSERT_EQ(selected.size(), 2u);
-    EXPECT_EQ(selected[0].recordIndex, 10u);
-    EXPECT_EQ(selected[1].recordIndex, 500u);
+    EXPECT_EQ(selected[0].RecordIndex, 10u);
+    EXPECT_EQ(selected[1].RecordIndex, 500u);
 }
 
 TEST(CandidateSelectionTests, DropsCandidatesWithoutAFiniteDistance) {
@@ -350,7 +360,7 @@ TEST(CandidateSelectionTests, DropsCandidatesWithoutAFiniteDistance) {
     );
 
     ASSERT_EQ(selected.size(), 1u);
-    EXPECT_EQ(selected[0].recordIndex, 2u);
+    EXPECT_EQ(selected[0].RecordIndex, 2u);
 }
 
 TEST(CandidateSelectionTests, HandlesEmptyInputAndAZeroCap) {
@@ -395,7 +405,7 @@ TEST(MagnitudeDistanceScaleTests, ScaleIsTheSquaredStandardDeviationRatio) {
 TEST_F(SessionMultiIndexTests, LoadsAndQueriesAllThirteenSegments) {
     // Segment s holds one window whose every second moves by 1 + s.
     for (std::size_t segment = 0; segment < SessionMultiIndex::SEGMENT_COUNT; ++segment) {
-        BuildSegment(segment, {{.records = Flat(1.0f + static_cast<float>(segment))}});
+        BuildSegment(segment, {{.Records = Flat(1.0f + static_cast<float>(segment))}});
     }
 
     const SessionMultiIndex index = LoadEverySegment();
@@ -407,8 +417,8 @@ TEST_F(SessionMultiIndexTests, LoadsAndQueriesAllThirteenSegments) {
         const auto results = index.Query(Flat(1.0f + static_cast<float>(segment)), 1);
 
         ASSERT_EQ(results.MagnitudeResults.size(), 1u);
-        EXPECT_NEAR(results.MagnitudeResults.front().distance, 0.0f, 1e-6f);
-        EXPECT_EQ(results.MagnitudeResults.front().recordIndex, segment * SessionMultiIndex::SECONDS_PER_SEGMENT);
+        EXPECT_NEAR(results.MagnitudeResults.front().Distance, 0.0f, 1e-6f);
+        EXPECT_EQ(results.MagnitudeResults.front().RecordIndex, segment * SessionMultiIndex::SECONDS_PER_SEGMENT);
     }
 
     // With room for everything, each segment contributes its window to both sub-indexes.
@@ -427,10 +437,10 @@ TEST_F(SessionMultiIndexTests, CapAppliesToThePooledCandidatesNotToEachSegment) 
     // Days are added newest first, as Setup does, so a segment's own tie-break (lowest FAISS ID)
     // keeps the same newest days that the pooled ranking prefers.
     BuildSegment(3, {
-        {.records = Flat(1.03f), .day = "2026-09-04"},
-        {.records = Flat(1.02f), .day = "2026-09-03"},
-        {.records = Flat(1.01f), .day = "2026-09-02"},
-        {.records = Flat(1.00f), .day = "2026-09-01"}
+        {.Records = Flat(1.03f), .Day = "2026-09-04"},
+        {.Records = Flat(1.02f), .Day = "2026-09-03"},
+        {.Records = Flat(1.01f), .Day = "2026-09-02"},
+        {.Records = Flat(1.00f), .Day = "2026-09-01"}
     });
     BuildFarWindowInEverySegmentExcept({3});
 
@@ -443,23 +453,23 @@ TEST_F(SessionMultiIndexTests, CapAppliesToThePooledCandidatesNotToEachSegment) 
     ASSERT_EQ(results.MagnitudeResults.size(), 3u);
     ASSERT_EQ(results.DirectionResults.size(), 3u);
 
-    EXPECT_EQ(results.MagnitudeResults[0].tradingDayId, Day("20260901"));
-    EXPECT_EQ(results.MagnitudeResults[1].tradingDayId, Day("20260902"));
-    EXPECT_EQ(results.MagnitudeResults[2].tradingDayId, Day("20260903"));
+    EXPECT_EQ(results.MagnitudeResults[0].TradingDayId, Day("20260901"));
+    EXPECT_EQ(results.MagnitudeResults[1].TradingDayId, Day("20260902"));
+    EXPECT_EQ(results.MagnitudeResults[2].TradingDayId, Day("20260903"));
 
     for (const auto& result : results.MagnitudeResults) EXPECT_EQ(SegmentOf(result), 3u);
     for (const auto& result : results.DirectionResults) EXPECT_EQ(SegmentOf(result), 3u);
 
     // All four of segment 3's windows point up, so they tie in the direction index: newest days first.
-    EXPECT_EQ(results.DirectionResults[0].tradingDayId, Day("20260904"));
-    EXPECT_EQ(results.DirectionResults[1].tradingDayId, Day("20260903"));
-    EXPECT_EQ(results.DirectionResults[2].tradingDayId, Day("20260902"));
+    EXPECT_EQ(results.DirectionResults[0].TradingDayId, Day("20260904"));
+    EXPECT_EQ(results.DirectionResults[1].TradingDayId, Day("20260903"));
+    EXPECT_EQ(results.DirectionResults[2].TradingDayId, Day("20260902"));
 }
 
 TEST_F(SessionMultiIndexTests, RanksCandidatesFromDifferentSegmentsTogether) {
-    BuildSegment(0, {{.records = Flat(1.3f)}});
-    BuildSegment(6, {{.records = Flat(1.1f)}});
-    BuildSegment(12, {{.records = Flat(1.2f)}});
+    BuildSegment(0, {{.Records = Flat(1.3f)}});
+    BuildSegment(6, {{.Records = Flat(1.1f)}});
+    BuildSegment(12, {{.Records = Flat(1.2f)}});
 
     const SessionMultiIndex index = LoadEverySegment();
     const auto results = index.Query(Flat(1.0f), 2);
@@ -467,15 +477,15 @@ TEST_F(SessionMultiIndexTests, RanksCandidatesFromDifferentSegmentsTogether) {
     ASSERT_EQ(results.MagnitudeResults.size(), 2u);
     EXPECT_EQ(SegmentOf(results.MagnitudeResults[0]), 6u);
     EXPECT_EQ(SegmentOf(results.MagnitudeResults[1]), 12u);
-    EXPECT_LT(results.MagnitudeResults[0].distance, results.MagnitudeResults[1].distance);
+    EXPECT_LT(results.MagnitudeResults[0].Distance, results.MagnitudeResults[1].Distance);
 }
 
 TEST_F(SessionMultiIndexTests, MagnitudeAndDirectionAreRankedIndependently) {
     // Segment 2 matches the size of the query's moves but points the other way.
-    BuildSegment(2, {{.records = Flat(-1.0f)}});
+    BuildSegment(2, {{.Records = Flat(-1.0f)}});
 
     // Segment 9 points the same way but its moves are four times larger.
-    BuildSegment(9, {{.records = Flat(4.0f)}});
+    BuildSegment(9, {{.Records = Flat(4.0f)}});
 
     const SessionMultiIndex index = LoadEverySegment();
     const auto results = index.Query(Flat(1.0f), 1);
@@ -484,10 +494,10 @@ TEST_F(SessionMultiIndexTests, MagnitudeAndDirectionAreRankedIndependently) {
     ASSERT_EQ(results.DirectionResults.size(), 1u);
 
     EXPECT_EQ(SegmentOf(results.MagnitudeResults.front()), 2u);
-    EXPECT_NEAR(results.MagnitudeResults.front().distance, 0.0f, 1e-6f);
+    EXPECT_NEAR(results.MagnitudeResults.front().Distance, 0.0f, 1e-6f);
 
     EXPECT_EQ(SegmentOf(results.DirectionResults.front()), 9u);
-    EXPECT_NEAR(results.DirectionResults.front().distance, 0.0f, 1e-6f);
+    EXPECT_NEAR(results.DirectionResults.front().Distance, 0.0f, 1e-6f);
 }
 
 TEST_F(SessionMultiIndexTests, MagnitudeDistancesAreComparedOnOneScaleAcrossSegments) {
@@ -496,8 +506,8 @@ TEST_F(SessionMultiIndexTests, MagnitudeDistancesAreComparedOnOneScaleAcrossSegm
     const Core::NormalizationParameters quiet = MakeParameters(0.0, 1.0);
     const Core::NormalizationParameters volatileSegment = MakeParameters(0.0, 10.0);
 
-    BuildSegment(1, {{.records = Flat(1.2f)}}, quiet);
-    BuildSegment(4, {{.records = Flat(1.5f)}}, volatileSegment);
+    BuildSegment(1, {{.Records = Flat(1.2f)}}, quiet);
+    BuildSegment(4, {{.Records = Flat(1.5f)}}, volatileSegment);
 
     // As reported by each segment, the volatile segment's distance is 100 times smaller than its raw
     // distance, so the farther window looks nearer. This is why raw distances cannot be pooled.
@@ -505,8 +515,8 @@ TEST_F(SessionMultiIndexTests, MagnitudeDistancesAreComparedOnOneScaleAcrossSegm
         const Core::HalfHourMultiIndex quietIndex(1 * SessionMultiIndex::SECONDS_PER_SEGMENT, WINDOW);
         const Core::HalfHourMultiIndex volatileIndex(4 * SessionMultiIndex::SECONDS_PER_SEGMENT, WINDOW);
 
-        const float quietDistance = quietIndex.Query(Flat(1.0f), 1).MagnitudeResults.front().distance;
-        const float volatileDistance = volatileIndex.Query(Flat(1.0f), 1).MagnitudeResults.front().distance;
+        const float quietDistance = quietIndex.Query(Flat(1.0f), 1).MagnitudeResults.front().Distance;
+        const float volatileDistance = volatileIndex.Query(Flat(1.0f), 1).MagnitudeResults.front().Distance;
 
         EXPECT_NEAR(quietDistance, WINDOW * 0.2f * 0.2f, 1e-4f);
         EXPECT_NEAR(volatileDistance, WINDOW * 0.05f * 0.05f, 1e-5f);
@@ -521,32 +531,32 @@ TEST_F(SessionMultiIndexTests, MagnitudeDistancesAreComparedOnOneScaleAcrossSegm
     EXPECT_EQ(SegmentOf(results.MagnitudeResults[1]), 4u);
 
     // On the common scale the two distances keep their raw proportion (0.5² / 0.2²)...
-    EXPECT_NEAR(results.MagnitudeResults[1].distance / results.MagnitudeResults[0].distance, 6.25f, 1e-3f);
+    EXPECT_NEAR(results.MagnitudeResults[1].Distance / results.MagnitudeResults[0].Distance, 6.25f, 1e-3f);
 
     // ...and are expressed in units of the pooled standard deviation.
     const std::vector<Core::NormalizationParameters> parameters{quiet, volatileSegment};
     const double reference = SessionMultiIndex::PooledStandardDeviation(parameters);
-    EXPECT_NEAR(results.MagnitudeResults[0].distance, WINDOW * 0.2 * 0.2 / (reference * reference), 1e-6);
-    EXPECT_NEAR(results.MagnitudeResults[1].distance, WINDOW * 0.5 * 0.5 / (reference * reference), 1e-6);
+    EXPECT_NEAR(results.MagnitudeResults[0].Distance, WINDOW * 0.2 * 0.2 / (reference * reference), 1e-6);
+    EXPECT_NEAR(results.MagnitudeResults[1].Distance, WINDOW * 0.5 * 0.5 / (reference * reference), 1e-6);
 }
 
 TEST_F(SessionMultiIndexTests, SegmentNormalizationMeansDoNotAffectTheRanking) {
     // Same standard deviation, very different means: the mean cancels out of every distance.
-    BuildSegment(0, {{.records = Flat(1.3f)}}, MakeParameters(0.0, 2.0));
-    BuildSegment(7, {{.records = Flat(1.1f)}}, MakeParameters(50.0, 2.0));
+    BuildSegment(0, {{.Records = Flat(1.3f)}}, MakeParameters(0.0, 2.0));
+    BuildSegment(7, {{.Records = Flat(1.1f)}}, MakeParameters(50.0, 2.0));
 
     const SessionMultiIndex index = LoadEverySegment();
     const auto results = index.Query(Flat(1.0f), 2);
 
     ASSERT_EQ(results.MagnitudeResults.size(), 2u);
     EXPECT_EQ(SegmentOf(results.MagnitudeResults[0]), 7u);
-    EXPECT_NEAR(results.MagnitudeResults[1].distance / results.MagnitudeResults[0].distance, 9.0f, 1e-2f);
+    EXPECT_NEAR(results.MagnitudeResults[1].Distance / results.MagnitudeResults[0].Distance, 9.0f, 1e-2f);
 }
 
 TEST_F(SessionMultiIndexTests, SegmentWithoutAStandardDeviationIsLeftOutOfMagnitudeOnly) {
     // A zero standard deviation normalizes every vector to zeros, so its magnitude distances mean nothing.
-    BuildSegment(0, {{.records = Flat(3.0f)}}, MakeParameters(0.0, 0.0));
-    BuildSegment(1, {{.records = Flat(1.5f)}});
+    BuildSegment(0, {{.Records = Flat(3.0f)}}, MakeParameters(0.0, 0.0));
+    BuildSegment(1, {{.Records = Flat(1.5f)}});
 
     const SessionMultiIndex index = LoadEverySegment();
     ASSERT_EQ(index.LoadedSegmentCount(), 2u);
@@ -565,7 +575,7 @@ TEST_F(SessionMultiIndexTests, SegmentWithoutAStandardDeviationIsLeftOutOfMagnit
 // ============================================================ //
 
 TEST_F(SessionMultiIndexTests, NothingIsLoadedUntilSegmentsAreRequested) {
-    BuildSegment(0, {{.records = Flat(1.0f)}});
+    BuildSegment(0, {{.Records = Flat(1.0f)}});
 
     const SessionMultiIndex index(WINDOW);
 
@@ -577,7 +587,7 @@ TEST_F(SessionMultiIndexTests, NothingIsLoadedUntilSegmentsAreRequested) {
 TEST_F(SessionMultiIndexTests, LoadsAndSearchesOnlyTheRequestedSegments) {
     // Segment s holds one window whose every second moves by 1 + s.
     for (std::size_t segment = 0; segment < SessionMultiIndex::SEGMENT_COUNT; ++segment) {
-        BuildSegment(segment, {{.records = Flat(1.0f + static_cast<float>(segment))}});
+        BuildSegment(segment, {{.Records = Flat(1.0f + static_cast<float>(segment))}});
     }
 
     SessionMultiIndex index(WINDOW);
@@ -592,7 +602,7 @@ TEST_F(SessionMultiIndexTests, LoadsAndSearchesOnlyTheRequestedSegments) {
     ASSERT_EQ(results.MagnitudeResults.size(), 4u);
     ASSERT_EQ(results.DirectionResults.size(), 4u);
     EXPECT_EQ(SegmentOf(results.MagnitudeResults.front()), 5u);
-    EXPECT_GT(results.MagnitudeResults.front().distance, 0.0f);
+    EXPECT_GT(results.MagnitudeResults.front().Distance, 0.0f);
 
     for (const auto& result : results.MagnitudeResults) {
         EXPECT_GE(SegmentOf(result), 5u);
@@ -602,7 +612,7 @@ TEST_F(SessionMultiIndexTests, LoadsAndSearchesOnlyTheRequestedSegments) {
 
 TEST_F(SessionMultiIndexTests, MovingTheLoadedSegmentsReleasesTheOldAndLoadsTheNew) {
     for (std::size_t segment = 0; segment < SessionMultiIndex::SEGMENT_COUNT; ++segment) {
-        BuildSegment(segment, {{.records = Flat(1.0f + static_cast<float>(segment))}});
+        BuildSegment(segment, {{.Records = Flat(1.0f + static_cast<float>(segment))}});
     }
 
     SessionMultiIndex index(WINDOW);
@@ -615,7 +625,7 @@ TEST_F(SessionMultiIndexTests, MovingTheLoadedSegmentsReleasesTheOldAndLoadsTheN
     index.LoadSegments(Segments(1, 3));
     EXPECT_EQ(index.LoadedSegments(), Segments(1, 3));
     EXPECT_EQ(SegmentOf(index.Query(Flat(1.0f), 1).MagnitudeResults.front()), 1u);
-    EXPECT_NEAR(index.Query(Flat(4.0f), 1).MagnitudeResults.front().distance, 0.0f, 1e-6f);
+    EXPECT_NEAR(index.Query(Flat(4.0f), 1).MagnitudeResults.front().Distance, 0.0f, 1e-6f);
 
     // The same request again changes nothing.
     index.LoadSegments(Segments(1, 3));
@@ -628,14 +638,14 @@ TEST_F(SessionMultiIndexTests, MovingTheLoadedSegmentsReleasesTheOldAndLoadsTheN
 }
 
 TEST_F(SessionMultiIndexTests, CommonMagnitudeScaleFollowsTheLoadedSegments) {
-    BuildSegment(1, {{.records = Flat(1.2f)}}, MakeParameters(0.0, 1.0));
-    BuildSegment(4, {{.records = Flat(1.5f)}}, MakeParameters(0.0, 10.0));
+    BuildSegment(1, {{.Records = Flat(1.2f)}}, MakeParameters(0.0, 1.0));
+    BuildSegment(4, {{.Records = Flat(1.5f)}}, MakeParameters(0.0, 10.0));
 
     SessionMultiIndex index(WINDOW);
 
     // Alone, a segment is its own reference: its distances are exactly what it reports itself.
     index.LoadSegments(Segments(4, 4));
-    EXPECT_NEAR(index.Query(Flat(1.0f), 1).MagnitudeResults.front().distance, WINDOW * 0.05f * 0.05f, 1e-5f);
+    EXPECT_NEAR(index.Query(Flat(1.0f), 1).MagnitudeResults.front().Distance, WINDOW * 0.05f * 0.05f, 1e-5f);
 
     // With a second segment loaded, both are re-expressed in units of their pooled standard deviation.
     index.LoadSegments(std::vector<std::size_t>{1, 4});
@@ -646,7 +656,7 @@ TEST_F(SessionMultiIndexTests, CommonMagnitudeScaleFollowsTheLoadedSegments) {
     const auto results = index.Query(Flat(1.0f), 2);
     ASSERT_EQ(results.MagnitudeResults.size(), 2u);
     EXPECT_EQ(SegmentOf(results.MagnitudeResults[0]), 1u);
-    EXPECT_NEAR(results.MagnitudeResults[1].distance, WINDOW * 0.5 * 0.5 / (reference * reference), 1e-6);
+    EXPECT_NEAR(results.MagnitudeResults[1].Distance, WINDOW * 0.5 * 0.5 / (reference * reference), 1e-6);
 }
 
 TEST_F(SessionMultiIndexTests, RejectsSegmentsOutsideTheSession) {
@@ -662,9 +672,9 @@ TEST_F(SessionMultiIndexTests, RejectsSegmentsOutsideTheSession) {
 
 TEST_F(SessionMultiIndexTests, WindowStoredInTwoSegmentsIsReturnedOnceWithItsBestDistance) {
     // The same historical window (same day, same record index) filed under two segments.
-    BuildSegment(0, {{.records = Flat(1.4f), .day = "2026-09-01", .recordIndex = 1795}});
-    BuildSegment(1, {{.records = Flat(1.0f), .day = "2026-09-01", .recordIndex = 1795}});
-    BuildSegment(2, {{.records = Flat(2.0f), .day = "2026-09-01"}});
+    BuildSegment(0, {{.Records = Flat(1.4f), .Day = "2026-09-01", .RecordIndex = 1795}});
+    BuildSegment(1, {{.Records = Flat(1.0f), .Day = "2026-09-01", .RecordIndex = 1795}});
+    BuildSegment(2, {{.Records = Flat(2.0f), .Day = "2026-09-01"}});
 
     const SessionMultiIndex index = LoadEverySegment();
     const auto results = index.Query(Flat(1.0f), 10);
@@ -673,14 +683,14 @@ TEST_F(SessionMultiIndexTests, WindowStoredInTwoSegmentsIsReturnedOnceWithItsBes
         ASSERT_EQ(streamResults->size(), 2u);
 
         const auto duplicates = std::count_if(streamResults->begin(), streamResults->end(), [](const auto& result) {
-            return result.recordIndex == 1795u;
+            return result.RecordIndex == 1795u;
         });
         EXPECT_EQ(duplicates, 1);
     }
 
     // The exact copy (distance 0) is the one that is kept.
-    EXPECT_EQ(results.MagnitudeResults.front().recordIndex, 1795u);
-    EXPECT_NEAR(results.MagnitudeResults.front().distance, 0.0f, 1e-6f);
+    EXPECT_EQ(results.MagnitudeResults.front().RecordIndex, 1795u);
+    EXPECT_NEAR(results.MagnitudeResults.front().Distance, 0.0f, 1e-6f);
 }
 
 // ============================================================ //
@@ -688,8 +698,8 @@ TEST_F(SessionMultiIndexTests, WindowStoredInTwoSegmentsIsReturnedOnceWithItsBes
 // ============================================================ //
 
 TEST_F(SessionMultiIndexTests, MissingSegmentsAreSkippedAndNeverCreated) {
-    BuildSegment(0, {{.records = Flat(1.2f)}});
-    BuildSegment(5, {{.records = Flat(1.1f)}});
+    BuildSegment(0, {{.Records = Flat(1.2f)}});
+    BuildSegment(5, {{.Records = Flat(1.1f)}});
 
     {
         const SessionMultiIndex index = LoadEverySegment();
@@ -709,8 +719,8 @@ TEST_F(SessionMultiIndexTests, MissingSegmentsAreSkippedAndNeverCreated) {
 }
 
 TEST_F(SessionMultiIndexTests, SegmentMissingOneOfItsFilesIsSkippedWhole) {
-    BuildSegment(0, {{.records = Flat(1.2f)}});
-    BuildSegment(1, {{.records = Flat(1.1f)}});
+    BuildSegment(0, {{.Records = Flat(1.2f)}});
+    BuildSegment(1, {{.Records = Flat(1.1f)}});
 
     // Without its direction index, segment 1 contributes to neither sub-index.
     std::filesystem::remove(std::format("storage/indexes/{}s/d/1000-1030.index", WINDOW));
@@ -725,8 +735,8 @@ TEST_F(SessionMultiIndexTests, SegmentMissingOneOfItsFilesIsSkippedWhole) {
 }
 
 TEST_F(SessionMultiIndexTests, SegmentThatFailsToLoadIsSkipped) {
-    BuildSegment(0, {{.records = Flat(1.2f)}});
-    BuildSegment(1, {{.records = Flat(1.1f)}});
+    BuildSegment(0, {{.Records = Flat(1.2f)}});
+    BuildSegment(1, {{.Records = Flat(1.1f)}});
 
     // Replace segment 1's magnitude index with one built for another input window.
     faiss::IndexFlatL2 incompatibleIndex(static_cast<int>(WINDOW) + 5);
@@ -754,10 +764,10 @@ TEST_F(SessionMultiIndexTests, NoSegmentsMeansNoResultsAndNoFiles) {
 }
 
 TEST_F(SessionMultiIndexTests, QueryRejectsIncorrectRecordCount) {
-    BuildSegment(0, {{.records = Flat(1.0f)}});
+    BuildSegment(0, {{.Records = Flat(1.0f)}});
 
     const SessionMultiIndex index = LoadEverySegment();
-    const std::vector<Core::MLRecord> tooShort(WINDOW - 1, Core::MLRecord{.mid_delta = 1.0f});
+    const std::vector<Core::MLRecord> tooShort(WINDOW - 1, Core::MLRecord{.MidDelta = 1.0f});
 
     EXPECT_THROW(index.Query(tooShort, 5), std::invalid_argument);
 }

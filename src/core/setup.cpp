@@ -214,7 +214,7 @@ namespace Core {
                                             );
 
                                             for (Core::MLRecord &rec : segment) {
-                                                rec.mid_delta = std::abs(rec.mid_delta);
+                                                rec.MidDelta = std::abs(rec.MidDelta);
                                             }
 
                                             accumulator.AddRecords(segment);
@@ -235,7 +235,7 @@ namespace Core {
                                     "Calculated normalization parameters for segment {} "
                                     "using {} historical records.",
                                     segmentIndex + 1,
-                                    parameters.sample_count
+                                    parameters.SampleCount
                                 ),
                                 true
                             );

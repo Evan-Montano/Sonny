@@ -16,11 +16,15 @@ namespace Runtime {
          * @brief Running weight totals for one index's matches.
          */
         struct WeightTotals {
-            double total{};
-            double squared{};
+            // MEMBERS
+
+            double Total{};
+            double Squared{};
+
+            // METHODS
 
             double EffectiveMatches() const {
-                return (total * total) / squared;
+                return (Total * Total) / Squared;
             }
         };
 
@@ -29,7 +33,7 @@ namespace Runtime {
                 throw std::invalid_argument(std::string("Cannot build a forecast without ") + label + " matches.");
             }
 
-            if (weights.total > 0.0 == false || std::isfinite(weights.total) == false) {
+            if (weights.Total > 0.0 == false || std::isfinite(weights.Total) == false) {
                 throw std::invalid_argument(std::string("The ") + label + " match weights must sum to a finite positive value.");
             }
         }
@@ -64,13 +68,13 @@ namespace Runtime {
         WeightTotals magnitudeWeights{};
 
         for (const HistoricalMatch& match : magnitudeMatches) {
-            magnitudeWeights.total += match.weight;
-            magnitudeWeights.squared += match.weight * match.weight;
+            magnitudeWeights.Total += match.Weight;
+            magnitudeWeights.Squared += match.Weight * match.Weight;
 
             double cumulative = 0.0;
             for (std::size_t second = 0; second < FORECAST_HORIZON_SECONDS; ++second) {
-                cumulative += match.mid_deltas[second];
-                weightedAbsoluteCumulative[second] += match.weight * std::abs(cumulative);
+                cumulative += match.MidDeltas[second];
+                weightedAbsoluteCumulative[second] += match.Weight * std::abs(cumulative);
             }
         }
 
@@ -82,13 +86,13 @@ namespace Runtime {
         WeightTotals directionWeights{};
 
         for (const HistoricalMatch& match : directionMatches) {
-            directionWeights.total += match.weight;
-            directionWeights.squared += match.weight * match.weight;
+            directionWeights.Total += match.Weight;
+            directionWeights.Squared += match.Weight * match.Weight;
 
             double cumulative = 0.0;
             for (std::size_t second = 0; second < FORECAST_HORIZON_SECONDS; ++second) {
-                cumulative += match.mid_deltas[second];
-                weightedDirectionVotes[second] += match.weight * MoveDirection(cumulative);
+                cumulative += match.MidDeltas[second];
+                weightedDirectionVotes[second] += match.Weight * MoveDirection(cumulative);
             }
         }
 
@@ -97,30 +101,30 @@ namespace Runtime {
         // === COMBINE === //
 
         ForecastSummary summary{
-            .forecast = PredictionForecast{
-                .as_of_timestamp_ms = asOfTimestampMs,
-                .historical_matches = std::min(magnitudeMatches.size(), directionMatches.size())
+            .Forecast = PredictionForecast{
+                .AsOfTimestampMs = asOfTimestampMs,
+                .HistoricalMatches = std::min(magnitudeMatches.size(), directionMatches.size())
             },
-            .magnitude_matches = magnitudeMatches.size(),
-            .direction_matches = directionMatches.size(),
-            .magnitude_effective_matches = magnitudeWeights.EffectiveMatches(),
-            .direction_effective_matches = directionWeights.EffectiveMatches()
+            .MagnitudeMatches = magnitudeMatches.size(),
+            .DirectionMatches = directionMatches.size(),
+            .MagnitudeEffectiveMatches = magnitudeWeights.EffectiveMatches(),
+            .DirectionEffectiveMatches = directionWeights.EffectiveMatches()
         };
 
         // Horizons are 1-based seconds; the arrays above are 0-based.
         for (std::size_t i = 0; i < PredictionEvaluationHorizons.size(); ++i) {
             const std::size_t second = PredictionEvaluationHorizons[i] - 1;
 
-            const double magnitude = weightedAbsoluteCumulative[second] / magnitudeWeights.total;
-            const double agreement = weightedDirectionVotes[second] / directionWeights.total;
+            const double magnitude = weightedAbsoluteCumulative[second] / magnitudeWeights.Total;
+            const double agreement = weightedDirectionVotes[second] / directionWeights.Total;
 
-            summary.expected_magnitudes[i] = magnitude;
-            summary.direction_agreement[i] = agreement;
+            summary.ExpectedMagnitudes[i] = magnitude;
+            summary.DirectionAgreement[i] = agreement;
 
             // Full magnitude in the winning direction; the agreement is kept as a confidence diagnostic
             // instead of scaling the magnitude, which would reintroduce the shrink-toward-zero problem.
             const double direction = agreement > 0.0 ? 1.0 : (agreement < 0.0 ? -1.0 : 0.0);
-            summary.forecast.cumulative_changes[i] = direction * magnitude;
+            summary.Forecast.CumulativeChanges[i] = direction * magnitude;
         }
 
         return summary;

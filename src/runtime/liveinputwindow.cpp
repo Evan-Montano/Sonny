@@ -12,11 +12,11 @@ namespace Runtime {
     // ========== LIVE INPUT WINDOW ========== //
 
     std::size_t LiveInputWindow::Push(const LiveRecord& record) {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(Mutex);
 
-        if (records_.empty() == false) {
-            const std::int64_t expectedSecond = records_.back().timestamp_ms / 1000 + 1;
-            const std::int64_t actualSecond = record.timestamp_ms / 1000;
+        if (Records.empty() == false) {
+            const std::int64_t expectedSecond = Records.back().TimestampMs / 1000 + 1;
+            const std::int64_t actualSecond = record.TimestampMs / 1000;
 
             // The aggregator should already guarantee this; clearing keeps a bug there from producing misaligned queries.
             if (actualSecond != expectedSecond) {
@@ -25,39 +25,39 @@ namespace Runtime {
                     expectedSecond,
                     actualSecond
                 ));
-                records_.clear();
+                Records.clear();
             }
         }
 
-        Core::AppendInputWindowRecord(records_, record);
-        ++revision_;
+        Core::AppendInputWindowRecord(Records, record);
+        ++Revision;
 
-        return records_.size();
+        return Records.size();
     }
 
     void LiveInputWindow::Clear() {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(Mutex);
 
-        records_.clear();
-        ++revision_;
+        Records.clear();
+        ++Revision;
     }
 
     std::optional<LiveInputWindow::Snapshot> LiveInputWindow::TakeSnapshotIfUpdated() {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(Mutex);
 
-        if (records_.size() < Core::LIVE_INPUT_WINDOW_SECONDS || revision_ == snapshot_revision_) {
+        if (Records.size() < Core::LIVE_INPUT_WINDOW_SECONDS || Revision == SnapshotRevision) {
             return std::nullopt;
         }
 
         Snapshot snapshot{};
-        snapshot.records.reserve(records_.size());
+        snapshot.Records.reserve(Records.size());
 
-        for (const LiveRecord& record : records_) {
-            snapshot.records.push_back(record.record);
+        for (const LiveRecord& record : Records) {
+            snapshot.Records.push_back(record.Record);
         }
 
-        snapshot.last_timestamp_ms = records_.back().timestamp_ms;
-        snapshot_revision_ = revision_;
+        snapshot.LastTimestampMs = Records.back().TimestampMs;
+        SnapshotRevision = Revision;
 
         return snapshot;
     }

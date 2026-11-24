@@ -414,10 +414,10 @@ namespace Core {
         }
 
         NormalizationParameters parameters{
-            .sample_count = json.Get<std::uint64_t>("sample_count"),
+            .SampleCount = json.Get<std::uint64_t>("sample_count"),
 
-            .mid_delta_mean = json.Get<double>("mid_delta_mean"),
-            .mid_delta_stddev = json.Get<double>("mid_delta_stddev")
+            .MidDeltaMean = json.Get<double>("mid_delta_mean"),
+            .MidDeltaStddev = json.Get<double>("mid_delta_stddev")
         };
 
         ValidateNormalizationParameters(parameters);
@@ -429,7 +429,7 @@ namespace Core {
             std::format(
                 "Loaded normalization parameters: {} ({} samples)",
                 _normalizationPath.string(),
-                parameters.sample_count
+                parameters.SampleCount
             ),
             true
         );
@@ -456,10 +456,10 @@ namespace Core {
 
         json.Set("standard_deviation", "population");
 
-        json.Set("sample_count", _normalizationParameters.sample_count);
+        json.Set("sample_count", _normalizationParameters.SampleCount);
 
-        json.Set("mid_delta_mean", _normalizationParameters.mid_delta_mean);
-        json.Set("mid_delta_stddev", _normalizationParameters.mid_delta_stddev);
+        json.Set("mid_delta_mean", _normalizationParameters.MidDeltaMean);
+        json.Set("mid_delta_stddev", _normalizationParameters.MidDeltaStddev);
 
         Common::Storage::WriteFileAtomically(_normalizationPath, json.ToString());
 
@@ -548,9 +548,9 @@ namespace Core {
 
                     const WindowLocation &location = this->_windowLocations[static_cast<std::size_t>(id)];
                     res.push_back(QueryResult{
-                        .distance = distances[i],
-                        .tradingDayId = location.tradingDay,
-                        .recordIndex = location.recordIndex
+                        .Distance = distances[i],
+                        .TradingDayId = location.TradingDay,
+                        .RecordIndex = location.RecordIndex
                     });
                 }
             }

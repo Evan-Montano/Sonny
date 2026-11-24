@@ -17,8 +17,13 @@
 #include <functional>
 #include <cstdint>
 
+/**
+ * @brief Queues log messages for daily files and the UI console on a background worker.
+ */
 class Logger{
 public:
+    // MEMBERS
+
     enum class Level {
         Debug,
         Info,
@@ -26,7 +31,12 @@ public:
         Error
     };
 
+    /**
+     * @brief Carries one queued log message and its console generation.
+     */
     struct LogStruct {
+        // MEMBERS
+
         Level Level;
         std::string Message;
         bool LogToConsole = false;
@@ -56,7 +66,7 @@ private:
 
     // MEMBERS
     static inline constexpr std::size_t MAX_CONSOLE_MESSAGES = 9;
-    static inline std::filesystem::path log_dir = "storage/logs";
+    static inline std::filesystem::path LogDir = "storage/logs";
 
     static inline std::mutex Mutex;
     static inline std::mutex FileMutex;
@@ -65,12 +75,13 @@ private:
     static inline std::deque<std::string> ConsoleMessages;
     static inline std::thread WorkerThread;
     static inline std::ofstream LogFile;
-    static inline bool running = false;
+    static inline bool Running = false;
     static inline std::uint64_t LogGeneration = 0;
+    static inline std::function<void()> ConsoleRefreshCallback;
 
     // METHODS
     static void SetConsoleRefreshCallback(std::function<void()> callback);
-    static inline std::function<void()> ConsoleRefreshCallback;
+
     static void Log(Level level, const std::string& message, const bool& logToConsole = false);
     static void Observer();
 };

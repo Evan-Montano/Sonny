@@ -138,7 +138,7 @@ namespace Core {
         /**
          * @brief Factor that converts a segment's magnitude distance to the common scale.
          *
-         * A segment stores (|mid_delta| - mean) / stddev using its own statistics. The mean cancels
+         * A segment stores (|MidDelta| - mean) / stddev using its own statistics. The mean cancels
          * out of a distance, so a segment's squared distance is the raw squared distance divided by
          * its stddev^2. Segments with larger price moves (the open and close) therefore report
          * smaller distances for the same raw difference, and their distances cannot be compared with

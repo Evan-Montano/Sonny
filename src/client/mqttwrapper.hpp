@@ -29,6 +29,8 @@ namespace Client {
      * @brief Connection settings applied when a client connects to the broker.
      */
     struct MqttConnectOptions {
+        // MEMBERS
+
         std::string UserName;
         std::string Password;
         std::chrono::seconds KeepAlive{30};
@@ -52,11 +54,11 @@ namespace Client {
         // CONSTRUCTOR
         MqttWrapper(std::string serverUri, std::string clientId);
 
-        // DESTRUCTOR
-        ~MqttWrapper();
-
         MqttWrapper(const MqttWrapper&) = delete;
         MqttWrapper& operator=(const MqttWrapper&) = delete;
+
+        // DESTRUCTOR
+        ~MqttWrapper();
 
         // METHODS
 
@@ -93,12 +95,13 @@ namespace Client {
         const std::string& GetClientId() const;
 
     private:
+        // MEMBERS
+
         class Impl;
 
-        // MEMBERS
         std::string ServerUri;
         std::string ClientId;
-        std::unique_ptr<Impl> impl;
+        std::unique_ptr<Impl> Implementation;
     };
 
 }

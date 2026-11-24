@@ -18,6 +18,9 @@ namespace Client {
     using ParamMap = std::unordered_map<std::string, std::string>;
     using HeaderMap = std::unordered_map<std::string, std::string>;
 
+    /**
+     * @brief Owns an HTTP request, its response, and callbacks used by the curl clients.
+     */
     class CurlRequest {
     public:
         // CONSTRUCTOR

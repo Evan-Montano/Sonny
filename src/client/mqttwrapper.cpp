@@ -45,6 +45,9 @@ namespace Client {
         }
     }
 
+    /**
+     * @brief Owns the Paho MQTT client and bridges its callbacks into Sonny.
+     */
     class MqttWrapper::Impl {
     public:
         // CONSTRUCTOR
@@ -62,7 +65,7 @@ namespace Client {
     MqttWrapper::MqttWrapper(std::string serverUri, std::string clientId)
         : ServerUri(std::move(serverUri)), ClientId(std::move(clientId)) {
         try {
-            this->impl = std::make_unique<Impl>(this->ServerUri, this->ClientId);
+            this->Implementation = std::make_unique<Impl>(this->ServerUri, this->ClientId);
         }
         catch (const mqtt::exception& error) {
             throw Translate(error);
@@ -72,11 +75,11 @@ namespace Client {
     MqttWrapper::~MqttWrapper() = default;
 
     void MqttWrapper::SetMessageHandler(MqttMessageHandler handler) {
-        this->impl->Callback.OnMessage = std::move(handler);
+        this->Implementation->Callback.OnMessage = std::move(handler);
     }
 
     void MqttWrapper::SetConnectionLostHandler(MqttConnectionLostHandler handler) {
-        this->impl->Callback.OnConnectionLost = std::move(handler);
+        this->Implementation->Callback.OnConnectionLost = std::move(handler);
     }
 
     void MqttWrapper::Connect(const MqttConnectOptions& options) {
@@ -94,7 +97,7 @@ namespace Client {
                 .ssl(ssl)
                 .finalize();
 
-            this->impl->AsyncClient.connect(connectOptions)->wait();
+            this->Implementation->AsyncClient.connect(connectOptions)->wait();
         }
         catch (const mqtt::exception& error) {
             throw Translate(error);
@@ -103,7 +106,7 @@ namespace Client {
 
     void MqttWrapper::Disconnect() {
         try {
-            this->impl->AsyncClient.disconnect()->wait();
+            this->Implementation->AsyncClient.disconnect()->wait();
         }
         catch (const mqtt::exception& error) {
             throw Translate(error);
@@ -111,7 +114,7 @@ namespace Client {
     }
 
     bool MqttWrapper::IsConnected() const {
-        return this->impl->AsyncClient.is_connected() && this->impl->Callback.Connected.load();
+        return this->Implementation->AsyncClient.is_connected() && this->Implementation->Callback.Connected.load();
     }
 
     const std::string& MqttWrapper::GetServerUri() const {

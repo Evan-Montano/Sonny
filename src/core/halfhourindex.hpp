@@ -53,8 +53,10 @@ namespace Core {
          * 
          */
         struct WindowLocation {
-            uint32_t recordIndex;
-            std::array<char, 8> tradingDay; // "yyyymmdd" and will have to translate -> yyyy-mm-dd.rec
+            // MEMBERS
+
+            uint32_t RecordIndex;
+            std::array<char, 8> TradingDay; // "yyyymmdd" and will have to translate -> yyyy-mm-dd.rec
         };
 
         static_assert(sizeof(WindowLocation) == 12);
@@ -247,10 +249,15 @@ namespace Core {
         virtual ~HalfHourIndex();
 
         // MEMBERS
+        /**
+         * @brief Identifies a historical window and its distance from the query.
+         */
         struct QueryResult {
-            float distance;
-            std::array<char, 8> tradingDayId;
-            uint32_t recordIndex;
+            // MEMBERS
+
+            float Distance;
+            std::array<char, 8> TradingDayId;
+            uint32_t RecordIndex;
         };
 
         /**

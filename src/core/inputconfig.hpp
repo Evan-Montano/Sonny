@@ -132,7 +132,7 @@ namespace Core {
     }
 
     /**
-     * @brief Number of floats in a FAISS vector: one feature (mid_delta) per second.
+     * @brief Number of floats in a FAISS vector: one feature (MidDelta) per second.
      */
     constexpr std::size_t InputVectorDimension(const std::size_t inputWindowSeconds) {
         return inputWindowSeconds;

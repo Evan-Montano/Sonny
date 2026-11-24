@@ -16,16 +16,16 @@ void Logger::Start() {
         UI::Get().Refresh();
     });
 
-    if (running == false) {
-        running = true;
-        if (Common::Storage::FileExists(log_dir) == false && Common::Storage::CreateDirectory(log_dir) == false) {
+    if (Running == false) {
+        Running = true;
+        if (Common::Storage::FileExists(LogDir) == false && Common::Storage::CreateDirectory(LogDir) == false) {
             throw std::runtime_error(
-                "Failed to create log directory: " + log_dir.string()
+                "Failed to create log directory: " + LogDir.string()
             );
         }
 
         const std::string date = Common::DateTime::GetCurrentDateTime().ToString_Date();
-        const fs::path log_file = log_dir / (date + ".log");
+        const fs::path log_file = LogDir / (date + ".log");
         LogFile.open(log_file, std::ios::app);
 
         if (LogFile.is_open() == false) {
@@ -41,7 +41,7 @@ void Logger::Start() {
 void Logger::Stop() {
     {
         std::lock_guard lock(Mutex);
-        running = false;
+        Running = false;
     }
 
     Cv.notify_one();
@@ -58,7 +58,7 @@ void Logger::Stop() {
 }
 
 bool Logger::ClearCurrentLogFile() {
-    const fs::path log_file = log_dir / (Common::DateTime::GetCurrentDateTime().ToString_Date() + ".log");
+    const fs::path log_file = LogDir / (Common::DateTime::GetCurrentDateTime().ToString_Date() + ".log");
     std::scoped_lock lock(Mutex, FileMutex);
 
     // Discard messages queued before the user's clear action so they cannot
@@ -75,7 +75,7 @@ bool Logger::ClearCurrentLogFile() {
     if (cleared.is_open() == false) return false;
     cleared.close();
 
-    if (running) {
+    if (Running) {
         LogFile.open(log_file, std::ios::out | std::ios::app);
         if (LogFile.is_open() == false) return false;
     }
@@ -88,10 +88,10 @@ void Logger::Observer() {
         std::unique_lock lock(Mutex);
 
         Cv.wait(lock, [] {
-            return MessageQueue.empty() == false || running == false;
+            return MessageQueue.empty() == false || Running == false;
         });
 
-        if (running == false && MessageQueue.empty()) {
+        if (Running == false && MessageQueue.empty()) {
             break;
         }
 

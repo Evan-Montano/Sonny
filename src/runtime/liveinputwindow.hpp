@@ -23,19 +23,23 @@ namespace Runtime {
      */
     class LiveInputWindow {
     public:
+        // MEMBERS
+
         /**
          * @brief Copy of a full window taken for one prediction cycle.
          */
         struct Snapshot {
+            // MEMBERS
+
             /**
              * @brief Consecutive one-second records, oldest to newest.
              */
-            std::vector<Core::MLRecord> records;
+            std::vector<Core::MLRecord> Records;
 
             /**
              * @brief Timestamp of the newest record. Forecasts are anchored to this second.
              */
-            std::int64_t last_timestamp_ms{};
+            std::int64_t LastTimestampMs{};
         };
 
         // METHODS
@@ -68,22 +72,22 @@ namespace Runtime {
         /**
          * @brief Guards every member below; shared between the stream and prediction threads.
          */
-        std::mutex mutex_;
+        std::mutex Mutex;
 
         /**
          * @brief Newest consecutive records, oldest first.
          */
-        std::deque<LiveRecord> records_;
+        std::deque<LiveRecord> Records;
 
         /**
          * @brief Incremented on every change so the prediction loop can skip unchanged windows.
          */
-        std::uint64_t revision_ = 0;
+        std::uint64_t Revision = 0;
 
         /**
          * @brief Revision handed out by the most recent snapshot.
          */
-        std::uint64_t snapshot_revision_ = 0;
+        std::uint64_t SnapshotRevision = 0;
     };
 
 }

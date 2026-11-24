@@ -38,29 +38,33 @@
  */
 class HalfHourIndex_Test : public ::testing::Test {
 protected:
+    // MEMBERS
+
     static constexpr std::size_t WINDOW = Core::INPUT_WINDOW_CONFIGURATIONS.front();
     static constexpr std::size_t SEGMENT_START = 0;
 
-    std::filesystem::path previousWorkingDirectory_;
-    std::filesystem::path tempDirectory_;
-    std::filesystem::path recordFixturePath_;
+    std::filesystem::path PreviousWorkingDirectory;
+    std::filesystem::path TempDirectory;
+    std::filesystem::path RecordFixturePath;
+
+    // METHODS
 
     void SetUp() override {
-        recordFixturePath_ =
+        RecordFixturePath =
             std::filesystem::path(SONNY_PROJECT_ROOT) / "tests/test_storage/records/2026-09-01.rec";
 
         const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        tempDirectory_ = std::filesystem::temp_directory_path() /
+        TempDirectory = std::filesystem::temp_directory_path() /
             ("sonny_halfhour_index_tests_" + std::to_string(timestamp));
 
-        std::filesystem::create_directories(tempDirectory_);
-        previousWorkingDirectory_ = std::filesystem::current_path();
-        std::filesystem::current_path(tempDirectory_);
+        std::filesystem::create_directories(TempDirectory);
+        PreviousWorkingDirectory = std::filesystem::current_path();
+        std::filesystem::current_path(TempDirectory);
     }
 
     void TearDown() override {
-        std::filesystem::current_path(previousWorkingDirectory_);
-        std::filesystem::remove_all(tempDirectory_);
+        std::filesystem::current_path(PreviousWorkingDirectory);
+        std::filesystem::remove_all(TempDirectory);
     }
 
     // === PRIVATE PATH ACCESS (friend only) === //
@@ -97,9 +101,9 @@ protected:
 
     static Core::NormalizationParameters MakeParameters(const double mean = 0.0, const double stddev = 1.0) {
         return Core::NormalizationParameters{
-            .sample_count = 100,
-            .mid_delta_mean = mean,
-            .mid_delta_stddev = stddev
+            .SampleCount = 100,
+            .MidDeltaMean = mean,
+            .MidDeltaStddev = stddev
         };
     }
 
@@ -116,7 +120,7 @@ protected:
             const int direction = static_cast<int>((seed >> 16) % 3) - 1;
             const float size = 0.01f * static_cast<float>(1 + ((seed >> 8) % 50));
 
-            records.push_back(Core::MLRecord{.mid_delta = static_cast<float>(direction) * size});
+            records.push_back(Core::MLRecord{.MidDelta = static_cast<float>(direction) * size});
         }
 
         return records;
@@ -146,7 +150,7 @@ protected:
         index.SetNormalizationParameters(parameters);
 
         std::vector<Core::MLRecord> copy = records;
-        index.AddVectorsToIndex(std::span<Core::MLRecord>(copy), recordFixturePath_, recordOffset);
+        index.AddVectorsToIndex(std::span<Core::MLRecord>(copy), RecordFixturePath, recordOffset);
     }
 
     /**
@@ -172,6 +176,8 @@ protected:
         return std::span<const Core::MLRecord>(records).subspan(first, window);
     }
 
+    // MEMBERS
+
     static constexpr std::array<char, 8> FIXTURE_DAY{'2', '0', '2', '6', '0', '9', '0', '1'};
 };
 
@@ -184,21 +190,21 @@ TEST_F(HalfHourIndex_Test, CheckedInFixturesExist) {
         std::filesystem::path(SONNY_PROJECT_ROOT) / "tests/test_storage/corpus/2026-09-01.corpus";
 
     EXPECT_TRUE(std::filesystem::is_regular_file(corpusPath));
-    EXPECT_TRUE(std::filesystem::is_regular_file(recordFixturePath_));
+    EXPECT_TRUE(std::filesystem::is_regular_file(RecordFixturePath));
 }
 
 TEST_F(HalfHourIndex_Test, RecordFixtureUsesTheCurrentRecordLayout) {
     static_assert(sizeof(Core::MLRecord) == 4);
 
-    // One mid_delta per second of the 6.5-hour regular session.
-    ASSERT_EQ(std::filesystem::file_size(recordFixturePath_), 23400u * sizeof(Core::MLRecord));
+    // One MidDelta per second of the 6.5-hour regular session.
+    ASSERT_EQ(std::filesystem::file_size(RecordFixturePath), 23400u * sizeof(Core::MLRecord));
 
-    const std::vector<Core::MLRecord> records = LoadRecordFixture(recordFixturePath_);
+    const std::vector<Core::MLRecord> records = LoadRecordFixture(RecordFixturePath);
 
     // The first record is the "no previous second" sentinel; every value must be finite.
-    EXPECT_FLOAT_EQ(records.front().mid_delta, 0.0f);
+    EXPECT_FLOAT_EQ(records.front().MidDelta, 0.0f);
     for (const Core::MLRecord& record : records) {
-        ASSERT_TRUE(std::isfinite(record.mid_delta));
+        ASSERT_TRUE(std::isfinite(record.MidDelta));
     }
 }
 
@@ -246,8 +252,8 @@ TEST_F(HalfHourIndex_Test, MagnitudeIndexStoresNormalizedAbsoluteDeltas) {
         ASSERT_EQ(vectors[v].size(), WINDOW);
 
         for (std::size_t i = 0; i < WINDOW; ++i) {
-            const double absolute = std::abs(records[v + i].mid_delta);
-            const float expected = static_cast<float>((absolute - parameters.mid_delta_mean) / parameters.mid_delta_stddev);
+            const double absolute = std::abs(records[v + i].MidDelta);
+            const float expected = static_cast<float>((absolute - parameters.MidDeltaMean) / parameters.MidDeltaStddev);
             EXPECT_FLOAT_EQ(vectors[v][i], expected) << "vector " << v << ", second " << i;
         }
     }
@@ -263,7 +269,7 @@ TEST_F(HalfHourIndex_Test, DirectionVectorsUseWeightsBasedOnTheirConfiguredDimen
 
     for (std::size_t v = 0; v < vectors.size(); ++v) {
         for (std::size_t i = 0; i < WINDOW; ++i) {
-            const float delta = records[v + i].mid_delta;
+            const float delta = records[v + i].MidDelta;
             const float direction = delta > 0.0f ? 1.0f : (delta < 0.0f ? -1.0f : 0.0f);
             const double weight = 0.4 + 1.8 * (static_cast<double>(i) / static_cast<double>(WINDOW - 1));
             const float expected = direction * static_cast<float>(std::sqrt(weight));
@@ -279,7 +285,7 @@ TEST_F(HalfHourIndex_Test, LongestConfiguredDirectionIndexUsesMatchingTemporalWe
 
     for (std::size_t position = 0; position < window; ++position) {
         records.push_back(Core::MLRecord{
-            .mid_delta = position % 2 == 0 ? 1.0F : -1.0F
+            .MidDelta = position % 2 == 0 ? 1.0F : -1.0F
         });
     }
 
@@ -295,7 +301,7 @@ TEST_F(HalfHourIndex_Test, LongestConfiguredDirectionIndexUsesMatchingTemporalWe
     for (std::size_t position = 0; position < window; ++position) {
         const double weight = 0.4 + 1.8 * (static_cast<double>(position) / static_cast<double>(window - 1));
         totalWeight += weight;
-        const float direction = records[position].mid_delta > 0.0F ? 1.0F : -1.0F;
+        const float direction = records[position].MidDelta > 0.0F ? 1.0F : -1.0F;
         const float expected = direction * static_cast<float>(std::sqrt(weight));
         EXPECT_FLOAT_EQ(directionVectors.front()[position], expected) << "position " << position;
     }
@@ -305,7 +311,7 @@ TEST_F(HalfHourIndex_Test, LongestConfiguredDirectionIndexUsesMatchingTemporalWe
     const float oldestScale = static_cast<float>(std::sqrt(0.4));
     const float newestScale = static_cast<float>(std::sqrt(2.2));
     EXPECT_FLOAT_EQ(directionVectors.front().front(), oldestScale);
-    EXPECT_FLOAT_EQ(directionVectors.front().back(), records.back().mid_delta * newestScale);
+    EXPECT_FLOAT_EQ(directionVectors.front().back(), records.back().MidDelta * newestScale);
 
     const auto magnitudeVectors = ReadStoredVectors(
         IndexPath(SEGMENT_START, window, Core::HalfHourIndex::INX_TYPE_MAGNITUDE)
@@ -322,7 +328,7 @@ TEST_F(HalfHourIndex_Test, LongestConfiguredDirectionIndexUsesMatchingTemporalWe
     };
     double expectedSquaredDistance = 0.0;
     for (const std::size_t position : flippedPositions) {
-        query[position].mid_delta = -query[position].mid_delta;
+        query[position].MidDelta = -query[position].MidDelta;
         const double weight = 0.4 + 1.8 * (static_cast<double>(position) / static_cast<double>(window - 1));
         expectedSquaredDistance += 4.0 * weight;
     }
@@ -331,8 +337,8 @@ TEST_F(HalfHourIndex_Test, LongestConfiguredDirectionIndexUsesMatchingTemporalWe
     const auto results = index.Query(query, 1);
     ASSERT_EQ(results.MagnitudeResults.size(), 1u);
     ASSERT_EQ(results.DirectionResults.size(), 1u);
-    EXPECT_FLOAT_EQ(results.MagnitudeResults.front().distance, 0.0F);
-    EXPECT_NEAR(results.DirectionResults.front().distance, expectedSquaredDistance, 1e-4);
+    EXPECT_FLOAT_EQ(results.MagnitudeResults.front().Distance, 0.0F);
+    EXPECT_NEAR(results.DirectionResults.front().Distance, expectedSquaredDistance, 1e-4);
 }
 
 TEST_F(HalfHourIndex_Test, MetadataTracksRecordOffsetsAndTradingDay) {
@@ -348,9 +354,9 @@ TEST_F(HalfHourIndex_Test, MetadataTracksRecordOffsetsAndTradingDay) {
     ASSERT_EQ(results.DirectionResults.size(), 1u);
 
     for (const auto& result : {results.MagnitudeResults.front(), results.DirectionResults.front()}) {
-        EXPECT_NEAR(result.distance, 0.0f, 1e-6f);
-        EXPECT_EQ(result.recordIndex, 1801u);
-        EXPECT_EQ(result.tradingDayId, FIXTURE_DAY);
+        EXPECT_NEAR(result.Distance, 0.0f, 1e-6f);
+        EXPECT_EQ(result.RecordIndex, 1801u);
+        EXPECT_EQ(result.TradingDayId, FIXTURE_DAY);
     }
 }
 
@@ -366,19 +372,19 @@ TEST_F(HalfHourIndex_Test, MagnitudeIgnoresSignAndDirectionIgnoresSize) {
 
     // Same sizes, every direction flipped: identical magnitudes, different directions.
     std::vector<Core::MLRecord> flipped = records;
-    for (Core::MLRecord& record : flipped) record.mid_delta = -record.mid_delta;
+    for (Core::MLRecord& record : flipped) record.MidDelta = -record.MidDelta;
 
     const auto flippedResults = index.Query(flipped, 1);
-    EXPECT_NEAR(flippedResults.MagnitudeResults.front().distance, 0.0f, 1e-6f);
-    EXPECT_GT(flippedResults.DirectionResults.front().distance, 0.0f);
+    EXPECT_NEAR(flippedResults.MagnitudeResults.front().Distance, 0.0f, 1e-6f);
+    EXPECT_GT(flippedResults.DirectionResults.front().Distance, 0.0f);
 
     // Same directions, every size tripled: identical directions, different magnitudes.
     std::vector<Core::MLRecord> scaled = records;
-    for (Core::MLRecord& record : scaled) record.mid_delta *= 3.0f;
+    for (Core::MLRecord& record : scaled) record.MidDelta *= 3.0f;
 
     const auto scaledResults = index.Query(scaled, 1);
-    EXPECT_GT(scaledResults.MagnitudeResults.front().distance, 0.0f);
-    EXPECT_NEAR(scaledResults.DirectionResults.front().distance, 0.0f, 1e-6f);
+    EXPECT_GT(scaledResults.MagnitudeResults.front().Distance, 0.0f);
+    EXPECT_NEAR(scaledResults.DirectionResults.front().Distance, 0.0f, 1e-6f);
 }
 
 TEST_F(HalfHourIndex_Test, TiedMatchesPreferTheDaysAddedFirst) {
@@ -399,7 +405,7 @@ TEST_F(HalfHourIndex_Test, TiedMatchesPreferTheDaysAddedFirst) {
         for (std::size_t day = 0; day < newestFirst.size(); ++day) {
             // Same directions every day; sizes differ so only the direction index ties.
             std::vector<Core::MLRecord> records = pattern;
-            for (Core::MLRecord& record : records) record.mid_delta *= static_cast<float>(day + 1);
+            for (Core::MLRecord& record : records) record.MidDelta *= static_cast<float>(day + 1);
 
             index.AddVectorsToIndex(std::span<Core::MLRecord>(records), newestFirst[day], 0);
         }
@@ -410,13 +416,13 @@ TEST_F(HalfHourIndex_Test, TiedMatchesPreferTheDaysAddedFirst) {
 
     // All four days tie at distance 0; the cap keeps the two newest, newest first.
     ASSERT_EQ(results.DirectionResults.size(), 2u);
-    EXPECT_FLOAT_EQ(results.DirectionResults[0].distance, 0.0f);
-    EXPECT_FLOAT_EQ(results.DirectionResults[1].distance, 0.0f);
+    EXPECT_FLOAT_EQ(results.DirectionResults[0].Distance, 0.0f);
+    EXPECT_FLOAT_EQ(results.DirectionResults[1].Distance, 0.0f);
 
     const std::array<char, 8> newest{'2', '0', '2', '6', '0', '9', '0', '4'};
     const std::array<char, 8> secondNewest{'2', '0', '2', '6', '0', '9', '0', '3'};
-    EXPECT_EQ(results.DirectionResults[0].tradingDayId, newest);
-    EXPECT_EQ(results.DirectionResults[1].tradingDayId, secondNewest);
+    EXPECT_EQ(results.DirectionResults[0].TradingDayId, newest);
+    EXPECT_EQ(results.DirectionResults[1].TradingDayId, secondNewest);
 }
 
 TEST_F(HalfHourIndex_Test, EmptyIndexReturnsNoResults) {
@@ -458,7 +464,7 @@ TEST_F(HalfHourIndex_Test, QueryRespectsMaxResults) {
 }
 
 TEST_F(HalfHourIndex_Test, BuildsFromTheRecordFixtureAndFindsItsOwnWindows) {
-    const std::vector<Core::MLRecord> day = LoadRecordFixture(recordFixturePath_);
+    const std::vector<Core::MLRecord> day = LoadRecordFixture(RecordFixturePath);
 
     // Mirror Setup::ExecuteUpdateIndexes for segment 0: 1800 window starts plus window padding.
     const std::size_t segmentSize = 1800 + WINDOW - 1;
@@ -466,7 +472,7 @@ TEST_F(HalfHourIndex_Test, BuildsFromTheRecordFixtureAndFindsItsOwnWindows) {
 
     Core::NormalizationAccumulator accumulator{};
     for (Core::MLRecord record : segment) {
-        record.mid_delta = std::abs(record.mid_delta);
+        record.MidDelta = std::abs(record.MidDelta);
         accumulator.AddRecord(record);
     }
 
@@ -478,17 +484,17 @@ TEST_F(HalfHourIndex_Test, BuildsFromTheRecordFixtureAndFindsItsOwnWindows) {
         const auto results = index.Query(Window(day, start), 64);
 
         ASSERT_FALSE(results.MagnitudeResults.empty());
-        EXPECT_NEAR(results.MagnitudeResults.front().distance, 0.0f, 1e-6f);
-        EXPECT_EQ(results.MagnitudeResults.front().tradingDayId, FIXTURE_DAY);
+        EXPECT_NEAR(results.MagnitudeResults.front().Distance, 0.0f, 1e-6f);
+        EXPECT_EQ(results.MagnitudeResults.front().TradingDayId, FIXTURE_DAY);
 
         // Direction vectors are coarse, so the window may tie with others at distance 0;
         // it must be among them.
         bool foundSelf = false;
         for (const auto& result : results.DirectionResults) {
-            EXPECT_GE(result.distance, results.DirectionResults.front().distance);
-            if (result.distance == 0.0f && result.recordIndex == start) foundSelf = true;
+            EXPECT_GE(result.Distance, results.DirectionResults.front().Distance);
+            if (result.Distance == 0.0f && result.RecordIndex == start) foundSelf = true;
         }
-        EXPECT_NEAR(results.DirectionResults.front().distance, 0.0f, 1e-6f);
+        EXPECT_NEAR(results.DirectionResults.front().Distance, 0.0f, 1e-6f);
         EXPECT_TRUE(foundSelf) << "window starting at " << start;
     }
 }
@@ -504,9 +510,9 @@ TEST_F(HalfHourIndex_Test, BuildsAndQueriesEveryInputWindowConfiguration) {
         const auto results = index.Query(Window(records, 2, window), 1);
 
         ASSERT_EQ(results.MagnitudeResults.size(), 1u) << window << "s";
-        EXPECT_NEAR(results.MagnitudeResults.front().distance, 0.0f, 1e-5f);
-        EXPECT_EQ(results.MagnitudeResults.front().recordIndex, 52u);
-        EXPECT_EQ(results.DirectionResults.front().recordIndex, 52u);
+        EXPECT_NEAR(results.MagnitudeResults.front().Distance, 0.0f, 1e-5f);
+        EXPECT_EQ(results.MagnitudeResults.front().RecordIndex, 52u);
+        EXPECT_EQ(results.DirectionResults.front().RecordIndex, 52u);
     }
 }
 
@@ -529,7 +535,7 @@ TEST_F(HalfHourIndex_Test, RejectsVectorsBeforeNormalizationParameters) {
     std::vector<Core::MLRecord> records = MakeRecords(WINDOW);
 
     EXPECT_THROW(
-        index.AddVectorsToIndex(std::span<Core::MLRecord>(records), recordFixturePath_, 0),
+        index.AddVectorsToIndex(std::span<Core::MLRecord>(records), RecordFixturePath, 0),
         std::logic_error
     );
 }
@@ -539,7 +545,7 @@ TEST_F(HalfHourIndex_Test, RejectsNormalizationChangesAfterIndexing) {
     index.SetNormalizationParameters(MakeParameters());
 
     std::vector<Core::MLRecord> records = MakeRecords(WINDOW);
-    index.AddVectorsToIndex(std::span<Core::MLRecord>(records), recordFixturePath_, 0);
+    index.AddVectorsToIndex(std::span<Core::MLRecord>(records), RecordFixturePath, 0);
 
     EXPECT_THROW(index.SetNormalizationParameters(MakeParameters(1.0, 2.0)), std::logic_error);
 }
@@ -581,9 +587,9 @@ TEST_F(HalfHourIndex_Test, PersistsBothSubIndexesButOnlyMagnitudeNormalization) 
     const auto results = reloaded.Query(Window(records, 1), 2);
 
     ASSERT_EQ(results.MagnitudeResults.size(), 2u);
-    EXPECT_NEAR(results.MagnitudeResults.front().distance, 0.0f, 1e-6f);
-    EXPECT_EQ(results.MagnitudeResults.front().recordIndex, 301u);
-    EXPECT_EQ(results.DirectionResults.front().recordIndex, 301u);
+    EXPECT_NEAR(results.MagnitudeResults.front().Distance, 0.0f, 1e-6f);
+    EXPECT_EQ(results.MagnitudeResults.front().RecordIndex, 301u);
+    EXPECT_EQ(results.DirectionResults.front().RecordIndex, 301u);
 }
 
 TEST_F(HalfHourIndex_Test, LoadingAnIndexDoesNotRewriteItsFiles) {
@@ -623,10 +629,10 @@ TEST_F(HalfHourIndex_Test, BothIndexesRetainEveryTradingDayAfterReload) {
     ASSERT_EQ(results.DirectionResults.size(), days.size());
     for (std::size_t i = 0; i < days.size(); ++i) {
         const auto expectedDay = Core::HalfHourIndex::ToShortLocationArray(days[i]);
-        EXPECT_EQ(results.MagnitudeResults[i].tradingDayId, expectedDay);
-        EXPECT_EQ(results.DirectionResults[i].tradingDayId, expectedDay);
-        EXPECT_NEAR(results.MagnitudeResults[i].distance, 0.0F, 1e-5F);
-        EXPECT_NEAR(results.DirectionResults[i].distance, 0.0F, 1e-5F);
+        EXPECT_EQ(results.MagnitudeResults[i].TradingDayId, expectedDay);
+        EXPECT_EQ(results.DirectionResults[i].TradingDayId, expectedDay);
+        EXPECT_NEAR(results.MagnitudeResults[i].Distance, 0.0F, 1e-5F);
+        EXPECT_NEAR(results.DirectionResults[i].Distance, 0.0F, 1e-5F);
     }
 }
 
@@ -720,7 +726,7 @@ TEST(InputConfigTests, InputVectorDimensionIsOneFeaturePerSecond) {
 TEST(InputConfigTests, EachQueryUsesTheMostRecentConfiguredRecords) {
     std::vector<Core::MLRecord> records;
     for (std::size_t i = 1; i <= Core::MAX_INPUT_WINDOW_SECONDS; ++i) {
-        records.push_back(Core::MLRecord{.mid_delta = static_cast<float>(i)});
+        records.push_back(Core::MLRecord{.MidDelta = static_cast<float>(i)});
     }
 
     for (const std::size_t window : Core::INPUT_WINDOW_CONFIGURATIONS) {
@@ -728,13 +734,13 @@ TEST(InputConfigTests, EachQueryUsesTheMostRecentConfiguredRecords) {
             Core::LatestInputWindow(std::span<const Core::MLRecord>(records), window);
 
         ASSERT_EQ(queryWindow.size(), window);
-        EXPECT_FLOAT_EQ(queryWindow.front().mid_delta, static_cast<float>(Core::MAX_INPUT_WINDOW_SECONDS - window + 1));
-        EXPECT_FLOAT_EQ(queryWindow.back().mid_delta, static_cast<float>(Core::MAX_INPUT_WINDOW_SECONDS));
+        EXPECT_FLOAT_EQ(queryWindow.front().MidDelta, static_cast<float>(Core::MAX_INPUT_WINDOW_SECONDS - window + 1));
+        EXPECT_FLOAT_EQ(queryWindow.back().MidDelta, static_cast<float>(Core::MAX_INPUT_WINDOW_SECONDS));
     }
 }
 
 TEST(InputConfigTests, LatestInputWindowRejectsUnsupportedOrShortInput) {
-    const std::vector<Core::MLRecord> records(Core::MAX_INPUT_WINDOW_SECONDS, Core::MLRecord{.mid_delta = 0.0f});
+    const std::vector<Core::MLRecord> records(Core::MAX_INPUT_WINDOW_SECONDS, Core::MLRecord{.MidDelta = 0.0f});
     const std::span<const Core::MLRecord> span(records);
 
     EXPECT_THROW(Core::LatestInputWindow(span, 25), std::invalid_argument);
@@ -765,15 +771,23 @@ TEST_F(HalfHourIndex_Test, RebuildAbortsIfDirectionIndexCannotBeDeleted) {
     const auto directionPath = IndexPath(SEGMENT_START, WINDOW, Core::HalfHourIndex::INX_TYPE_DIRECTION);
     const auto metadataPath = MetadataPath(SEGMENT_START, WINDOW, Core::HalfHourIndex::INX_TYPE_DIRECTION);
     BuildIndex(MakeRecords(WINDOW));
+    /**
+     * @brief Restores the index directory permissions after a deletion-failure test.
+     */
     struct RestorePermissions {
-        std::filesystem::path path;
-        std::filesystem::perms permissions;
+        // MEMBERS
+
+        std::filesystem::path Path;
+        std::filesystem::perms Permissions;
+
+        // DESTRUCTOR
+
         ~RestorePermissions() {
             std::error_code ignored;
-            std::filesystem::permissions(path, permissions, ignored);
+            std::filesystem::permissions(Path, Permissions, ignored);
         }
     } restore{directionPath.parent_path(), std::filesystem::status(directionPath.parent_path()).permissions()};
-    std::filesystem::permissions(restore.path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+    std::filesystem::permissions(restore.Path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
     // Some CI hosts run as root; verify the restriction before attempting the rebuild.
     std::error_code probe;
     std::filesystem::remove(directionPath, probe);
@@ -785,7 +799,7 @@ TEST_F(HalfHourIndex_Test, RebuildAbortsIfDirectionIndexCannotBeDeleted) {
         Core::HalfHourMultiIndex index(SEGMENT_START, WINDOW);
         index.SetNormalizationParameters(MakeParameters());
         auto records = MakeRecords(WINDOW);
-        index.AddVectorsToIndex(records, recordFixturePath_, 0);
+        index.AddVectorsToIndex(records, RecordFixturePath, 0);
     }, std::filesystem::filesystem_error);
     EXPECT_FALSE(replacementConstructed);
     EXPECT_EQ(ReadStoredVectors(directionPath).size(), 1u);

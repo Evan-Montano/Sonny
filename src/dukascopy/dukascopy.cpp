@@ -5,6 +5,7 @@
 // data into a binary format used by Sonny's ML architecture.
 
 #include "dukascopy.hpp"
+#include "failedrecordfiles.hpp"
 #include "../common/jsonutil.hpp"
 #include "../common/logger.hpp"
 #include "../common/storage.hpp"
@@ -96,7 +97,12 @@ namespace Dukascopy {
         { "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36" }
     };
 
+    /**
+     * @brief Holds one hourly response with delta-encoded prices and absolute volumes.
+     */
     struct ApiTickResponse {
+        // MEMBERS
+
         Common::UnixTimestamp Timestamp;
         float Multiplier;
         float Ask;
@@ -112,12 +118,22 @@ namespace Dukascopy {
         std::vector<std::int32_t> BidVolumes;
     };
 
+    /**
+     * @brief Associates a decoded API response with its UTC hour.
+     */
     struct HourlyTickResponse {
+        // MEMBERS
+
         std::int64_t UtcHour;
         ApiTickResponse Data;
     };
 
+    /**
+     * @brief Stores one interval of bid and ask prices, volumes, and their price multiplier.
+     */
     struct OHLCV_BidAsk {
+        // MEMBERS
+
         Common::UnixTimestamp Timestamp;
         std::int64_t OpenBid;
         std::int64_t HighBid;
@@ -150,6 +166,8 @@ namespace Dukascopy {
     * @brief A single decoded tick with an absolute time and absolute integer prices.
     */
     struct Tick {
+        // MEMBERS
+
         std::int64_t TimeMs;
         std::int64_t Bid;
         std::int64_t Ask;
@@ -735,7 +753,7 @@ namespace Dukascopy {
         std::size_t recordCount = 0;
 
         while (recordsFileStream.read(reinterpret_cast<char*>(&record), sizeof(record))) {
-            if (std::isfinite(record.mid_delta) == false
+            if (std::isfinite(record.MidDelta) == false
                 // std::isfinite(record.spread_delta) == false ||
                 // std::isfinite(record.volume) == false ||
                 // record.volume < 0.0f
@@ -1077,7 +1095,7 @@ namespace Dukascopy {
             // const float spread = getSpread(candle);
 
             const Core::MLRecord record{
-                .mid_delta = i == 0 ? firstDeltaSentinel : mid - previousMid
+                .MidDelta = i == 0 ? firstDeltaSentinel : mid - previousMid
                 // .spread_delta = i == 0 ? firstDeltaSentinel : spread - previousSpread,
                 // .volume = static_cast<float>(candle.BidVolume)
             };
@@ -1374,6 +1392,7 @@ namespace Dukascopy {
             Logger::Info(headerMessage, true);
             Logger::Info("========================================", true);
         }
+        FailedRecordFiles failedRecords(Common::Storage::RECORDS_BASE_PATH / "failed_downloads.json");
         std::string status{};
         std::string currentDate{};
         std::size_t daysElapsed = 0;
@@ -1439,6 +1458,7 @@ namespace Dukascopy {
 
                 const std::filesystem::path corpusPath = CORPUS_BASE_PATH / (exportDate.ToString_Date() + ".corpus");
                 const std::filesystem::path recordsPath = RECORDS_BASE_PATH / (exportDate.ToString_Date() + ".rec");
+                const std::string recordFile = recordsPath.filename().string();
 
                 if (exportDate.IsWeekday() == false) {
                     Logger::Warning(
@@ -1446,29 +1466,45 @@ namespace Dukascopy {
                         true
                     );
                 }
+                else if (failedRecords.ShouldSkip(recordFile, replaceExisting)) {
+                    UI::Get().Update([&] { status = std::format("Skipping previously failed {}", recordFile); });
+                    Logger::Info(std::format("Previously failed record file skipped: {}", recordFile), true);
+                }
                 else {
-                    const bool filesRecovered = RecoverInterruptedDayCommit(corpusPath, recordsPath);
-                    if (filesRecovered == false) {
-                        Logger::Error(
-                            std::format(
-                                "Existing files could not be safely recovered: {}. Day skipped.",
-                                exportDate.ToString_Date()
-                            ),
-                            true
-                        );
-                    }
-                    else {
-                        const bool existingFilesAreComplete = IsCompleteDayOnDisk(corpusPath, recordsPath);
-                        if (replaceExisting || existingFilesAreComplete == false) {
-                            ExportFullDay(exportDate, curlWrapper);
-                        }
-                        else {
-                            Logger::Info(
-                                std::format("Existing complete day skipped: {}", exportDate.ToString_Date()),
+                    bool completed = false;
+                    try {
+                        const bool filesRecovered = RecoverInterruptedDayCommit(corpusPath, recordsPath);
+                        if (filesRecovered == false) {
+                            Logger::Error(
+                                std::format("Existing files could not be safely recovered: {}. Day skipped.", exportDate.ToString_Date()),
                                 true
                             );
                         }
+                        else {
+                            const bool existingFilesAreComplete = IsCompleteDayOnDisk(corpusPath, recordsPath);
+                            if (replaceExisting || existingFilesAreComplete == false) {
+                                completed = ExportFullDay(exportDate, curlWrapper);
+                            }
+                            else {
+                                completed = true;
+                                Logger::Info(
+                                    std::format("Existing complete day skipped: {}", exportDate.ToString_Date()),
+                                    true
+                                );
+                            }
+                        }
                     }
+                    catch (const std::exception& error) {
+                        Logger::Error(std::format("Day export failed for {}: {}", recordFile, error.what()), true);
+                    }
+                    catch (...) {
+                        Logger::Error(std::format("Day export failed for {}: unknown error", recordFile), true);
+                    }
+
+                    // Persist each result immediately. A tracking-file write error stops the run
+                    // instead of continuing with failures that would not survive a restart.
+                    if (completed) failedRecords.ClearFailure(recordFile);
+                    else failedRecords.MarkFailed(recordFile);
                 }
                 UI::Get().Update([&] { ++daysElapsed; });
             }

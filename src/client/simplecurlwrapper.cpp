@@ -21,8 +21,13 @@
 namespace Client {
 
     namespace {
+        /**
+         * @brief Initializes curl for the process and supplies the response write callback.
+         */
         class CurlGlobal {
         public:
+            // CONSTRUCTOR
+
             CurlGlobal() {
                 const CURLcode result = curl_global_init(CURL_GLOBAL_ALL);
                 if (result != CURLE_OK) {
@@ -30,11 +35,15 @@ namespace Client {
                 }
             }
 
+            // DESTRUCTOR
+
             ~CurlGlobal() {
                 curl_global_cleanup();
             }
 
-            static size_t write_callback(char *ptr, const size_t size, const size_t nmemb, void *userdata) {
+            // METHODS
+
+            static size_t WriteCallback(char *ptr, const size_t size, const size_t nmemb, void *userdata) {
                 CurlRequest *request = static_cast<CurlRequest*>(userdata);
                 const size_t bytes = size * nmemb;
 
@@ -161,6 +170,9 @@ namespace Client {
         }
     }
 
+    /**
+     * @brief Owns a browser worker process and exchanges framed JSON requests with it.
+     */
     class SimpleCurlWrapper::BrowserProcess {
     public:
         // CONSTRUCTORS
@@ -265,12 +277,14 @@ namespace Client {
             }
         }
 
+        BrowserProcess(const BrowserProcess&) = delete;
+        BrowserProcess& operator=(const BrowserProcess&) = delete;
+
+        // DESTRUCTOR
+
         ~BrowserProcess() {
             Stop(false);
         }
-
-        BrowserProcess(const BrowserProcess&) = delete;
-        BrowserProcess& operator=(const BrowserProcess&) = delete;
 
         // METHODS
         /**
@@ -373,41 +387,41 @@ namespace Client {
     };
 
     SimpleCurlWrapper::~SimpleCurlWrapper() {
-        this->browserProcess.reset();
-        if (this->curlHandle) {
-            curl_easy_cleanup(this->curlHandle);
+        this->BrowserWorker.reset();
+        if (this->CurlHandle) {
+            curl_easy_cleanup(this->CurlHandle);
         }
     }
 
     SimpleCurlWrapper::SimpleCurlWrapper(const bool executeInBrowser)
-        : ExecuteInBrowser(executeInBrowser), curlHandle(nullptr) {
+        : ExecuteInBrowser(executeInBrowser), CurlHandle(nullptr) {
         static CurlGlobal curlGlobal;
         (void)curlGlobal;
 
-        this->curlHandle = curl_easy_init();
-        if (this->curlHandle == nullptr) {
+        this->CurlHandle = curl_easy_init();
+        if (this->CurlHandle == nullptr) {
             throw std::runtime_error("Curl handle initialization failed.");
         }
 
         if (this->ExecuteInBrowser) {
             try {
-                this->browserProcess = std::make_unique<BrowserProcess>();
+                this->BrowserWorker = std::make_unique<BrowserProcess>();
             }
             catch (...) {
-                curl_easy_cleanup(this->curlHandle);
-                this->curlHandle = nullptr;
+                curl_easy_cleanup(this->CurlHandle);
+                this->CurlHandle = nullptr;
                 throw;
             }
         }
     }
 
     CurlRequestEnum SimpleCurlWrapper::ExecuteHttpRequest(CurlRequest &request) {
-        std::lock_guard<std::mutex> lock(this->executionMutex);
+        std::lock_guard<std::mutex> lock(this->ExecutionMutex);
 
         if (this->ExecuteInBrowser) {
             std::string body;
             try {
-                body = this->browserProcess->Execute(
+                body = this->BrowserWorker->Execute(
                     request.GetFormattedUri(),
                     request.GetHeaders()
                 );
@@ -440,27 +454,27 @@ namespace Client {
         const std::string& uriWithParams = request.GetFormattedUri();
 
         // 3. Reset curl handle.
-        curl_easy_reset(this->curlHandle);
+        curl_easy_reset(this->CurlHandle);
 
         // 4. Configure the curl handle.
-        curl_easy_setopt(this->curlHandle, CURLOPT_URL, uriWithParams.c_str()); // set url
-        curl_easy_setopt(this->curlHandle, CURLOPT_CA_CACHE_TIMEOUT, 604800L);
-        curl_easy_setopt(this->curlHandle, CURLOPT_SSL_VERIFYPEER, 1L);
-        curl_easy_setopt(this->curlHandle, CURLOPT_SSL_VERIFYHOST, 2L);
+        curl_easy_setopt(this->CurlHandle, CURLOPT_URL, uriWithParams.c_str()); // set url
+        curl_easy_setopt(this->CurlHandle, CURLOPT_CA_CACHE_TIMEOUT, 604800L);
+        curl_easy_setopt(this->CurlHandle, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(this->CurlHandle, CURLOPT_SSL_VERIFYHOST, 2L);
 
         // Set body. The request owns the bytes, so they stay valid through curl_easy_perform.
         if (request.HasBody()) {
             const std::string& body = request.GetBody();
-            curl_easy_setopt(this->curlHandle, CURLOPT_POST, 1L);
-            curl_easy_setopt(this->curlHandle, CURLOPT_POSTFIELDS, body.data());
-            curl_easy_setopt(this->curlHandle, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+            curl_easy_setopt(this->CurlHandle, CURLOPT_POST, 1L);
+            curl_easy_setopt(this->CurlHandle, CURLOPT_POSTFIELDS, body.data());
+            curl_easy_setopt(this->CurlHandle, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
         }
 
         // Set timeouts. Signals cannot be used to interrupt a timed out request on a worker thread.
         if (request.GetTimeout().count() > 0 || request.GetConnectTimeout().count() > 0) {
-            curl_easy_setopt(this->curlHandle, CURLOPT_TIMEOUT, static_cast<long>(request.GetTimeout().count()));
-            curl_easy_setopt(this->curlHandle, CURLOPT_CONNECTTIMEOUT, static_cast<long>(request.GetConnectTimeout().count()));
-            curl_easy_setopt(this->curlHandle, CURLOPT_NOSIGNAL, 1L);
+            curl_easy_setopt(this->CurlHandle, CURLOPT_TIMEOUT, static_cast<long>(request.GetTimeout().count()));
+            curl_easy_setopt(this->CurlHandle, CURLOPT_CONNECTTIMEOUT, static_cast<long>(request.GetConnectTimeout().count()));
+            curl_easy_setopt(this->CurlHandle, CURLOPT_NOSIGNAL, 1L);
         }
 
         // Set headers
@@ -472,23 +486,23 @@ namespace Client {
                 CurlRequest::WipeString(headerStr);
             }
         }
-        curl_easy_setopt(this->curlHandle, CURLOPT_HTTPHEADER, list);
+        curl_easy_setopt(this->CurlHandle, CURLOPT_HTTPHEADER, list);
 
         // set callback function
         if (request.CallbackSet) {
-            curl_easy_setopt(this->curlHandle, CURLOPT_WRITEFUNCTION, CurlGlobal::write_callback);
-            curl_easy_setopt(this->curlHandle, CURLOPT_WRITEDATA, &request);
+            curl_easy_setopt(this->CurlHandle, CURLOPT_WRITEFUNCTION, CurlGlobal::WriteCallback);
+            curl_easy_setopt(this->CurlHandle, CURLOPT_WRITEDATA, &request);
         }
 
         // 5. Call easy perform.
-        const CURLcode result = curl_easy_perform(this->curlHandle);
+        const CURLcode result = curl_easy_perform(this->CurlHandle);
 
         if (result == CURLE_OK) {
             request.FinishResponse();
         }
 
         long responseCode = 0;
-        curl_easy_getinfo(this->curlHandle, CURLINFO_RESPONSE_CODE, &responseCode);
+        curl_easy_getinfo(this->CurlHandle, CURLINFO_RESPONSE_CODE, &responseCode);
         request.RecordResult(responseCode, result == CURLE_OK ? "" : curl_easy_strerror(result));
 
         // 6. Cleanup request object.

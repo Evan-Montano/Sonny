@@ -38,10 +38,10 @@ namespace {
 
     Client::WebullQuote MakeQuote(const std::int64_t timestampMs, const double bid, const double ask) {
         Client::WebullQuote quote{};
-        quote.symbol = "SPY";
-        quote.timestamp_ms = timestampMs;
-        quote.bids.push_back({.Price = bid, .size = 100});
-        quote.asks.push_back({.Price = ask, .size = 100});
+        quote.Symbol = "SPY";
+        quote.TimestampMs = timestampMs;
+        quote.Bids.push_back({.Price = bid, .Size = 100});
+        quote.Asks.push_back({.Price = ask, .Size = 100});
         return quote;
     }
 
@@ -49,25 +49,29 @@ namespace {
      * @brief Collects everything an aggregator emits.
      */
     struct AggregatorHarness {
-        std::vector<Runtime::LiveRecord> records;
-        int resets = 0;
+        // MEMBERS
 
-        Runtime::OneSecondAggregator aggregator{
-            [this](const Runtime::LiveRecord& record) { records.push_back(record); },
-            [this] { ++resets; }
+        std::vector<Runtime::LiveRecord> Records;
+        int Resets = 0;
+
+        Runtime::OneSecondAggregator Aggregator{
+            [this](const Runtime::LiveRecord& record) { Records.push_back(record); },
+            [this] { ++Resets; }
         };
+
+        // METHODS
 
         // Sends one quote at the start of each listed second (relative to the open) with the given midpoint.
         void Send(const std::int64_t second, const double mid, const std::int64_t offsetMs = 0) {
-            aggregator.AddQuote(MakeQuote(THURSDAY_OPEN_MS + second * 1000 + offsetMs, mid - 0.01, mid + 0.01));
+            Aggregator.AddQuote(MakeQuote(THURSDAY_OPEN_MS + second * 1000 + offsetMs, mid - 0.01, mid + 0.01));
         }
     };
 
     Runtime::LiveRecord MakeLiveRecord(const std::int64_t second, const float midDelta = 0.0f) {
         return Runtime::LiveRecord{
-            .record = Core::MLRecord{.mid_delta = midDelta},
-            .timestamp_ms = second * 1000,
-            .observed = true
+            .Record = Core::MLRecord{.MidDelta = midDelta},
+            .TimestampMs = second * 1000,
+            .Observed = true
         };
     }
 
@@ -118,10 +122,10 @@ TEST(OneSecondAggregatorTests, EmitsOneRecordPerSecondFromEachClosingQuote) {
     harness.Send(1, 100.10, 900);     // Closing quote of second 1.
     harness.Send(2, 100.20);          // Completes second 1.
 
-    ASSERT_EQ(harness.records.size(), 1u);
-    EXPECT_NEAR(harness.records[0].record.mid_delta, 0.10, 1e-4);
-    EXPECT_EQ(harness.records[0].timestamp_ms / 1000, THURSDAY_OPEN_MS / 1000 + 1);
-    EXPECT_TRUE(harness.records[0].observed);
+    ASSERT_EQ(harness.Records.size(), 1u);
+    EXPECT_NEAR(harness.Records[0].Record.MidDelta, 0.10, 1e-4);
+    EXPECT_EQ(harness.Records[0].TimestampMs / 1000, THURSDAY_OPEN_MS / 1000 + 1);
+    EXPECT_TRUE(harness.Records[0].Observed);
 }
 
 TEST(OneSecondAggregatorTests, QuietSecondsCarryThePriceForwardWithZeroDeltas) {
@@ -132,23 +136,23 @@ TEST(OneSecondAggregatorTests, QuietSecondsCarryThePriceForwardWithZeroDeltas) {
     harness.Send(4, 100.40);          // Seconds 2 and 3 are quiet.
     harness.Send(5, 100.40);          // Completes second 4.
 
-    ASSERT_EQ(harness.records.size(), 4u);
+    ASSERT_EQ(harness.Records.size(), 4u);
 
     double cumulative = 0.0;
-    for (std::size_t i = 0; i < harness.records.size(); ++i) {
-        EXPECT_EQ(harness.records[i].timestamp_ms / 1000, THURSDAY_OPEN_MS / 1000 + 1 + static_cast<std::int64_t>(i));
-        cumulative += harness.records[i].record.mid_delta;
+    for (std::size_t i = 0; i < harness.Records.size(); ++i) {
+        EXPECT_EQ(harness.Records[i].TimestampMs / 1000, THURSDAY_OPEN_MS / 1000 + 1 + static_cast<std::int64_t>(i));
+        cumulative += harness.Records[i].Record.MidDelta;
     }
 
-    EXPECT_FALSE(harness.records[1].observed);
-    EXPECT_FALSE(harness.records[2].observed);
-    EXPECT_FLOAT_EQ(harness.records[1].record.mid_delta, 0.0f);
-    EXPECT_FLOAT_EQ(harness.records[2].record.mid_delta, 0.0f);
+    EXPECT_FALSE(harness.Records[1].Observed);
+    EXPECT_FALSE(harness.Records[2].Observed);
+    EXPECT_FLOAT_EQ(harness.Records[1].Record.MidDelta, 0.0f);
+    EXPECT_FLOAT_EQ(harness.Records[2].Record.MidDelta, 0.0f);
 
     // The full move is attributed to second 4, so the cumulative path matches the real price.
-    EXPECT_NEAR(harness.records[3].record.mid_delta, 0.30, 1e-4);
+    EXPECT_NEAR(harness.Records[3].Record.MidDelta, 0.30, 1e-4);
     EXPECT_NEAR(cumulative, 0.40, 1e-4);
-    EXPECT_EQ(harness.resets, 0);
+    EXPECT_EQ(harness.Resets, 0);
 }
 
 TEST(OneSecondAggregatorTests, LongInterruptionsResetInsteadOfFillingTheGap) {
@@ -157,12 +161,12 @@ TEST(OneSecondAggregatorTests, LongInterruptionsResetInsteadOfFillingTheGap) {
     harness.Send(0, 100.00);
     harness.Send(1, 100.10);
     harness.Send(2, 100.20);
-    const std::size_t recordsBeforeGap = harness.records.size();
+    const std::size_t recordsBeforeGap = harness.Records.size();
 
     harness.Send(2 + Runtime::OneSecondAggregator::MAX_CARRIED_FORWARD_SECONDS + 2, 101.00);
 
-    EXPECT_EQ(harness.resets, 1);
-    EXPECT_EQ(harness.records.size(), recordsBeforeGap);
+    EXPECT_EQ(harness.Resets, 1);
+    EXPECT_EQ(harness.Records.size(), recordsBeforeGap);
 }
 
 TEST(OneSecondAggregatorTests, OneSidedBookResetsContinuity) {
@@ -172,17 +176,17 @@ TEST(OneSecondAggregatorTests, OneSidedBookResetsContinuity) {
     harness.Send(1, 100.10);
 
     Client::WebullQuote oneSided = MakeQuote(THURSDAY_OPEN_MS + 2000, 100.0, 100.2);
-    oneSided.asks.clear();
-    harness.aggregator.AddQuote(oneSided);
+    oneSided.Asks.clear();
+    harness.Aggregator.AddQuote(oneSided);
 
     harness.Send(3, 100.30);          // Completes the one-sided second 2.
-    EXPECT_EQ(harness.resets, 1);
+    EXPECT_EQ(harness.Resets, 1);
 
     // Second 3 becomes the new baseline, so the next record is second 4's move from it.
     harness.Send(4, 100.35);
     harness.Send(5, 100.35);
-    ASSERT_FALSE(harness.records.empty());
-    EXPECT_NEAR(harness.records.back().record.mid_delta, 0.05, 1e-4);
+    ASSERT_FALSE(harness.Records.empty());
+    EXPECT_NEAR(harness.Records.back().Record.MidDelta, 0.05, 1e-4);
 }
 
 TEST(OneSecondAggregatorTests, IgnoresQuotesFromAnEarlierSecond) {
@@ -193,8 +197,8 @@ TEST(OneSecondAggregatorTests, IgnoresQuotesFromAnEarlierSecond) {
     harness.Send(0, 99.00, 500);      // Late, already finalized.
     harness.Send(2, 100.10);
 
-    ASSERT_EQ(harness.records.size(), 1u);
-    EXPECT_NEAR(harness.records[0].record.mid_delta, 0.10, 1e-4);
+    ASSERT_EQ(harness.Records.size(), 1u);
+    EXPECT_NEAR(harness.Records[0].Record.MidDelta, 0.10, 1e-4);
 }
 
 // ========== LIVE INPUT WINDOW ========== //
@@ -211,9 +215,9 @@ TEST(LiveInputWindowTests, SnapshotsOnlyFullUnchangedWindowsOnce) {
 
     const std::optional<Runtime::LiveInputWindow::Snapshot> snapshot = window.TakeSnapshotIfUpdated();
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_EQ(snapshot->records.size(), Core::LIVE_INPUT_WINDOW_SECONDS);
-    EXPECT_FLOAT_EQ(snapshot->records.back().mid_delta, 0.5f);
-    EXPECT_EQ(snapshot->last_timestamp_ms, (static_cast<std::int64_t>(Core::LIVE_INPUT_WINDOW_SECONDS) - 1) * 1000);
+    EXPECT_EQ(snapshot->Records.size(), Core::LIVE_INPUT_WINDOW_SECONDS);
+    EXPECT_FLOAT_EQ(snapshot->Records.back().MidDelta, 0.5f);
+    EXPECT_EQ(snapshot->LastTimestampMs, (static_cast<std::int64_t>(Core::LIVE_INPUT_WINDOW_SECONDS) - 1) * 1000);
 
     EXPECT_FALSE(window.TakeSnapshotIfUpdated().has_value());
 }
@@ -234,21 +238,25 @@ TEST(LiveInputWindowTests, NonConsecutiveRecordClearsTheWindow) {
  */
 class HistoricalRecordStoreTests : public ::testing::Test {
 protected:
-    std::filesystem::path previousWorkingDirectory_;
-    std::filesystem::path tempDirectory_;
+    // MEMBERS
+
+    std::filesystem::path PreviousWorkingDirectory;
+    std::filesystem::path TempDirectory;
+
+    // METHODS
 
     void SetUp() override {
         const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        tempDirectory_ = std::filesystem::temp_directory_path() / ("sonny_record_store_tests_" + std::to_string(timestamp));
-        std::filesystem::create_directories(tempDirectory_ / "storage/records");
+        TempDirectory = std::filesystem::temp_directory_path() / ("sonny_record_store_tests_" + std::to_string(timestamp));
+        std::filesystem::create_directories(TempDirectory / "storage/records");
 
-        previousWorkingDirectory_ = std::filesystem::current_path();
-        std::filesystem::current_path(tempDirectory_);
+        PreviousWorkingDirectory = std::filesystem::current_path();
+        std::filesystem::current_path(TempDirectory);
     }
 
     void TearDown() override {
-        std::filesystem::current_path(previousWorkingDirectory_);
-        std::filesystem::remove_all(tempDirectory_);
+        std::filesystem::current_path(PreviousWorkingDirectory);
+        std::filesystem::remove_all(TempDirectory);
     }
 
     static void WriteBytes(const std::string& fileName, const char* data, const std::size_t size) {
@@ -266,8 +274,8 @@ TEST_F(HistoricalRecordStoreTests, LoadsADayByItsMetadataId) {
 
     ASSERT_NE(day, nullptr);
     ASSERT_EQ(day->size(), 3u);
-    EXPECT_FLOAT_EQ((*day)[1].mid_delta, 0.01f);
-    EXPECT_FLOAT_EQ((*day)[2].mid_delta, -0.02f);
+    EXPECT_FLOAT_EQ((*day)[1].MidDelta, 0.01f);
+    EXPECT_FLOAT_EQ((*day)[2].MidDelta, -0.02f);
 
     // A second lookup is served from the cache.
     EXPECT_EQ(store.Find({'2', '0', '2', '6', '0', '9', '0', '1'}), day);
@@ -288,45 +296,45 @@ TEST_F(HistoricalRecordStoreTests, RejectsMissingAndTruncatedDays) {
 
 TEST(ForecastTests, MagnitudeDoesNotCancelWhenMatchesDisagree) {
     // Two magnitude matches moving equally far in opposite directions: the old signed average was 0.
-    Runtime::HistoricalMatch up{.weight = 3.0};
-    Runtime::HistoricalMatch down{.weight = 1.0};
-    up.mid_deltas.fill(0.01);
-    down.mid_deltas.fill(-0.01);
+    Runtime::HistoricalMatch up{.Weight = 3.0};
+    Runtime::HistoricalMatch down{.Weight = 1.0};
+    up.MidDeltas.fill(0.01);
+    down.MidDeltas.fill(-0.01);
 
     // Direction comes only from the direction matches, which all move up.
-    Runtime::HistoricalMatch directionUp{.weight = 1.0};
-    directionUp.mid_deltas.fill(0.02);
+    Runtime::HistoricalMatch directionUp{.Weight = 1.0};
+    directionUp.MidDeltas.fill(0.02);
 
     const std::vector<Runtime::HistoricalMatch> magnitudeMatches{up, down};
     const std::vector<Runtime::HistoricalMatch> directionMatches{directionUp, directionUp};
     const Runtime::ForecastSummary summary = Runtime::BuildForecast(magnitudeMatches, directionMatches, 1234);
 
-    EXPECT_EQ(summary.forecast.as_of_timestamp_ms, 1234);
-    EXPECT_EQ(summary.forecast.historical_matches, 2u);
-    EXPECT_EQ(summary.magnitude_matches, 2u);
-    EXPECT_EQ(summary.direction_matches, 2u);
-    EXPECT_NEAR(summary.magnitude_effective_matches, 16.0 / 10.0, 1e-9);
-    EXPECT_NEAR(summary.direction_effective_matches, 2.0, 1e-9);
+    EXPECT_EQ(summary.Forecast.AsOfTimestampMs, 1234);
+    EXPECT_EQ(summary.Forecast.HistoricalMatches, 2u);
+    EXPECT_EQ(summary.MagnitudeMatches, 2u);
+    EXPECT_EQ(summary.DirectionMatches, 2u);
+    EXPECT_NEAR(summary.MagnitudeEffectiveMatches, 16.0 / 10.0, 1e-9);
+    EXPECT_NEAR(summary.DirectionEffectiveMatches, 2.0, 1e-9);
 
     for (std::size_t i = 0; i < Runtime::PredictionEvaluationHorizons.size(); ++i) {
         const double horizon = static_cast<double>(Runtime::PredictionEvaluationHorizons[i]);
 
         // Both magnitude paths move 0.01h in absolute terms, so the expected magnitude is 0.01h,
         // and the direction matches unanimously vote up.
-        EXPECT_NEAR(summary.expected_magnitudes[i], 0.01 * horizon, 1e-9);
-        EXPECT_NEAR(summary.direction_agreement[i], 1.0, 1e-9);
-        EXPECT_NEAR(summary.forecast.cumulative_changes[i], 0.01 * horizon, 1e-9);
+        EXPECT_NEAR(summary.ExpectedMagnitudes[i], 0.01 * horizon, 1e-9);
+        EXPECT_NEAR(summary.DirectionAgreement[i], 1.0, 1e-9);
+        EXPECT_NEAR(summary.Forecast.CumulativeChanges[i], 0.01 * horizon, 1e-9);
     }
 }
 
 TEST(ForecastTests, DirectionFollowsTheWeightedVote) {
-    Runtime::HistoricalMatch magnitude{.weight = 1.0};
-    magnitude.mid_deltas.fill(0.01);
+    Runtime::HistoricalMatch magnitude{.Weight = 1.0};
+    magnitude.MidDeltas.fill(0.01);
 
-    Runtime::HistoricalMatch down{.weight = 3.0};
-    Runtime::HistoricalMatch up{.weight = 1.0};
-    down.mid_deltas.fill(-0.01);
-    up.mid_deltas.fill(0.05);
+    Runtime::HistoricalMatch down{.Weight = 3.0};
+    Runtime::HistoricalMatch up{.Weight = 1.0};
+    down.MidDeltas.fill(-0.01);
+    up.MidDeltas.fill(0.05);
 
     const std::vector<Runtime::HistoricalMatch> magnitudeMatches{magnitude};
     const std::vector<Runtime::HistoricalMatch> directionMatches{down, up};
@@ -336,48 +344,48 @@ TEST(ForecastTests, DirectionFollowsTheWeightedVote) {
         const double horizon = static_cast<double>(Runtime::PredictionEvaluationHorizons[i]);
 
         // Votes are signs, not sizes: (3 × −1 + 1 × +1) / 4 = −0.5, despite "up" moving further.
-        EXPECT_NEAR(summary.direction_agreement[i], -0.5, 1e-9);
-        EXPECT_NEAR(summary.forecast.cumulative_changes[i], -0.01 * horizon, 1e-9);
+        EXPECT_NEAR(summary.DirectionAgreement[i], -0.5, 1e-9);
+        EXPECT_NEAR(summary.Forecast.CumulativeChanges[i], -0.01 * horizon, 1e-9);
     }
 }
 
 TEST(ForecastTests, SplitDirectionVoteForecastsNoChange) {
-    Runtime::HistoricalMatch magnitude{.weight = 1.0};
-    magnitude.mid_deltas.fill(0.01);
+    Runtime::HistoricalMatch magnitude{.Weight = 1.0};
+    magnitude.MidDeltas.fill(0.01);
 
-    Runtime::HistoricalMatch up{.weight = 1.0};
-    Runtime::HistoricalMatch down{.weight = 1.0};
-    up.mid_deltas.fill(0.01);
-    down.mid_deltas.fill(-0.01);
+    Runtime::HistoricalMatch up{.Weight = 1.0};
+    Runtime::HistoricalMatch down{.Weight = 1.0};
+    up.MidDeltas.fill(0.01);
+    down.MidDeltas.fill(-0.01);
 
     const std::vector<Runtime::HistoricalMatch> magnitudeMatches{magnitude};
     const std::vector<Runtime::HistoricalMatch> directionMatches{up, down};
     const Runtime::ForecastSummary summary = Runtime::BuildForecast(magnitudeMatches, directionMatches, 0);
 
     for (std::size_t i = 0; i < Runtime::PredictionEvaluationHorizons.size(); ++i) {
-        EXPECT_DOUBLE_EQ(summary.direction_agreement[i], 0.0);
-        EXPECT_DOUBLE_EQ(summary.forecast.cumulative_changes[i], 0.0);
-        EXPECT_GT(summary.expected_magnitudes[i], 0.0);
+        EXPECT_DOUBLE_EQ(summary.DirectionAgreement[i], 0.0);
+        EXPECT_DOUBLE_EQ(summary.Forecast.CumulativeChanges[i], 0.0);
+        EXPECT_GT(summary.ExpectedMagnitudes[i], 0.0);
     }
 }
 
 TEST(ForecastTests, FlatDirectionMatchesDoNotVote) {
-    Runtime::HistoricalMatch magnitude{.weight = 1.0};
-    magnitude.mid_deltas.fill(0.01);
+    Runtime::HistoricalMatch magnitude{.Weight = 1.0};
+    magnitude.MidDeltas.fill(0.01);
 
     // Cumulative moves below FLAT_MOVE_EPSILON count as flat for every horizon.
-    Runtime::HistoricalMatch flat{.weight = 10.0};
-    flat.mid_deltas.fill(Runtime::FLAT_MOVE_EPSILON / 100.0);
-    Runtime::HistoricalMatch up{.weight = 1.0};
-    up.mid_deltas.fill(0.01);
+    Runtime::HistoricalMatch flat{.Weight = 10.0};
+    flat.MidDeltas.fill(Runtime::FLAT_MOVE_EPSILON / 100.0);
+    Runtime::HistoricalMatch up{.Weight = 1.0};
+    up.MidDeltas.fill(0.01);
 
     const std::vector<Runtime::HistoricalMatch> magnitudeMatches{magnitude};
     const std::vector<Runtime::HistoricalMatch> directionMatches{flat, up};
     const Runtime::ForecastSummary summary = Runtime::BuildForecast(magnitudeMatches, directionMatches, 0);
 
     for (std::size_t i = 0; i < Runtime::PredictionEvaluationHorizons.size(); ++i) {
-        EXPECT_NEAR(summary.direction_agreement[i], 1.0 / 11.0, 1e-9);
-        EXPECT_GT(summary.forecast.cumulative_changes[i], 0.0);
+        EXPECT_NEAR(summary.DirectionAgreement[i], 1.0 / 11.0, 1e-9);
+        EXPECT_GT(summary.Forecast.CumulativeChanges[i], 0.0);
     }
 }
 
@@ -390,7 +398,7 @@ TEST(ForecastTests, CloserMatchesWeighMore) {
 }
 
 TEST(ForecastTests, RejectsEmptyMatches) {
-    Runtime::HistoricalMatch match{.weight = 1.0};
+    Runtime::HistoricalMatch match{.Weight = 1.0};
     const std::vector<Runtime::HistoricalMatch> matches{match};
 
     EXPECT_THROW(Runtime::BuildForecast({}, matches, 0), std::invalid_argument);
@@ -406,30 +414,34 @@ TEST(ForecastTests, RejectsEmptyMatches) {
  */
 class PredictionExperimentTests : public ::testing::Test {
 protected:
+    // MEMBERS
+
     static constexpr std::size_t WINDOW = Core::INPUT_WINDOW_CONFIGURATIONS.front();
     static constexpr std::size_t OTHER_WINDOW = Core::INPUT_WINDOW_CONFIGURATIONS[1];
     static constexpr std::size_t SEGMENT_COUNT = Core::SessionMultiIndex::SEGMENT_COUNT;
     static constexpr std::size_t SECONDS_PER_SEGMENT = Core::SessionMultiIndex::SECONDS_PER_SEGMENT;
 
-    std::filesystem::path previousWorkingDirectory_;
-    std::filesystem::path tempDirectory_;
+    std::filesystem::path PreviousWorkingDirectory;
+    std::filesystem::path TempDirectory;
 
     /**
      * @brief Trading days in the corpus, oldest first, with their records.
      */
-    std::vector<std::pair<std::string, std::vector<Core::MLRecord>>> days_;
+    std::vector<std::pair<std::string, std::vector<Core::MLRecord>>> Days;
+
+    // METHODS
 
     void SetUp() override {
         const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        tempDirectory_ = std::filesystem::temp_directory_path() / ("sonny_prediction_experiment_tests_" + std::to_string(timestamp));
-        std::filesystem::create_directories(tempDirectory_ / "storage/records");
+        TempDirectory = std::filesystem::temp_directory_path() / ("sonny_prediction_experiment_tests_" + std::to_string(timestamp));
+        std::filesystem::create_directories(TempDirectory / "storage/records");
 
-        previousWorkingDirectory_ = std::filesystem::current_path();
-        std::filesystem::current_path(tempDirectory_);
+        PreviousWorkingDirectory = std::filesystem::current_path();
+        std::filesystem::current_path(TempDirectory);
 
-        days_ = {{"2026-09-01", MakeDay(1)}, {"2026-09-02", MakeDay(2)}};
+        Days = {{"2026-09-01", MakeDay(1)}, {"2026-09-02", MakeDay(2)}};
 
-        for (const auto& [date, records] : days_) {
+        for (const auto& [date, records] : Days) {
             std::ofstream file(std::filesystem::path("storage/records") / (date + ".rec"), std::ios::binary);
             file.write(
                 reinterpret_cast<const char*>(records.data()),
@@ -439,8 +451,8 @@ protected:
     }
 
     void TearDown() override {
-        std::filesystem::current_path(previousWorkingDirectory_);
-        std::filesystem::remove_all(tempDirectory_);
+        std::filesystem::current_path(PreviousWorkingDirectory);
+        std::filesystem::remove_all(TempDirectory);
     }
 
     /**
@@ -455,7 +467,7 @@ protected:
             const int direction = static_cast<int>((seed >> 16) % 3) - 1;
             const float size = 0.005f * static_cast<float>(1 + ((seed >> 8) % 40));
 
-            records.push_back(Core::MLRecord{.mid_delta = static_cast<float>(direction) * size});
+            records.push_back(Core::MLRecord{.MidDelta = static_cast<float>(direction) * size});
         }
 
         return records;
@@ -480,16 +492,16 @@ protected:
             Core::HalfHourMultiIndex index(segmentOffset, inputWindowSeconds);
 
             Core::NormalizationAccumulator accumulator{};
-            for (const auto& [date, records] : days_) {
+            for (const auto& [date, records] : Days) {
                 for (Core::MLRecord record : segmentOf(records)) {
-                    record.mid_delta = std::abs(record.mid_delta);
+                    record.MidDelta = std::abs(record.MidDelta);
                     accumulator.AddRecord(record);
                 }
             }
 
             index.SetNormalizationParameters(accumulator.GetParameters());
 
-            for (auto day = days_.rbegin(); day != days_.rend(); ++day) {
+            for (auto day = Days.rbegin(); day != Days.rend(); ++day) {
                 std::vector<Core::MLRecord> records = segmentOf(day->second);
                 index.AddVectorsToIndex(
                     std::span<Core::MLRecord>(records),
@@ -512,11 +524,11 @@ protected:
         const std::size_t first = historicalLastSecond + 1 - Core::MAX_INPUT_WINDOW_SECONDS;
 
         return Runtime::LiveInputWindow::Snapshot{
-            .records = std::vector<Core::MLRecord>(
+            .Records = std::vector<Core::MLRecord>(
                 day.begin() + static_cast<std::ptrdiff_t>(first),
                 day.begin() + static_cast<std::ptrdiff_t>(historicalLastSecond + 1)
             ),
-            .last_timestamp_ms = THURSDAY_OPEN_MS + static_cast<std::int64_t>(liveLastSecond) * 1000
+            .LastTimestampMs = THURSDAY_OPEN_MS + static_cast<std::int64_t>(liveLastSecond) * 1000
         };
     }
 
@@ -543,11 +555,11 @@ protected:
         for (std::size_t i = 0; i < Runtime::PredictionEvaluationHorizons.size(); ++i) {
             double cumulative = 0.0;
             for (std::size_t second = 1; second <= Runtime::PredictionEvaluationHorizons[i]; ++second) {
-                cumulative += day[historicalLastSecond + second].mid_delta;
+                cumulative += day[historicalLastSecond + second].MidDelta;
             }
 
             // A split direction vote zeroes the forecast; its size cannot be read back then.
-            const double forecast = row.back()->cumulative_changes[i];
+            const double forecast = row.back()->CumulativeChanges[i];
             if (forecast != 0.0) {
                 if (std::abs(std::abs(forecast) - std::abs(cumulative)) > 1e-6) return false;
                 ++comparedHorizons;
@@ -565,7 +577,7 @@ TEST_F(PredictionExperimentTests, SingleWindowModeForecastsOnlyTheSelectedWindow
     Runtime::PredictionExperiment experiment(Core::SelectInputWindows(false, OTHER_WINDOW), SEGMENT_COUNT);
     EXPECT_EQ(experiment.InputWindows(), std::vector<std::size_t>{OTHER_WINDOW});
 
-    const auto rows = experiment.RunSnapshot(MakeSnapshot(days_[0].second, 5000, 5000));
+    const auto rows = experiment.RunSnapshot(MakeSnapshot(Days[0].second, 5000, 5000));
 
     // One consolidated row for the window, not one per half-hour segment.
     ASSERT_EQ(rows.size(), 1u);
@@ -573,7 +585,7 @@ TEST_F(PredictionExperimentTests, SingleWindowModeForecastsOnlyTheSelectedWindow
 
     // The cap is applied to the pooled matches: each forecast uses exactly its match count.
     for (std::size_t i = 0; i < Runtime::PREDICTION_MATCH_COUNTS.size(); ++i) {
-        EXPECT_EQ(rows[0][i]->historical_matches, Runtime::PREDICTION_MATCH_COUNTS[i]);
+        EXPECT_EQ(rows[0][i]->HistoricalMatches, Runtime::PREDICTION_MATCH_COUNTS[i]);
     }
 }
 
@@ -582,7 +594,7 @@ TEST_F(PredictionExperimentTests, AllWindowsModeForecastsEachConfiguredWindowInd
     BuildIndexes(WINDOW);
     BuildIndexes(OTHER_WINDOW);
 
-    const Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(days_[0].second, 5000, 5000);
+    const Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(Days[0].second, 5000, 5000);
 
     Runtime::PredictionExperiment allWindows(Core::SelectInputWindows(true, Core::MAX_INPUT_WINDOW_SECONDS), SEGMENT_COUNT);
     const auto rows = allWindows.RunSnapshot(snapshot);
@@ -606,12 +618,12 @@ TEST_F(PredictionExperimentTests, AllWindowsModeForecastsEachConfiguredWindowInd
         ASSERT_EQ(aloneRows.size(), 1u);
         for (std::size_t i = 0; i < Runtime::PREDICTION_MATCH_COUNTS.size(); ++i) {
             ASSERT_TRUE(aloneRows[0][i].has_value());
-            EXPECT_EQ(aloneRows[0][i]->cumulative_changes, rows[slot][i]->cumulative_changes);
+            EXPECT_EQ(aloneRows[0][i]->CumulativeChanges, rows[slot][i]->CumulativeChanges);
         }
     }
 
     // The two windows are different searches, not copies of one result.
-    EXPECT_NE(rows[0].back()->cumulative_changes, rows[1].back()->cumulative_changes);
+    EXPECT_NE(rows[0].back()->CumulativeChanges, rows[1].back()->CumulativeChanges);
 }
 
 TEST_F(PredictionExperimentTests, MatchesComeFromAnySegmentWhateverTheTimeOfDay) {
@@ -619,7 +631,7 @@ TEST_F(PredictionExperimentTests, MatchesComeFromAnySegmentWhateverTheTimeOfDay)
 
     // The live window repeats a historical window from the 14:30-15:00 segment (segment 10),
     // but arrives a few minutes after the open (segment 0).
-    const std::vector<Core::MLRecord>& day = days_[1].second;
+    const std::vector<Core::MLRecord>& day = Days[1].second;
     const std::size_t historicalLastSecond = 10 * SECONDS_PER_SEGMENT + 700;
 
     Runtime::PredictionExperiment experiment({WINDOW}, SEGMENT_COUNT);
@@ -635,11 +647,11 @@ TEST_F(PredictionExperimentTests, MatchesComeFromAnySegmentWhateverTheTimeOfDay)
     for (std::size_t i = 0; i < Runtime::PredictionEvaluationHorizons.size(); ++i) {
         double cumulative = 0.0;
         for (std::size_t second = 1; second <= Runtime::PredictionEvaluationHorizons[i]; ++second) {
-            cumulative += day[historicalLastSecond + second].mid_delta;
+            cumulative += day[historicalLastSecond + second].MidDelta;
         }
 
         // A split direction vote zeroes the forecast; its size cannot be read back then.
-        const double forecast = rows[0].back()->cumulative_changes[i];
+        const double forecast = rows[0].back()->CumulativeChanges[i];
         if (forecast != 0.0) {
             EXPECT_NEAR(std::abs(forecast), std::abs(cumulative), 1e-6) << Runtime::PredictionEvaluationHorizons[i] << "s";
             ++comparedHorizons;
@@ -660,7 +672,7 @@ TEST_F(PredictionExperimentTests, MissingSegmentsDoNotStopTheForecast) {
     }
 
     Runtime::PredictionExperiment experiment({WINDOW}, SEGMENT_COUNT);
-    const auto rows = experiment.RunSnapshot(MakeSnapshot(days_[0].second, 5000, 5000));
+    const auto rows = experiment.RunSnapshot(MakeSnapshot(Days[0].second, 5000, 5000));
 
     ASSERT_EQ(rows.size(), 1u);
     EXPECT_TRUE(HasEveryForecast(rows[0]));
@@ -673,7 +685,7 @@ TEST_F(PredictionExperimentTests, MissingSegmentsDoNotStopTheForecast) {
 TEST_F(PredictionExperimentTests, WindowWithoutAnyIndexIsUnavailable) {
     Runtime::PredictionExperiment experiment({WINDOW}, SEGMENT_COUNT);
 
-    const Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(days_[0].second, 5000, 5000);
+    const Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(Days[0].second, 5000, 5000);
     const auto rows = experiment.RunSnapshot(snapshot);
 
     ASSERT_EQ(rows.size(), 1u);
@@ -690,12 +702,12 @@ TEST_F(PredictionExperimentTests, SkipsSnapshotsOutsideTheSession) {
     Runtime::PredictionExperiment experiment({WINDOW}, SEGMENT_COUNT);
 
     // Pre-market: no historical session to compare against.
-    Runtime::LiveInputWindow::Snapshot preMarket = MakeSnapshot(days_[0].second, 5000, 5000);
-    preMarket.last_timestamp_ms = THURSDAY_OPEN_MS - 1000;
+    Runtime::LiveInputWindow::Snapshot preMarket = MakeSnapshot(Days[0].second, 5000, 5000);
+    preMarket.LastTimestampMs = THURSDAY_OPEN_MS - 1000;
     EXPECT_TRUE(experiment.RunSnapshot(preMarket).empty());
 
     // A window that still reaches back before the open has no row filled in.
-    const auto earlyRows = experiment.RunSnapshot(MakeSnapshot(days_[0].second, 5000, 5));
+    const auto earlyRows = experiment.RunSnapshot(MakeSnapshot(Days[0].second, 5000, 5));
     ASSERT_EQ(earlyRows.size(), 1u);
     EXPECT_TRUE(HasNoForecast(earlyRows[0]));
 }
@@ -714,7 +726,7 @@ TEST_F(PredictionExperimentTests, LimitedSegmentsAreTheOnesNearestTheTimeOfDay) 
     BuildIndexes(WINDOW);
 
     // The live window repeats a historical window from the 14:30-15:00 segment (segment 10).
-    const std::vector<Core::MLRecord>& day = days_[1].second;
+    const std::vector<Core::MLRecord>& day = Days[1].second;
     const std::size_t historicalLastSecond = 10 * SECONDS_PER_SEGMENT + 700;
 
     const std::size_t afterTheOpen = 300;
@@ -748,7 +760,7 @@ TEST_F(PredictionExperimentTests, LimitedSegmentsAreTheOnesNearestTheTimeOfDay) 
 TEST_F(PredictionExperimentTests, LoadedSegmentsMoveWithTheSession) {
     BuildIndexes(WINDOW);
 
-    const std::vector<Core::MLRecord>& day = days_[1].second;
+    const std::vector<Core::MLRecord>& day = Days[1].second;
     const std::size_t historicalLastSecond = 10 * SECONDS_PER_SEGMENT + 700;
 
     Runtime::PredictionExperiment experiment({WINDOW}, 2);
@@ -767,10 +779,10 @@ TEST_F(PredictionExperimentTests, LoadedSegmentsMoveWithTheSession) {
 TEST_F(PredictionExperimentTests, PreloadReadsTheIndexesBeforeTheFirstSnapshot) {
     BuildIndexes(WINDOW);
 
-    const Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(days_[0].second, 5000, 5000);
+    const Runtime::LiveInputWindow::Snapshot snapshot = MakeSnapshot(Days[0].second, 5000, 5000);
 
     Runtime::PredictionExperiment preloaded({WINDOW}, 3);
-    preloaded.Preload(snapshot.last_timestamp_ms);
+    preloaded.Preload(snapshot.LastTimestampMs);
 
     // With the index files gone, only an experiment that already holds them can forecast.
     std::filesystem::remove_all("storage/indexes");
@@ -794,7 +806,7 @@ TEST_F(PredictionExperimentTests, PreloadBeforeTheOpenReadsTheOpeningSegments) {
     std::filesystem::remove_all("storage/metadata");
 
     // The first forecast of the session is served from what was preloaded.
-    const auto rows = experiment.RunSnapshot(MakeSnapshot(days_[0].second, 5000, 300));
+    const auto rows = experiment.RunSnapshot(MakeSnapshot(Days[0].second, 5000, 300));
     ASSERT_EQ(rows.size(), 1u);
     EXPECT_TRUE(HasEveryForecast(rows[0]));
 }
@@ -805,14 +817,14 @@ TEST_F(PredictionExperimentTests, LoadedIndexesAndForecastsAreReusedAcrossTradin
     BuildIndexes(window);
 
     Runtime::LiveInputWindow::Snapshot snapshot{
-        .records = std::vector<Core::MLRecord>(
-            days_[0].second.begin() + lastSecond + 1 - window,
-            days_[0].second.begin() + lastSecond + 1
+        .Records = std::vector<Core::MLRecord>(
+            Days[0].second.begin() + lastSecond + 1 - window,
+            Days[0].second.begin() + lastSecond + 1
         ),
-        .last_timestamp_ms = THURSDAY_OPEN_MS + static_cast<std::int64_t>(lastSecond) * 1000
+        .LastTimestampMs = THURSDAY_OPEN_MS + static_cast<std::int64_t>(lastSecond) * 1000
     };
     Runtime::PredictionExperiment experiment({window}, 3);
-    experiment.Preload(snapshot.last_timestamp_ms);
+    experiment.Preload(snapshot.LastTimestampMs);
 
     // A later trading day must use the same loaded indexes, even when the files are gone.
     std::filesystem::remove_all("storage/indexes");
@@ -822,12 +834,12 @@ TEST_F(PredictionExperimentTests, LoadedIndexesAndForecastsAreReusedAcrossTradin
     ASSERT_TRUE(HasEveryForecast(thursday[0]));
 
     const Common::DateTime mondayOpen(2026, Common::SEP, 7, 9, 30, 0, true);
-    snapshot.last_timestamp_ms = (static_cast<std::int64_t>(mondayOpen.GetTimestamp()) + lastSecond) * 1000;
+    snapshot.LastTimestampMs = (static_cast<std::int64_t>(mondayOpen.GetTimestamp()) + lastSecond) * 1000;
     const auto monday = experiment.RunSnapshot(snapshot);
     ASSERT_EQ(monday.size(), 1u);
     ASSERT_TRUE(HasEveryForecast(monday[0]));
     for (std::size_t i = 0; i < Runtime::PREDICTION_MATCH_COUNTS.size(); ++i) {
-        EXPECT_EQ(monday[0][i]->as_of_timestamp_ms, snapshot.last_timestamp_ms);
-        EXPECT_EQ(monday[0][i]->cumulative_changes, thursday[0][i]->cumulative_changes);
+        EXPECT_EQ(monday[0][i]->AsOfTimestampMs, snapshot.LastTimestampMs);
+        EXPECT_EQ(monday[0][i]->CumulativeChanges, thursday[0][i]->CumulativeChanges);
     }
 }

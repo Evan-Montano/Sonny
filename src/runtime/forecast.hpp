@@ -26,50 +26,54 @@ namespace Runtime {
      * @brief What happened after one historical window that resembled the live window.
      */
     struct HistoricalMatch {
+        // MEMBERS
+
         /**
          * @brief Influence on the forecast; closer matches weigh more (see MatchWeight).
          */
-        double weight{};
+        double Weight{};
 
         /**
          * @brief One-second midpoint changes immediately after the matched window.
          */
-        std::array<double, FORECAST_HORIZON_SECONDS> mid_deltas{};
+        std::array<double, FORECAST_HORIZON_SECONDS> MidDeltas{};
     };
 
     /**
      * @brief A combined magnitude × direction forecast plus the diagnostics logged alongside it.
      */
     struct ForecastSummary {
+        // MEMBERS
+
         /**
-         * @brief Combined forecast: sign(direction_agreement) × expected_magnitudes at each evaluation horizon.
-         * historical_matches is the smaller of the two match counts below.
+         * @brief Combined forecast: sign(DirectionAgreement) × ExpectedMagnitudes at each evaluation horizon.
+         * Forecast.HistoricalMatches is the smaller of the two match counts below.
          */
-        PredictionForecast forecast;
+        PredictionForecast Forecast;
 
         /**
          * @brief Matches from the magnitude and direction indexes that went into this forecast.
          */
-        std::size_t magnitude_matches{};
-        std::size_t direction_matches{};
+        std::size_t MagnitudeMatches{};
+        std::size_t DirectionMatches{};
 
         /**
          * @brief Kish effective sample size of each index's weights: how many equally weighted matches they amount to.
          */
-        double magnitude_effective_matches{};
-        double direction_effective_matches{};
+        double MagnitudeEffectiveMatches{};
+        double DirectionEffectiveMatches{};
 
         /**
          * @brief Weighted mean of |cumulative move| across the magnitude matches at each evaluation horizon.
          * Absolute values cannot cancel out, so this is the expected size of the move regardless of direction.
          */
-        std::array<double, PredictionEvaluationHorizons.size()> expected_magnitudes{};
+        std::array<double, PredictionEvaluationHorizons.size()> ExpectedMagnitudes{};
 
         /**
          * @brief Weighted net vote of the direction matches at each evaluation horizon, in [-1, 1].
          * +1 means every match moved up by that horizon, -1 every match moved down, 0 an even split (or all flat).
          */
-        std::array<double, PredictionEvaluationHorizons.size()> direction_agreement{};
+        std::array<double, PredictionEvaluationHorizons.size()> DirectionAgreement{};
     };
 
     /**

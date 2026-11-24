@@ -72,14 +72,20 @@ namespace Client {
          */
         class CleanseOnExit {
         public:
-            CleanseOnExit(std::initializer_list<std::string*> values) : values_(values) {}
-            ~CleanseOnExit() { for (std::string* value : values_) Cleanse(*value); }
+            // CONSTRUCTOR
 
+            CleanseOnExit(std::initializer_list<std::string*> values) : Values(values) {}
             CleanseOnExit(const CleanseOnExit&) = delete;
             CleanseOnExit& operator=(const CleanseOnExit&) = delete;
 
+            // DESTRUCTOR
+
+            ~CleanseOnExit() { for (std::string* value : Values) Cleanse(*value); }
+
         private:
-            std::vector<std::string*> values_;
+            // MEMBERS
+
+            std::vector<std::string*> Values;
         };
 
         template <typename T>
@@ -121,7 +127,7 @@ namespace Client {
             if (valid) {
                 result = WebullPriceLevel{
                     .Price = *price,
-                    .size = *size
+                    .Size = *size
                 };
             }
 
@@ -152,10 +158,10 @@ namespace Client {
                         *timestamp > 0;
 
                 if (valid) {
-                    quote.symbol = basic.symbol();
-                    quote.instrument_id = basic.instrument_id();
-                    quote.timestamp_ms = *timestamp;
-                    quote.session = basic.session();
+                    quote.Symbol = basic.symbol();
+                    quote.InstrumentId = basic.instrument_id();
+                    quote.TimestampMs = *timestamp;
+                    quote.Session = basic.session();
                 }
             }
 
@@ -163,7 +169,7 @@ namespace Client {
                 for (const webull::marketdata::AskBid& ask : message.asks()) {
                     std::optional<WebullPriceLevel> level = ParsePriceLevel(ask);
 
-                    if (level.has_value() != false) quote.asks.push_back(*level);
+                    if (level.has_value() != false) quote.Asks.push_back(*level);
                     else valid = false;
                 }
             }
@@ -172,7 +178,7 @@ namespace Client {
                 for (const webull::marketdata::AskBid& bid : message.bids()) {
                     std::optional<WebullPriceLevel> level = ParsePriceLevel(bid);
 
-                    if (level.has_value() != false) quote.bids.push_back(*level);
+                    if (level.has_value() != false) quote.Bids.push_back(*level);
                     else valid = false;
                 }
             }
@@ -186,16 +192,23 @@ namespace Client {
 
     /* ============================================================================================================== */
 
+    /**
+     * @brief Owns Webull signing credentials and wipes their bytes on destruction.
+     */
     struct WebullCredentials {
-        std::string app_key;
-        std::string app_secret;
-        std::string access_token;
+        // MEMBERS
+
+        std::string AppKey;
+        std::string AppSecret;
+        std::string AccessToken;
+
+        // DESTRUCTOR
 
         // Minimize the time credential bytes remain in process memory.
         ~WebullCredentials() {
-            Cleanse(app_key);
-            Cleanse(app_secret);
-            Cleanse(access_token);
+            Cleanse(AppKey);
+            Cleanse(AppSecret);
+            Cleanse(AccessToken);
         }
     };
 
@@ -340,8 +353,8 @@ namespace Client {
             const std::string timestamp = UtcTimestamp();
             const std::string nonce = NewId();
 
-            std::string signature = GenerateWebullSignature(path, body, credentials.app_key, credentials.app_secret,
-                                                            config.api_host, timestamp, nonce);
+            std::string signature = GenerateWebullSignature(path, body, credentials.AppKey, credentials.AppSecret,
+                                                            config.ApiHost, timestamp, nonce);
             std::string response;
             const CleanseOnExit cleanse{&signature, &response};
 
@@ -354,12 +367,12 @@ namespace Client {
                 return {SubscriptionResultKind::TransportFailure, 0, "libcurl initialization failed"};
             }
 
-            CurlRequest request("https://" + std::string(config.api_host) + path);
+            CurlRequest request("https://" + std::string(config.ApiHost) + path);
             request.SensitiveData = true;
             request.SetBody(body);
             request.SetTimeouts(HttpTimeout, HttpConnectTimeout);
             request.AddHeader("Content-Type", "application/json");
-            request.AddHeader("x-app-key", credentials.app_key);
+            request.AddHeader("x-app-key", credentials.AppKey);
             request.AddHeader("x-timestamp", timestamp);
             request.AddHeader("x-signature", signature);
             request.AddHeader("x-signature-algorithm", "HMAC-SHA1");
@@ -368,7 +381,7 @@ namespace Client {
             request.AddHeader("x-version", "v3");
             request.AddHeader("reqid", NewId());
             
-            if (credentials.access_token.empty() == false) request.AddHeader("x-access-token", credentials.access_token);
+            if (credentials.AccessToken.empty() == false) request.AddHeader("x-access-token", credentials.AccessToken);
             request.SetCallback([&response](std::string data) { response = std::move(data); });
 
             const bool sent = http->ExecuteHttpRequest(request) == CurlRequestEnum::SUCCESS;
@@ -381,8 +394,8 @@ namespace Client {
                 return {SubscriptionResultKind::Success, status, ""};
             }
 
-            const std::string diagnostic = SafeDiagnostic(response, {&credentials.app_key, &credentials.app_secret,
-                                                                     &credentials.access_token, &signature, &nonce, &session});
+            const std::string diagnostic = SafeDiagnostic(response, {&credentials.AppKey, &credentials.AppSecret,
+                                                                     &credentials.AccessToken, &signature, &nonce, &session});
             return {ClassifyFailure(status, diagnostic), status, diagnostic};
         }
 
@@ -401,11 +414,11 @@ namespace Client {
         }
 
         void LogSubscription(const char* verb, const SubscriptionResult& result) {
-            const std::string prefix = std::format("Webull HTTP {} status={}", verb, result.http_status);
+            const std::string prefix = std::format("Webull HTTP {} status={}", verb, result.HttpStatus);
             if (result) {
                 Logger::Info(prefix + " succeeded", true);
             } else {
-                Logger::Error(std::format("{} failed ({}): {}", prefix, DescribeFailure(result.kind), result.diagnostic), true);
+                Logger::Error(std::format("{} failed ({}): {}", prefix, DescribeFailure(result.Kind), result.Diagnostic), true);
             }
         }
 
@@ -415,15 +428,15 @@ namespace Client {
             Common::SecretResult result = Common::SecretStore::GetWebullSecret(environment, name);
 
             if (!result) {
-                if (result.error == Common::SecretError::Missing && required) {
+                if (result.Error == Common::SecretError::Missing && required) {
                     Logger::Error("Webull credential missing: " + name + ". Provision it with secret-tool; see docs/webull-streaming.md.", true);
-                } else if (result.error != Common::SecretError::Missing) {
-                    Logger::Error("Webull credential lookup failed for " + name + ": " + result.detail, true);
+                } else if (result.Error != Common::SecretError::Missing) {
+                    Logger::Error("Webull credential lookup failed for " + name + ": " + result.Detail, true);
                 }
                 return {};
             }
 
-            return std::move(result.value);
+            return std::move(result.Value);
         }
 
         /* ========================================================================================================== */
@@ -434,17 +447,17 @@ namespace Client {
          * @return true if the App Key and App Secret were both found.
          */
         bool LoadCredentials(const WebullEnvironmentConfig& config, WebullCredentials& credentials) {
-            const Common::SecretEnvironment secret_environment = config.environment == WebullEnvironment::Live
+            const Common::SecretEnvironment secret_environment = config.Environment == WebullEnvironment::Live
                 ? Common::SecretEnvironment::Live : Common::SecretEnvironment::Sandbox;
 
-            credentials.app_key = GetCredential(secret_environment, "app_key");
-            if (credentials.app_key.empty()) return false;
+            credentials.AppKey = GetCredential(secret_environment, "app_key");
+            if (credentials.AppKey.empty()) return false;
 
-            credentials.app_secret = GetCredential(secret_environment, "app_secret");
-            if (credentials.app_secret.empty()) return false;
+            credentials.AppSecret = GetCredential(secret_environment, "app_secret");
+            if (credentials.AppSecret.empty()) return false;
 
             // Token creation needs Webull's interactive verification, so only read a provisioned token.
-            credentials.access_token = GetCredential(secret_environment, "access_token", false);
+            credentials.AccessToken = GetCredential(secret_environment, "access_token", false);
             return true;
         }
     }
@@ -516,20 +529,20 @@ namespace Client {
     /* ============================================================================================================== */
 
     bool WebullStreamingClient::Start(WebullEnvironment environment) {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(Mutex);
 
-        if (running_) {
+        if (Running) {
             Logger::Warning("A Webull streaming session is already active", true);
             return false;
         }
 
-        if (worker_.joinable()) worker_.join();
+        if (Worker.joinable()) Worker.join();
 
-        stop_requested_ = false;
-        running_ = true;
+        StopRequestedFlag = false;
+        Running = true;
 
-        Logger::Info(std::string("Webull streaming operation requested; environment=") + GetWebullEnvironmentConfig(environment).name, true);
-        worker_ = std::thread(&WebullStreamingClient::Run, this, environment);
+        Logger::Info(std::string("Webull streaming operation requested; environment=") + GetWebullEnvironmentConfig(environment).Name, true);
+        Worker = std::thread(&WebullStreamingClient::Run, this, environment);
         return true;
     }
 
@@ -537,46 +550,46 @@ namespace Client {
 
     void WebullStreamingClient::Stop() {
         RequestStop();
-        if (worker_.joinable()) worker_.join();
+        if (Worker.joinable()) Worker.join();
     }
 
     /* ============================================================================================================== */
 
     void WebullStreamingClient::RequestStop() {
         {
-            std::lock_guard lock(mutex_);
-            if (running_ == false && worker_.joinable() == false) return;
-            stop_requested_ = true;
+            std::lock_guard lock(Mutex);
+            if (Running == false && Worker.joinable() == false) return;
+            StopRequestedFlag = true;
         }
-        cv_.notify_all();
+        Cv.notify_all();
     }
 
     /* ============================================================================================================== */
 
     bool WebullStreamingClient::IsRunning() const {
-        std::lock_guard lock(mutex_);
-        return running_;
+        std::lock_guard lock(Mutex);
+        return Running;
     }
 
     /* ============================================================================================================== */
 
     bool WebullStreamingClient::WaitForStop(std::chrono::seconds timeout) {
-        std::unique_lock lock(mutex_);
-        return cv_.wait_for(lock, timeout, [this] { return stop_requested_; });
+        std::unique_lock lock(Mutex);
+        return Cv.wait_for(lock, timeout, [this] { return StopRequestedFlag; });
     }
 
     /* ============================================================================================================== */
 
     bool WebullStreamingClient::StopRequested() const {
-        std::lock_guard lock(mutex_);
-        return stop_requested_;
+        std::lock_guard lock(Mutex);
+        return StopRequestedFlag;
     }
 
     /* ============================================================================================================== */
 
     void WebullStreamingClient::Run(WebullEnvironment environment) {
         const WebullEnvironmentConfig& config = GetWebullEnvironmentConfig(environment);
-        Logger::Info(std::string("Webull environment selected: ") + config.name, true);
+        Logger::Info(std::string("Webull environment selected: ") + config.Name, true);
 
         WebullCredentials credentials;
         if (LoadCredentials(config, credentials)) {
@@ -594,9 +607,9 @@ namespace Client {
         }
 
         {
-            std::lock_guard lock(mutex_);
-            running_ = false;
-            stop_requested_ = false;
+            std::lock_guard lock(Mutex);
+            Running = false;
+            StopRequestedFlag = false;
         }
 
         Logger::Info("Webull stream stopped; resources cleaned up", true);
@@ -608,7 +621,7 @@ namespace Client {
                                                                             const WebullCredentials& credentials,
                                                                             std::chrono::seconds& backoff) {
         const std::string session = NewId();
-        const std::string uri = std::format("ssl://{}:{}", config.mqtt_host, MqttPort);
+        const std::string uri = std::format("ssl://{}:{}", config.MqttHost, MqttPort);
         Logger::Info("Webull MQTT connection attempt to " + uri, true);
 
         try {
@@ -628,7 +641,7 @@ namespace Client {
                 }
             );
             mqtt.SetConnectionLostHandler([] { Logger::Warning("Webull MQTT connection lost", true); });
-            mqtt.Connect({.UserName = credentials.app_key, .Password = MqttPassword, .KeepAlive = MqttKeepAlive});
+            mqtt.Connect({.UserName = credentials.AppKey, .Password = MqttPassword, .KeepAlive = MqttKeepAlive});
 
             // Webull binds the HTTP subscription to this already-connected MQTT client ID.
             Logger::Info("Webull MQTT connected; awaiting HTTP subscription", true);
@@ -638,7 +651,7 @@ namespace Client {
 
             if (!subscribed) {
                 mqtt.Disconnect();
-                return IsPermanentFailure(subscribed.kind) ? SessionOutcome::GiveUp : SessionOutcome::Reconnect;
+                return IsPermanentFailure(subscribed.Kind) ? SessionOutcome::GiveUp : SessionOutcome::Reconnect;
             }
 
             Logger::Info("Webull subscription accepted; waiting for market-data messages", true);

@@ -82,7 +82,7 @@ namespace Core {
         );
 
         for (Core::MLRecord &rec : normalizedSegment) {
-            rec.mid_delta = std::abs(rec.mid_delta);
+            rec.MidDelta = std::abs(rec.MidDelta);
         }
 
         NormalizeRecordsVector(normalizedSegment, this->_normalizationParameters);
@@ -105,12 +105,12 @@ namespace Core {
                 // As we parse the incoming historical span, we only care about the absolute
                 // magnitude of the quote delta between records. So this index is just tracking
                 // absolute magnitudes in changes throughout an order book stream.
-                vectors.push_back(record.mid_delta);
+                vectors.push_back(record.MidDelta);
             }
 
             WindowLocation location{};
-            location.recordIndex = static_cast<uint32_t>(recordOffset + offset);
-            location.tradingDay = tradingDay;
+            location.RecordIndex = static_cast<uint32_t>(recordOffset + offset);
+            location.TradingDay = tradingDay;
 
             this->_windowLocations.push_back(location);
         }
@@ -165,10 +165,10 @@ namespace Core {
                 // quote delta moved, either positive, negative, or zero(no change)
                 float direction = 0.0F;
 
-                if (record.mid_delta > 0.0F) {
+                if (record.MidDelta > 0.0F) {
                     direction = 1.0F;
                 }
-                else if (record.mid_delta < 0.0F) {
+                else if (record.MidDelta < 0.0F) {
                     direction = -1.0F;
                 }
 
@@ -176,8 +176,8 @@ namespace Core {
             }
 
             WindowLocation location{};
-            location.recordIndex = static_cast<uint32_t>(recordOffset + offset);
-            location.tradingDay = tradingDay;
+            location.RecordIndex = static_cast<uint32_t>(recordOffset + offset);
+            location.TradingDay = tradingDay;
 
             this->_windowLocations.push_back(location);
         }
@@ -274,15 +274,15 @@ namespace Core {
 
         for (const MLRecord &rec : records) {
             float direction = 0.0F;
-            if (rec.mid_delta > 0.0F) {
+            if (rec.MidDelta > 0.0F) {
                 direction = 1.0F;
             }
-            else if (rec.mid_delta < 0.0F) {
+            else if (rec.MidDelta < 0.0F) {
                 direction = -1.0F;
             }
 
             res.DirectionQuery.push_back(direction);
-            magnitudeQuery.push_back({std::abs(rec.mid_delta)});
+            magnitudeQuery.push_back({std::abs(rec.MidDelta)});
         }
 
         res.MagnitudeQuery = this->_index_magnitude.NormalizeQuery(magnitudeQuery);

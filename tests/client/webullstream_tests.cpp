@@ -8,12 +8,12 @@
 TEST(WebullEnvironmentTests, EndpointsAndSecretScopeStayPaired) {
     const auto& live = Client::GetWebullEnvironmentConfig(Client::WebullEnvironment::Live);
     const auto& sandbox = Client::GetWebullEnvironmentConfig(Client::WebullEnvironment::Sandbox);
-    EXPECT_STREQ(live.api_host, "api.webull.com");
-    EXPECT_STREQ(live.mqtt_host, "data-api.webull.com");
-    EXPECT_STREQ(live.secret_environment, "live");
-    EXPECT_STREQ(sandbox.api_host, "api.sandbox.webull.com");
-    EXPECT_STREQ(sandbox.mqtt_host, "data-api.sandbox.webull.com");
-    EXPECT_STREQ(sandbox.secret_environment, "sandbox");
+    EXPECT_STREQ(live.ApiHost, "api.webull.com");
+    EXPECT_STREQ(live.MqttHost, "data-api.webull.com");
+    EXPECT_STREQ(live.SecretEnvironment, "live");
+    EXPECT_STREQ(sandbox.ApiHost, "api.sandbox.webull.com");
+    EXPECT_STREQ(sandbox.MqttHost, "data-api.sandbox.webull.com");
+    EXPECT_STREQ(sandbox.SecretEnvironment, "sandbox");
 }
 
 TEST(WebullSubscriptionTests, BuildsQuoteSubscriptionWithSharedSessionId) {

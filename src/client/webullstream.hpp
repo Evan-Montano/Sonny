@@ -13,20 +13,30 @@
 
 namespace Client {
 
+    /**
+     * @brief Represents a quoted price and the available size at that level.
+     */
     struct WebullPriceLevel {
+        // MEMBERS
+
         double Price{};
-        double size{};
+        double Size{};
     };
 
+    /**
+     * @brief Contains a decoded Webull quote and its timestamped order-book levels.
+     */
     struct WebullQuote {
-        std::string symbol;
-        std::string instrument_id;
+        // MEMBERS
 
-        std::int64_t timestamp_ms{};
-        std::string session;
+        std::string Symbol;
+        std::string InstrumentId;
 
-        std::vector<WebullPriceLevel> asks;
-        std::vector<WebullPriceLevel> bids;
+        std::int64_t TimestampMs{};
+        std::string Session;
+
+        std::vector<WebullPriceLevel> Asks;
+        std::vector<WebullPriceLevel> Bids;
     };
 
 
@@ -41,11 +51,13 @@ namespace Client {
      * 
      */
     struct WebullEnvironmentConfig {
-        WebullEnvironment environment;
-        const char* name;
-        const char* api_host;
-        const char* mqtt_host;
-        const char* secret_environment;
+        // MEMBERS
+
+        WebullEnvironment Environment;
+        const char* Name;
+        const char* ApiHost;
+        const char* MqttHost;
+        const char* SecretEnvironment;
     };
 
     const WebullEnvironmentConfig& GetWebullEnvironmentConfig(WebullEnvironment environment);
@@ -64,11 +76,18 @@ namespace Client {
      */
     enum class SubscriptionResultKind { Success, AuthenticationFailure, PermissionFailure, InvalidRequest, TransportFailure, ServerFailure };
 
+    /**
+     * @brief Reports the outcome and diagnostic of a Webull subscription request.
+     */
     struct SubscriptionResult {
-        SubscriptionResultKind kind = SubscriptionResultKind::TransportFailure;
-        long http_status = 0;
-        std::string diagnostic;
-        explicit operator bool() const noexcept { return kind == SubscriptionResultKind::Success; }
+        // MEMBERS
+
+        SubscriptionResultKind Kind = SubscriptionResultKind::TransportFailure;
+        long HttpStatus = 0;
+        std::string Diagnostic;
+        // OPERATORS
+
+        explicit operator bool() const noexcept { return Kind == SubscriptionResultKind::Success; }
     };
 
     /**
@@ -89,11 +108,6 @@ namespace Client {
         WebullStreamingClient() = default;
 
         /**
-         * @brief Stop the stream and wait for its worker to release resources.
-         */
-        ~WebullStreamingClient();
-
-        /**
          * @brief Prevent copying the worker and its connection ownership.
          */
         WebullStreamingClient(const WebullStreamingClient&) = delete;
@@ -102,6 +116,13 @@ namespace Client {
          * @brief Prevent assigning another client's worker and connection ownership.
          */
         WebullStreamingClient& operator=(const WebullStreamingClient&) = delete;
+
+        // DESTRUCTOR
+
+        /**
+         * @brief Stop the stream and wait for its worker to release resources.
+         */
+        ~WebullStreamingClient();
 
         // METHODS
 
@@ -138,6 +159,8 @@ namespace Client {
         void SetQuoteStreamCallback(const std::function<void(WebullQuote)> &callback);
 
     private:
+        // MEMBERS
+
         /**
          * @brief What the reconnect loop should do after a stream session ends.
          */
@@ -180,27 +203,27 @@ namespace Client {
         /**
          * @brief Protects worker lifecycle state shared with UI calls.
          */
-        mutable std::mutex mutex_;
+        mutable std::mutex Mutex;
 
         /**
          * @brief Interrupts reconnect waits when shutdown is requested.
          */
-        std::condition_variable cv_;
+        std::condition_variable Cv;
 
         /**
          * @brief Owns the connection and callback lifecycle.
          */
-        std::thread worker_;
+        std::thread Worker;
 
         /**
          * @brief Signals the worker to leave its loop and clean up.
          */
-        bool stop_requested_ = false;
+        bool StopRequestedFlag = false;
 
         /**
          * @brief Prevents duplicate stream workers from running concurrently.
          */
-        bool running_ = false;
+        bool Running = false;
 
         /**
          * @brief Callback function we forward incoming quote messages to.

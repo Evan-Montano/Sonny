@@ -11,14 +11,21 @@ namespace Common {
 
     enum class SecretError { Missing, ServiceUnavailable, Locked, LookupFailed };
 
+    /**
+     * @brief Returns either a credential value or the reason a Secret Service lookup failed.
+     */
     struct SecretResult {
-        std::string value;
-        SecretError error = SecretError::Missing;
-        bool has_value = false;
-        std::string credential_name;
-        std::string detail;
+        // MEMBERS
 
-        explicit operator bool() const noexcept { return has_value; }
+        std::string Value;
+        SecretError Error = SecretError::Missing;
+        bool HasValue = false;
+        std::string CredentialName;
+        std::string Detail;
+
+        // OPERATORS
+
+        explicit operator bool() const noexcept { return HasValue; }
     };
 
     /**

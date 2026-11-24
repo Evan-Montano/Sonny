@@ -12,23 +12,23 @@ namespace Core {
     // ========== NORMALIZATION ACCUMULATOR ========== //
 
     void NormalizationAccumulator::RunningStatistics::Add(double value) {
-        ++count;
+        ++Count;
 
-        const double delta = value - mean;
+        const double delta = value - Mean;
 
-        mean += delta / static_cast<double>(count);
+        Mean += delta / static_cast<double>(Count);
 
-        const double deltaAfterMeanUpdate = value - mean;
+        const double deltaAfterMeanUpdate = value - Mean;
 
-        sumSquaredDifferences += delta * deltaAfterMeanUpdate;
+        SumSquaredDifferences += delta * deltaAfterMeanUpdate;
     }
 
     double NormalizationAccumulator::RunningStatistics::PopulationStdDev() const {
         double result = 0.0;
 
-        if (count > 0) {
+        if (Count > 0) {
             result = std::sqrt(
-                sumSquaredDifferences / static_cast<double>(count)
+                SumSquaredDifferences / static_cast<double>(Count)
             );
         }
 
@@ -36,7 +36,7 @@ namespace Core {
     }
 
     void NormalizationAccumulator::AddRecord(const MLRecord& record) {
-        const bool valid = std::isfinite(record.mid_delta);
+        const bool valid = std::isfinite(record.MidDelta);
 
         if (valid == false) {
             throw std::invalid_argument(
@@ -44,7 +44,7 @@ namespace Core {
             );
         }
 
-        midDelta.Add(record.mid_delta);
+        MidDelta.Add(record.MidDelta);
     }
 
     void NormalizationAccumulator::AddRecords(std::span<const MLRecord> records) {
@@ -54,17 +54,17 @@ namespace Core {
     }
 
     NormalizationParameters NormalizationAccumulator::GetParameters() const {
-        if (midDelta.count == 0) {
+        if (MidDelta.Count == 0) {
             throw std::runtime_error(
                 "Cannot calculate normalization parameters without records."
             );
         }
 
         return NormalizationParameters{
-            .sample_count = midDelta.count,
+            .SampleCount = MidDelta.Count,
 
-            .mid_delta_mean = midDelta.mean,
-            .mid_delta_stddev = midDelta.PopulationStdDev()
+            .MidDeltaMean = MidDelta.Mean,
+            .MidDeltaStddev = MidDelta.PopulationStdDev()
         };
     }
 
@@ -75,10 +75,10 @@ namespace Core {
 
     void ValidateNormalizationParameters(const NormalizationParameters& parameters) {
         const bool valid =
-            parameters.sample_count > 0 &&
-            std::isfinite(parameters.mid_delta_mean) &&
-            std::isfinite(parameters.mid_delta_stddev) &&
-            parameters.mid_delta_stddev >= 0.0;
+            parameters.SampleCount > 0 &&
+            std::isfinite(parameters.MidDeltaMean) &&
+            std::isfinite(parameters.MidDeltaStddev) &&
+            parameters.MidDeltaStddev >= 0.0;
 
         if (valid == false) {
             throw std::invalid_argument(
@@ -119,10 +119,10 @@ namespace Core {
 
         MLRecord NormalizeRecord(const MLRecord& record, const NormalizationParameters& parameters) {
             return MLRecord{
-                .mid_delta = NormalizeFeature(
-                    record.mid_delta,
-                    parameters.mid_delta_mean,
-                    parameters.mid_delta_stddev
+                .MidDelta = NormalizeFeature(
+                    record.MidDelta,
+                    parameters.MidDeltaMean,
+                    parameters.MidDeltaStddev
                 )
             };
         }
@@ -149,7 +149,7 @@ namespace Core {
                 parameters
             );
 
-            result.push_back(normalized.mid_delta);
+            result.push_back(normalized.MidDelta);
         }
 
         return result;
@@ -164,16 +164,16 @@ namespace Core {
         std::optional<MLRecord> res;
 
         bool valid =
-            previousQuote.asks.empty() == false &&
-            previousQuote.bids.empty() == false &&
-            currentQuote.asks.empty() == false &&
-            currentQuote.bids.empty() == false;
+            previousQuote.Asks.empty() == false &&
+            previousQuote.Bids.empty() == false &&
+            currentQuote.Asks.empty() == false &&
+            currentQuote.Bids.empty() == false;
 
         if (valid) {
-            const Client::WebullPriceLevel &previousAsk = previousQuote.asks.front();
-            const Client::WebullPriceLevel &previousBid = previousQuote.bids.front();
-            const Client::WebullPriceLevel &currentAsk = currentQuote.asks.front();
-            const Client::WebullPriceLevel &currentBid = currentQuote.bids.front();
+            const Client::WebullPriceLevel &previousAsk = previousQuote.Asks.front();
+            const Client::WebullPriceLevel &previousBid = previousQuote.Bids.front();
+            const Client::WebullPriceLevel &currentAsk = currentQuote.Asks.front();
+            const Client::WebullPriceLevel &currentBid = currentQuote.Bids.front();
 
             const double previousMid = (previousAsk.Price + previousBid.Price) / 2.0;
             const double currentMid = (currentAsk.Price + currentBid.Price) / 2.0;
@@ -185,7 +185,7 @@ namespace Core {
             
             if (valid) {
                 res = MLRecord{
-                    .mid_delta = static_cast<float>(midDelta)
+                    .MidDelta = static_cast<float>(midDelta)
                 };
             }
 

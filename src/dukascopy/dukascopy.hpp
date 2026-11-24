@@ -7,7 +7,8 @@
 namespace Dukascopy {
     /**
      * @brief Entry to corpus export procedure.
-     * 
+     * Missing-only exports skip previously failed record files recorded on disk.
+     * @param replaceExisting Retry all configured weekdays, including previously failed ones.
      */
     void BeginCorpusExport(bool replaceExisting = false);
 }

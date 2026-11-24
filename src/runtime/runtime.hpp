@@ -23,9 +23,12 @@ namespace Runtime {
         // CONSTRUCTOR
 
         Orchestrator(const Client::WebullEnvironment environment);
-        ~Orchestrator();
         Orchestrator(const Orchestrator&) = delete;
         Orchestrator& operator=(const Orchestrator&) = delete;
+
+        // DESTRUCTOR
+
+        ~Orchestrator();
 
         // METHODS
 

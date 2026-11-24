@@ -15,43 +15,46 @@
 
 using namespace ftxui;
 
+/**
+ * @brief Owns the terminal menus and synchronizes temporary operation views.
+ */
 class UI {
 private:
     // MEMBERS
-    App screen = ScreenInteractive::Fullscreen();
+    App Screen = ScreenInteractive::Fullscreen();
 
     /**
      * @brief Menu state
      * 
      */
-    int current_menu = 0;
+    int CurrentMenu = 0;
 
     /**
      * @brief Selected item in each menu.
      * 
      */
-    int main_selected = 0;
-    int sandbox_selected = 0;
-    int setup_selected = 0;
-    bool clear_log_confirmation_visible = false;
-    int clear_log_confirmation_selected = 1;
-    std::string clear_log_status;
+    int MainSelected = 0;
+    int SandboxSelected = 0;
+    int SetupSelected = 0;
+    bool ClearLogConfirmationVisible = false;
+    int ClearLogConfirmationSelected = 1;
+    std::string ClearLogStatus;
 
     // Main menu
-    std::vector<std::string> main_entries = {
+    std::vector<std::string> MainEntries = {
         "Sandbox",
         "Setup",
         "Exit"
     };
 
     // Sandbox menu
-    std::vector<std::string> sandbox_entries = {
+    std::vector<std::string> SandboxEntries = {
         "Sandbox Webull SPY Quote Stream",
         "Back"
     };
 
     // Setup menu
-    std::vector<std::string> setup_entries = {
+    std::vector<std::string> SetupEntries = {
         "Run All Setup Processes (Clears Everything)",
         "Download Historical Records (Clears Existing)",
         "Download Missing Records (Keeps Existing)",
@@ -60,14 +63,14 @@ private:
         "Back"
     };
 
-    MenuOption main_menu_options;
-    MenuOption sandbox_menu_options;
-    MenuOption setup_menu_options;
+    MenuOption MainMenuOptions;
+    MenuOption SandboxMenuOptions;
+    MenuOption SetupMenuOptions;
 
     using RenderFunction = std::function<ftxui::Element()>;
-    RenderFunction temporary_renderer;
-    ftxui::Component temporary_component;
-    int temporary_previous_menu = 0;
+    RenderFunction TemporaryRenderer;
+    ftxui::Component TemporaryComponent;
+    int TemporaryPreviousMenu = 0;
 
     /**
      * @brief Guards all view state shared between the UI thread and operation threads.
@@ -75,7 +78,7 @@ private:
      * through PushView, RestorePreviousMenu, and Update. Recursive so UI-thread callbacks
      * can call these methods while the UI thread already holds it.
      */
-    std::recursive_mutex view_mutex;
+    std::recursive_mutex ViewMutex;
 
     /**
      * @brief Root component that holds the view lock while the UI thread renders or handles events,
@@ -83,24 +86,30 @@ private:
      */
     class LockedRoot : public ComponentBase {
     public:
+        // CONSTRUCTOR
+
         LockedRoot(Component child, std::recursive_mutex &mutex)
-            : mutex(mutex) {
+            : Mutex(mutex) {
             Add(std::move(child));
         }
 
+        // METHODS
+
         Element OnRender() override {
-            std::lock_guard lock(this->mutex);
+            std::lock_guard lock(this->Mutex);
             return ChildAt(0)->Render();
         }
 
         bool OnEvent(Event event) override {
-            std::lock_guard lock(this->mutex);
+            std::lock_guard lock(this->Mutex);
             // Forward directly: the child is not focusable while a temporary view is shown.
             return ChildAt(0)->OnEvent(event);
         }
 
     private:
-        std::recursive_mutex &mutex;
+        // MEMBERS
+
+        std::recursive_mutex &Mutex;
     };
 
     // CONSTRUCTOR
@@ -119,12 +128,12 @@ private:
     void RestorePreviousMenu() {
         {
             // Cleared synchronously so the renderer cannot run after the caller's captured state is destroyed.
-            std::lock_guard lock(this->view_mutex);
-            this->temporary_renderer = nullptr;
-            this->temporary_component.reset();
-            this->current_menu = this->temporary_previous_menu;
+            std::lock_guard lock(this->ViewMutex);
+            this->TemporaryRenderer = nullptr;
+            this->TemporaryComponent.reset();
+            this->CurrentMenu = this->TemporaryPreviousMenu;
         }
-        this->screen.PostEvent(Event::Custom);
+        this->Screen.PostEvent(Event::Custom);
     }
 
     /**
@@ -148,44 +157,47 @@ private:
     }
 
 public:
-    // CONSTRUCTOR
-    static UI &Get() {
-        static UI instance;
-        return instance;
-    }
+    // MEMBERS
 
+    /**
+     * @brief Restores the previous UI menu when a temporary view leaves scope.
+     */
     class ViewGuard {
     private:
         // MEMBERS
-        UI *ui;
+        UI *Ui;
 
     public:
         // CONSTRUCTOR
         explicit ViewGuard(UI *ui)
-            : ui(ui) {}
+            : Ui(ui) {}
         
-        ~ViewGuard() {
-            if (ui) {
-                ui->RestorePreviousMenu();
-            }
-        }
-
         ViewGuard(const ViewGuard&) = delete;
         ViewGuard &operator=(const ViewGuard&) = delete;
 
         ViewGuard(ViewGuard &&other) noexcept
-            : ui(other.ui) {
-                other.ui = nullptr;
+            : Ui(other.Ui) {
+                other.Ui = nullptr;
             }
         
+        // DESTRUCTOR
+
+        ~ViewGuard() {
+            if (Ui) {
+                Ui->RestorePreviousMenu();
+            }
+        }
+
+        // OPERATORS
+
         ViewGuard &operator=(ViewGuard &&other) noexcept {
             if (this != &other) {
-                if (ui) {
-                    ui->RestorePreviousMenu();
+                if (Ui) {
+                    Ui->RestorePreviousMenu();
                 }
 
-                ui = other.ui;
-                other.ui = nullptr;
+                Ui = other.Ui;
+                other.Ui = nullptr;
             }
 
             return *this;
@@ -193,21 +205,27 @@ public:
     };
 
     // METHODS
+
+    static UI &Get() {
+        static UI instance;
+        return instance;
+    }
+
     void RenderMenu() {
-        this->main_menu_options.on_enter = [&] {
-            switch (this->main_selected) {
+        this->MainMenuOptions.on_enter = [&] {
+            switch (this->MainSelected) {
                 case 0:
                     // Sandbox
-                    this->current_menu = 1;
+                    this->CurrentMenu = 1;
                     break;
                 case 1:
                     // Setup
-                    this->current_menu = 2;
+                    this->CurrentMenu = 2;
                     break;
 
                 case 2:
                     // Exit
-                    this->screen.ExitLoopClosure()();
+                    this->Screen.ExitLoopClosure()();
                     break;
 
                 default:
@@ -217,20 +235,20 @@ public:
 
         auto main_menu =
         Menu(
-            &this->main_entries,
-            &this->main_selected,
-            this->main_menu_options
+            &this->MainEntries,
+            &this->MainSelected,
+            this->MainMenuOptions
         );
 
-        this->sandbox_menu_options.on_enter = [&] {
-            switch(this->sandbox_selected) {
+        this->SandboxMenuOptions.on_enter = [&] {
+            switch(this->SandboxSelected) {
                 case 0:
                     // Start sandbox spy quote stream.
                     DispatchOperation(&Runtime::BeginSandboxRuntime);
                     break;
                 case 1:
                     // Back to main menu
-                    this->current_menu = 0;
+                    this->CurrentMenu = 0;
                     break;
                 default:
                     break;
@@ -239,14 +257,14 @@ public:
 
         auto sandbox_menu = 
         Menu(
-            &this->sandbox_entries,
-            &this->sandbox_selected,
-            this->sandbox_menu_options
+            &this->SandboxEntries,
+            &this->SandboxSelected,
+            this->SandboxMenuOptions
         );
 
 
-        this->setup_menu_options.on_enter = [&] {
-            switch (this->setup_selected) {
+        this->SetupMenuOptions.on_enter = [&] {
+            switch (this->SetupSelected) {
                 case 0:
                     // Total setup process
                     DispatchOperation(&Core::Setup::ExecuteTotalSetupProcess);
@@ -268,14 +286,14 @@ public:
                     break;
 
                 case 4:
-                    this->clear_log_confirmation_selected = 1;
-                    this->clear_log_status.clear();
-                    this->clear_log_confirmation_visible = true;
+                    this->ClearLogConfirmationSelected = 1;
+                    this->ClearLogStatus.clear();
+                    this->ClearLogConfirmationVisible = true;
                     break;
 
                 case 5:
                     // Back to main menu
-                    this->current_menu = 0;
+                    this->CurrentMenu = 0;
                     break;
 
                 default:
@@ -285,15 +303,15 @@ public:
 
         auto setup_menu =
         Menu(
-            &this->setup_entries,
-            &this->setup_selected,
-            this->setup_menu_options
+            &this->SetupEntries,
+            &this->SetupSelected,
+            this->SetupMenuOptions
         );
 
         // Temporary view
         auto temporary_view = Renderer([&] {
-            if (this->temporary_renderer) {
-                return this->temporary_renderer();
+            if (this->TemporaryRenderer) {
+                return this->TemporaryRenderer();
             }
 
             return text("No temporary view.");
@@ -307,7 +325,7 @@ public:
                 setup_menu,
                 temporary_view
             },
-            &this->current_menu
+            &this->CurrentMenu
         );
 
         // Console window
@@ -334,19 +352,19 @@ public:
         auto renderer = Renderer(menus, [&] {
             Element main_view;
 
-            if (this->current_menu == 3) {
+            if (this->CurrentMenu == 3) {
                 main_view = temporary_view->Render();
             }
-            else if (this->current_menu == 2 && this->clear_log_confirmation_visible) {
+            else if (this->CurrentMenu == 2 && this->ClearLogConfirmationVisible) {
                 main_view = window(
                     text("Clear Current Log File?") | bold,
                     vbox({
                         text("This will erase today's Sonny log file."),
                         text("The action cannot be undone."),
-                        text(this->clear_log_confirmation_selected == 0
+                        text(this->ClearLogConfirmationSelected == 0
                             ? "> Clear log file"
                             : "  Clear log file"),
-                        text(this->clear_log_confirmation_selected == 1
+                        text(this->ClearLogConfirmationSelected == 1
                             ? "> Cancel"
                             : "  Cancel"),
                         text("Use Up/Down to choose, Enter to confirm, Esc to cancel.")
@@ -355,15 +373,15 @@ public:
             }
             else {
                 std::string title;
-                switch (this->current_menu) {
+                switch (this->CurrentMenu) {
                     case 0: title = "Menu"; break;
                     case 1: title = "Sandbox"; break;
                     case 2: title = "Setup"; break;
                     default: title = "Sonny"; break;
                 }
                 Elements menu_content{menus->Render()};
-                if (this->current_menu == 2 && this->clear_log_status.empty() == false) {
-                    menu_content.push_back(text(this->clear_log_status));
+                if (this->CurrentMenu == 2 && this->ClearLogStatus.empty() == false) {
+                    menu_content.push_back(text(this->ClearLogStatus));
                 }
                 main_view = window(text(title) | bold, vbox(std::move(menu_content)));
             }
@@ -379,35 +397,35 @@ public:
 
         // Global keyboard handling
         auto app = CatchEvent(renderer, [&](Event event) {
-            if (this->current_menu == 2 && this->clear_log_confirmation_visible) {
+            if (this->CurrentMenu == 2 && this->ClearLogConfirmationVisible) {
                 if (event == Event::Escape) {
-                    this->clear_log_confirmation_visible = false;
+                    this->ClearLogConfirmationVisible = false;
                 } else if (event == Event::ArrowUp || event == Event::ArrowDown) {
-                    this->clear_log_confirmation_selected =
-                        1 - this->clear_log_confirmation_selected;
+                    this->ClearLogConfirmationSelected =
+                        1 - this->ClearLogConfirmationSelected;
                 } else if (event == Event::Return) {
-                    if (this->clear_log_confirmation_selected == 0) {
-                        this->clear_log_status = Logger::ClearCurrentLogFile()
+                    if (this->ClearLogConfirmationSelected == 0) {
+                        this->ClearLogStatus = Logger::ClearCurrentLogFile()
                             ? "Today's log file was cleared."
                             : "Could not clear today's log file.";
                     }
-                    this->clear_log_confirmation_visible = false;
+                    this->ClearLogConfirmationVisible = false;
                 }
                 return true;
             }
 
             // Forward events to the active temporary component first.
-            if (this->current_menu == 3 && this->temporary_component) {
-                if (this->temporary_component->OnEvent(event)) {
+            if (this->CurrentMenu == 3 && this->TemporaryComponent) {
+                if (this->TemporaryComponent->OnEvent(event)) {
                     return true;
                 }
             }
 
             if (event == Event::Escape) {
-                switch (this->current_menu) {
+                switch (this->CurrentMenu) {
                     case 1: // Sandbox menu
                     case 2: // Setup menu
-                        this->current_menu = 0;
+                        this->CurrentMenu = 0;
                         return true;
 
                     default:
@@ -419,7 +437,7 @@ public:
         });
 
         // Run
-        this->screen.Loop(Make<LockedRoot>(app, this->view_mutex));
+        this->Screen.Loop(Make<LockedRoot>(app, this->ViewMutex));
     }
 
     /**
@@ -431,18 +449,18 @@ public:
      */
     ViewGuard PushView(RenderFunction renderer) {
         {
-            std::lock_guard lock(this->view_mutex);
-            this->temporary_component.reset();
-            this->temporary_previous_menu = this->current_menu;
-            this->temporary_renderer = std::move(renderer);
+            std::lock_guard lock(this->ViewMutex);
+            this->TemporaryComponent.reset();
+            this->TemporaryPreviousMenu = this->CurrentMenu;
+            this->TemporaryRenderer = std::move(renderer);
 
             // 0 = Main
             // 1 = Sandbox
             // 2 = Setup
             // 3 = Temporary view
-            this->current_menu = 3;
+            this->CurrentMenu = 3;
         }
-        this->screen.PostEvent(Event::Custom);
+        this->Screen.PostEvent(Event::Custom);
 
         return ViewGuard(this);
     }
@@ -455,26 +473,26 @@ public:
      */
     ViewGuard PushView(ftxui::Component component) {
         {
-            std::lock_guard lock(this->view_mutex);
-            this->temporary_previous_menu = this->current_menu;
+            std::lock_guard lock(this->ViewMutex);
+            this->TemporaryPreviousMenu = this->CurrentMenu;
 
             // Retain the component so its event handler remains accessible.
-            this->temporary_component = component;
+            this->TemporaryComponent = component;
 
             // Also provide its rendering function to the existing view system.
-            this->temporary_renderer = [component = std::move(component)] {
+            this->TemporaryRenderer = [component = std::move(component)] {
                 return component->Render();
             };
 
-            this->current_menu = 3;
+            this->CurrentMenu = 3;
         }
-        this->screen.PostEvent(Event::Custom);
+        this->Screen.PostEvent(Event::Custom);
 
         return ViewGuard(this);
     }
 
     void Refresh() {
-        this->screen.PostEvent(Event::Custom);
+        this->Screen.PostEvent(Event::Custom);
     }
 
     /**
@@ -485,7 +503,7 @@ public:
      */
     void Update(const std::function<void()> &mutation) {
         {
-            std::lock_guard lock(this->view_mutex);
+            std::lock_guard lock(this->ViewMutex);
             mutation();
         }
         this->Refresh();

@@ -111,7 +111,7 @@ namespace Core {
             }
 
             _magnitudeDistanceScales[segment] = MagnitudeDistanceScale(
-                _segments[segment]->GetNormalizationParameters().mid_delta_stddev,
+                _segments[segment]->GetNormalizationParameters().MidDeltaStddev,
                 referenceStdDev
             );
 
@@ -165,7 +165,7 @@ namespace Core {
 
             if (magnitudeScale > 0.0) {
                 for (HalfHourIndex::QueryResult &result : segmentResults.MagnitudeResults) {
-                    result.distance = static_cast<float>(static_cast<double>(result.distance) * magnitudeScale);
+                    result.Distance = static_cast<float>(static_cast<double>(result.Distance) * magnitudeScale);
                     magnitudeCandidates.push_back(result);
                 }
             }
@@ -191,7 +191,7 @@ namespace Core {
     ) {
         // A NaN distance has no place in an ordering and could never become a match anyway.
         std::erase_if(candidates, [](const HalfHourIndex::QueryResult &candidate) {
-            return std::isfinite(candidate.distance) == false;
+            return std::isfinite(candidate.Distance) == false;
         });
 
         // "yyyymmdd" compares in date order, so the larger trading day is the newer one.
@@ -199,9 +199,9 @@ namespace Core {
             candidates.begin(),
             candidates.end(),
             [](const HalfHourIndex::QueryResult &left, const HalfHourIndex::QueryResult &right) {
-                if (left.distance != right.distance) return left.distance < right.distance;
-                if (left.tradingDayId != right.tradingDayId) return left.tradingDayId > right.tradingDayId;
-                return left.recordIndex < right.recordIndex;
+                if (left.Distance != right.Distance) return left.Distance < right.Distance;
+                if (left.TradingDayId != right.TradingDayId) return left.TradingDayId > right.TradingDayId;
+                return left.RecordIndex < right.RecordIndex;
             }
         );
 
@@ -216,7 +216,7 @@ namespace Core {
                 break;
             }
 
-            if (seenWindows.emplace(candidate.tradingDayId, candidate.recordIndex).second) {
+            if (seenWindows.emplace(candidate.TradingDayId, candidate.RecordIndex).second) {
                 selected.push_back(candidate);
             }
         }
@@ -230,13 +230,13 @@ namespace Core {
         double sumOfSquares = 0.0;
 
         for (const NormalizationParameters &segment : parameters) {
-            const double count = static_cast<double>(segment.sample_count);
+            const double count = static_cast<double>(segment.SampleCount);
 
             sampleCount += count;
-            sum += count * segment.mid_delta_mean;
+            sum += count * segment.MidDeltaMean;
             sumOfSquares += count * (
-                segment.mid_delta_stddev * segment.mid_delta_stddev +
-                segment.mid_delta_mean * segment.mid_delta_mean
+                segment.MidDeltaStddev * segment.MidDeltaStddev +
+                segment.MidDeltaMean * segment.MidDeltaMean
             );
         }
 

@@ -37,8 +37,12 @@ namespace Common {
 
     enum class TimeZone { Local, NewYork, UTC };
 
-    // Calendar years 1..32767 must be representable in both UTC and the display zone.
-    // Invalid dates/times are rejected; failed setters leave the previous value intact.
+    /**
+     * @brief Represents a validated calendar date and Unix timestamp in a selected time zone.
+     *
+     * Calendar years 1..32767 must be representable in UTC and the display zone.
+     * Invalid dates and times are rejected; failed setters preserve the previous value.
+     */
     class DateTime {
     public:
         // CONSTRUCTOR
@@ -101,10 +105,12 @@ namespace Common {
         static DateTime GetCurrentDateTime(const bool& newYorkTime = false);
         static DateTime GetCurrentDateTime(TimeZone zone);
 
-        // OPERATORS
         void NextDay();
         void PreviousDay();
         [[nodiscard]] bool Equal(const DateTime &dt, const bool &dayOnly = false) const;
+
+        // OPERATORS
+
         [[nodiscard]] bool operator<(const DateTime &dt) const;
         [[nodiscard]] bool operator>(const DateTime &dt) const;
         [[nodiscard]] bool operator<=(const DateTime &dt) const;
@@ -131,7 +137,12 @@ namespace Common {
                          std::uint8_t hour, std::uint8_t minute, std::uint8_t second);
     };
 
+    /**
+     * @brief Holds the beginning and end of a date-time interval.
+     */
     struct DateTimeRange {
+        // MEMBERS
+
         DateTime Begin;
         DateTime End;
     };

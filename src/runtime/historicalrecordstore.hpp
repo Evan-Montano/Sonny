@@ -44,7 +44,7 @@ namespace Runtime {
         /**
          * @brief Loaded days keyed by "yyyy-mm-dd".
          */
-        std::unordered_map<std::string, std::vector<Core::MLRecord>> cache_;
+        std::unordered_map<std::string, std::vector<Core::MLRecord>> Cache;
     };
 
 }

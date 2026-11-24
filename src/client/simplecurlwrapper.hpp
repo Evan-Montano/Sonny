@@ -12,6 +12,9 @@
 
 namespace Client {
 
+    /**
+     * @brief Executes HTTP requests through curl or the owned browser worker.
+     */
     class SimpleCurlWrapper {
     public:
         // CONSTRUCTOR
@@ -35,12 +38,13 @@ namespace Client {
         const bool ExecuteInBrowser;        
 
     private:
+        // MEMBERS
+
         class BrowserProcess;
 
-        // MEMBERS
-        CURL *curlHandle;
-        std::unique_ptr<BrowserProcess> browserProcess;
-        std::mutex executionMutex;
+        CURL *CurlHandle;
+        std::unique_ptr<BrowserProcess> BrowserWorker;
+        std::mutex ExecutionMutex;
     };
 
 }

@@ -189,12 +189,12 @@ namespace Common {
             // create_directories returns false when the directory already exists; that is success.
             CreateDirectory(SETTINGS_BASE_PATH);
 
-            json.Set("START_DATE_MS", START_DATE.GetTimestampMilliseconds());
-            json.Set("END_DATE_MS", END_DATE.GetTimestampMilliseconds());
-            json.Erase("START_DATE");
-            json.Erase("END_DATE");
+            Json.Set("START_DATE_MS", START_DATE.GetTimestampMilliseconds());
+            Json.Set("END_DATE_MS", END_DATE.GetTimestampMilliseconds());
+            Json.Erase("START_DATE");
+            Json.Erase("END_DATE");
 
-            WriteFileAtomically(SettingsFilePath(), json.ToString());
+            WriteFileAtomically(SettingsFilePath(), Json.ToString());
         }
 
         /**
@@ -210,22 +210,22 @@ namespace Common {
                 return;
             }
 
-            json = Common::JsonUtility::FromFile(filePath);
+            Json = Common::JsonUtility::FromFile(filePath);
 
             Common::UnixTimestamp startTimestamp = 0;
             Common::UnixTimestamp endTimestamp = 0;
 
             // Migrate legacy files whose unsuffixed timestamp fields contain whole seconds.
-            if (json.TryGet("START_DATE_MS", startTimestamp)) {
+            if (Json.TryGet("START_DATE_MS", startTimestamp)) {
                 START_DATE = Common::DateTime::FromTimestampMilliseconds(startTimestamp, Common::TimeZone::NewYork);
             }
-            else if (json.TryGet("START_DATE", startTimestamp)) {
+            else if (Json.TryGet("START_DATE", startTimestamp)) {
                 START_DATE = Common::DateTime(startTimestamp, true);
             }
-            if (json.TryGet("END_DATE_MS", endTimestamp)) {
+            if (Json.TryGet("END_DATE_MS", endTimestamp)) {
                 END_DATE = Common::DateTime::FromTimestampMilliseconds(endTimestamp, Common::TimeZone::NewYork);
             }
-            else if (json.TryGet("END_DATE", endTimestamp)) {
+            else if (Json.TryGet("END_DATE", endTimestamp)) {
                 END_DATE = Common::DateTime(endTimestamp, true);
             }
         }
@@ -235,7 +235,7 @@ namespace Common {
          * 
          */
         void Settings::Reset() {
-            json = Common::JsonUtility{};
+            Json = Common::JsonUtility{};
             START_DATE = Common::DateTime::GetCurrentDateTime();
             END_DATE = Common::DateTime::GetCurrentDateTime();
         }
@@ -249,7 +249,7 @@ namespace Common {
          */
         bool Settings::Has(const std::string &key) const
         {
-            return json.Contains(key);
+            return Json.Contains(key);
         }
 
         /**
@@ -261,7 +261,7 @@ namespace Common {
          */
         bool Settings::Remove(const std::string &key)
         {
-            return json.Erase(key);
+            return Json.Erase(key);
         }
 
     }
